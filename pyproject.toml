@@ -11,5 +11,8 @@ license = "MIT"
 license-files = ["LICENSE", "LICENSES/*.txt"]
 dependencies = []
 
+[project.scripts]
+mio-ir = "azazel_mio.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
