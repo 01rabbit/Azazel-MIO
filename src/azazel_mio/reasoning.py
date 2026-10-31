@@ -1,0 +1,587 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import logging
+import secrets
+from functools import lru_cache
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Sequence
+
+from .broker import CapabilityBroker, CapabilityBrokerError
+from .claim_audit import audit_claims, unparseable_status_ids
+from .contracts import (
+    MioCapabilityRequest,
+    MioEvidenceGap,
+    MioHypothesis,
+    MioRecommendation,
+    MioSituationFrame,
+    HypothesisStatus,
+    ReasoningState,
+)
+from .evidence_gap_scoring import SCORING_POLICY_VERSION, score_evidence_gaps, scoring_policy_digest
+from .grounding import GroundingValidator, capability_label
+from .handoff import NoModelHandoff, build_no_model_handoff
+from .lifecycle import (
+    REASON_CYCLE_CANCELLED,
+    REASON_CYCLE_SUPERSEDED,
+    HypothesisAuditEntry,
+    apply_hypothesis_update,
+    record_initial,
+    supersede_all,
+    validate_initial_hypotheses,
+)
+from .model_adapter import MioModelBlocked, MioModelUnavailable
+from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
+from .trace import ReasoningTrace
+from .tactical_grounding import (
+    claim_scope_violations,
+    deterministic_authentication_gaps,
+    ground_auth_recommendation,
+    is_authentication_context,
+    scope_hypotheses_to_frame,
+)
+
+# Process-local key for the digest suffix of model exception codes: equal
+# exception texts correlate within one process, but the digest cannot be
+# matched against guessed texts elsewhere. Never persisted or exported.
+@lru_cache(maxsize=1)
+def _exception_digest_key() -> bytes:
+    return secrets.token_bytes(32)
+
+
+def _exception_code(code: str, exc: BaseException) -> str:
+    """``<code>:h:<digest>`` for a model call that raised.
+
+    The exception text comes from the model invoker (a remote endpoint, a
+    transport library, a test double) and may carry addresses, prompts or
+    model output, so it never enters ``errors`` or the trace: only the fixed
+    code and a keyed digest of the text, as in the durable audit.
+    """
+    try:
+        text = str(exc)
+    except Exception:
+        text = type(exc).__name__
+    digest = hmac.new(_exception_digest_key(), text.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:16]
+    return f"{code}:h:{digest}"
+
+
+ModelInvoker = Callable[[str, str], Mapping[str, Any]]
+CancelCheck = Callable[[], bool]
+_LOG = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class ReasoningBudget:
+    max_model_calls: int = 4
+    max_broker_calls: int = 3
+    max_hypotheses: int = 4
+    max_gaps: int = 3
+    max_frame_age_seconds: int = 300
+
+
+@dataclass(frozen=True)
+class ReasoningOutcome:
+    state: ReasoningState
+    hypotheses: tuple[MioHypothesis, ...]
+    evidence_gaps: tuple[MioEvidenceGap, ...]
+    recommendation: MioRecommendation | None
+    errors: tuple[str, ...]
+    trace: tuple[Any, ...]
+    # Every lifecycle step of every hypothesis in this cycle, including
+    # falsified and superseded ones (#385). Never compacted by the loop.
+    hypothesis_audit: tuple[HypothesisAuditEntry, ...] = ()
+    # Deterministic frame-only summary when no validated recommendation exists.
+    handoff: NoModelHandoff | None = None
+
+
+# Terminal states that get a deterministic no-model handoff. Cancelled and
+# superseded cycles do not: their frame is no longer the current situation.
+HANDOFF_STATES = frozenset({
+    ReasoningState.DEPENDENCY_UNAVAILABLE,
+    ReasoningState.ERROR_FALLBACK,
+    ReasoningState.VALIDATION_REJECTED,
+    ReasoningState.BUDGET_EXHAUSTED,
+    ReasoningState.INSUFFICIENT_EVIDENCE,
+})
+
+
+class BoundedReasoningLoop:
+    """Bounded advisory cognitive loop. It never invokes product enforcement."""
+
+    def __init__(
+        self,
+        *,
+        model: ModelInvoker | None,
+        broker: CapabilityBroker,
+        compiler: PromptCompiler | None = None,
+        budget: ReasoningBudget | None = None,
+    ):
+        self.model = model
+        self.broker = broker
+        self.compiler = compiler or PromptCompiler()
+        self.budget = budget or ReasoningBudget()
+
+    @staticmethod
+    def _is_cancelled(cancel_check: CancelCheck | None) -> bool:
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception:
+            return True
+
+    @classmethod
+    def _interrupted(cls, cancel_check: CancelCheck | None, stale_check: CancelCheck | None, errors: list[str]) -> ReasoningState | None:
+        # Supersession is checked first: a cycle replaced by a newer material
+        # frame is stale even if an operator also cancelled it.
+        if cls._is_cancelled(stale_check):
+            errors.append("superseded_by_newer_frame")
+            return ReasoningState.STALE_SUPERSEDED
+        if cls._is_cancelled(cancel_check):
+            errors.append("operator_cancelled")
+            return ReasoningState.OPERATOR_CANCELLED
+        return None
+
+    def run(
+        self,
+        *,
+        frame: MioSituationFrame,
+        playbook: ReasoningPlaybook,
+        cycle_id: str,
+        cancel_check: CancelCheck | None = None,
+        stale_check: CancelCheck | None = None,
+        selection: PlaybookSelection | None = None,
+        broker: CapabilityBroker | None = None,
+    ) -> ReasoningOutcome:
+        # ``broker``: this cycle's own broker (ReasoningCoordinator.run_cycle
+        # passes a new one per cycle); defaults to the loop's broker.
+        broker = self.broker if broker is None else broker
+        trace = ReasoningTrace(trace_id=frame.trace_id, cycle_id=cycle_id)
+        errors: list[str] = []
+        model_calls = 0
+        broker_calls = 0
+        audit: list[HypothesisAuditEntry] = []
+        validated: list[MioHypothesis] = []
+
+        def finish(state, hypotheses_out, gaps_out, recommendation_out):
+            return self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated)
+
+        class PromptCompileFailure(Exception):
+            pass
+
+        def compile_task(task: str, **kwargs) -> str:
+            try:
+                prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, **kwargs)
+            except Exception as exc:
+                error_class = type(exc).__name__
+                if not error_class.isascii() or not error_class.isidentifier():
+                    error_class = "UnknownError"
+                trace.record(state=f"compile_failed:{error_class}", kind="prompt_compile",
+                             payload={"task": task})
+                errors.append(_exception_code("prompt_compile_error", exc))
+                raise PromptCompileFailure from None
+            trace.record(state="compile_succeeded", kind="prompt_compile", payload={"task": task})
+            return prompt
+
+        def enter_model_adapter(task: str) -> None:
+            trace.record(state="adapter_entered", kind="model_adapter", payload={"task": task})
+
+        trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id})
+        selection = guard_selection(playbook, selection)  # invalid playbook -> generic, never compiled
+        playbook = selection.playbook
+        trace.record(state=ReasoningState.FRAME_READY.value, kind="reasoning_provenance", payload=reasoning_provenance(playbook, selection))
+        if selection.is_generic_fallback:
+            errors.append(f"generic_fallback:{selection.reason}")
+            _LOG.warning("mio generic playbook fallback cycle=%s reason=%s", str(cycle_id)[:96], selection.reason)
+        if selection.mode == GENERIC_UNVERIFIED_MODE:
+            # No further fallback: never compile or hand off an unverified playbook.
+            playbook = None
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+        bad_status: list[str] = []
+
+        if frame.freshness_seconds > max(0, int(self.budget.max_frame_age_seconds)):
+            errors.append('frame_stale')
+            return finish(ReasoningState.STALE_SUPERSEDED, (), (), None)
+        interrupted = self._interrupted(cancel_check, stale_check, errors)
+        if interrupted is not None:
+            return finish(interrupted, (), (), None)
+
+        if self.model is None:
+            errors.append("model_absent")
+            return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, (), (), None)
+
+        try:
+            prompt = compile_task("generate_hypotheses")
+        except PromptCompileFailure:
+            return finish(ReasoningState.ERROR_FALLBACK, (), (), None)
+
+        enter_model_adapter("generate_hypotheses")
+        try:
+            raw_h = self.model("generate_hypotheses", prompt)
+            model_calls += 1
+        except (MioModelBlocked, MioModelUnavailable) as exc:
+            errors.append(_exception_code("model_dependency_unavailable", exc))
+            return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, (), (), None)
+        except Exception as exc:
+            errors.append(_exception_code("model_hypothesis_error", exc))
+            return finish(ReasoningState.ERROR_FALLBACK, (), (), None)
+
+        interrupted = self._interrupted(cancel_check, stale_check, errors)
+        if interrupted is not None:
+            return finish(interrupted, (), (), None)
+
+        items = raw_h.get("hypotheses", []) if isinstance(raw_h, Mapping) else []
+        if not isinstance(items, list):
+            errors.append("hypotheses_not_list")
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+        required_hypotheses = max(1, min(2, len(playbook.hypothesis_prompts)))
+        trusted_alternatives = dict(playbook.hypothesis_alternatives)
+        selected_alternatives: list[str] = []
+        for item in items[: self.budget.max_hypotheses]:
+            if not isinstance(item, Mapping):
+                continue
+            alternative_id = item.get("hypothesis_alternative_id")
+            if type(alternative_id) is not str or alternative_id not in trusted_alternatives:
+                errors.append("unknown_hypothesis_alternative_id")
+                return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+            selected_alternatives.append(alternative_id)
+        if len(selected_alternatives) < required_hypotheses:
+            errors.append("insufficient_competing_hypotheses")
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+        if len(set(selected_alternatives)) != len(selected_alternatives):
+            errors.append("duplicate_hypothesis_alternative_id")
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+        if required_hypotheses > 1 and not any(
+                trusted_alternatives[value] in {"benign", "unresolved"} for value in selected_alternatives):
+            errors.append("missing_benign_or_unresolved_alternative_slot")
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+        hypotheses = tuple(
+            MioHypothesis.from_mapping(item, ordinal=i + 1)
+            for i, item in enumerate(items[: self.budget.max_hypotheses])
+            if isinstance(item, Mapping)
+        )
+        if len(hypotheses) < required_hypotheses:
+            errors.append("insufficient_competing_hypotheses")
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
+        bad_status.extend(unparseable_status_ids(items[: self.budget.max_hypotheses]))
+        h_check = GroundingValidator(frame).validate_hypotheses(hypotheses)
+        if not h_check.ok:
+            errors.extend(h_check.errors)
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
+        initial_errors = validate_initial_hypotheses(hypotheses)
+        if initial_errors:
+            errors.extend(initial_errors)
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
+        hypotheses, scoped_claims = scope_hypotheses_to_frame(hypotheses, frame=frame, playbook=playbook)
+        if scoped_claims:
+            trace.record(state=ReasoningState.HYPOTHESES_READY.value, kind="semantic_scope_filter",
+                         payload={"filtered": [{"hypothesis_id": hypothesis_id,
+                             "claim_classes": list(classes)} for hypothesis_id, classes in scoped_claims]})
+        audit.extend(record_initial(hypotheses))
+        validated[:] = hypotheses
+        trace.record(state=ReasoningState.HYPOTHESES_READY.value, kind="hypotheses", payload={"ids": [h.hypothesis_id for h in hypotheses]})
+        trace.record(state=ReasoningState.HYPOTHESES_READY.value, kind="hypothesis_alternative_slots",
+                     payload={"slots": [{"hypothesis_id": h.hypothesis_id,
+                         "alternative_id": h.hypothesis_alternative_id,
+                         "proposed_role": trusted_alternatives[h.hypothesis_alternative_id],
+                         "verification": "model_proposed_unverified"} for h in hypotheses]})
+
+        if model_calls >= self.budget.max_model_calls:
+            errors.append("model_budget_exhausted_before_gap_planning")
+            return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, (), None)
+        try:
+            prompt = compile_task("identify_evidence_gaps", hypotheses=hypotheses)
+        except PromptCompileFailure:
+            return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
+        enter_model_adapter("identify_evidence_gaps")
+        try:
+            raw_g = self.model("identify_evidence_gaps", prompt)
+            model_calls += 1
+        except (MioModelBlocked, MioModelUnavailable) as exc:
+            errors.append(_exception_code("model_dependency_unavailable", exc))
+            return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, (), None)
+        except Exception as exc:
+            errors.append(_exception_code("model_gap_error", exc))
+            return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
+        gap_items = raw_g.get("evidence_gaps", []) if isinstance(raw_g, Mapping) else []
+        if not isinstance(gap_items, list):
+            gap_items = []
+        auth_gap_context = is_authentication_context(frame, playbook)
+        if auth_gap_context:
+            # Do not parse or retain model-authored question/capability pairs
+            # in this scope. Only deterministic frame-derived gaps may reach
+            # validation, scoring, traces, or the broker.
+            gaps = ()
+            if gap_items:
+                trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value,
+                             kind="model_gap_questions_withheld",
+                             payload={"count": min(len(gap_items), self.budget.max_gaps),
+                                      "reason": "auth_scope_requires_trusted_gap_text"})
+        else:
+            gaps = tuple(
+                MioEvidenceGap.from_mapping(item, ordinal=i + 1)
+                for i, item in enumerate(gap_items[: self.budget.max_gaps])
+                if isinstance(item, Mapping)
+            )
+        model_gap_ids = {gap.gap_id for gap in gaps}
+        gaps = deterministic_authentication_gaps(
+            frame=frame, playbook=playbook, hypotheses=hypotheses, existing=gaps,
+            max_gaps=self.budget.max_gaps,
+        )
+        frame_gap_ids = [gap.gap_id for gap in gaps if gap.gap_id not in model_gap_ids]
+        gap_check = GroundingValidator(frame).validate_evidence_gaps(
+            gaps,
+            hypotheses=hypotheses,
+            allowed_capabilities=playbook.allowed_capabilities,
+            registered_capabilities=broker.names(),
+        )
+        if not gap_check.ok:
+            errors.extend(gap_check.errors)
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+        trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gaps", payload={"ids": [g.gap_id for g in gaps]})
+        if frame_gap_ids:
+            trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="frame_derived_gaps",
+                         payload={"ids": frame_gap_ids, "source": "situation_frame"})
+
+        additional_refs: list[str] = []
+        broker_summaries: list[dict[str, Any]] = []
+        gap_scores = score_evidence_gaps(
+            gaps, hypotheses=hypotheses, allowed_capabilities=playbook.allowed_capabilities,
+            registered_capabilities=broker.names(), remaining_broker_calls=self.budget.max_broker_calls - broker_calls,
+        )
+        trace.record(
+            state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gap_scores",
+            payload={"policy_version": SCORING_POLICY_VERSION, "policy_digest": scoring_policy_digest(), "scores": [s.to_dict() for s in gap_scores]},
+        )
+        errors.extend(f"gap_not_eligible:{s.gap_id}:{r}" for s in gap_scores for r in s.ineligible_reasons)
+        gap_by_id = {g.gap_id: g for g in gaps}
+        for index, gap in enumerate(gap_by_id[s.gap_id] for s in gap_scores if s.eligible):
+            interrupted = self._interrupted(cancel_check, stale_check, errors)
+            if interrupted is not None:
+                return finish(interrupted, hypotheses, gaps, None)
+            if broker_calls >= self.budget.max_broker_calls:
+                errors.append("broker_budget_exhausted")
+                break
+            if gap.capability not in playbook.allowed_capabilities:
+                errors.append(f"capability_not_allowed_by_playbook:{capability_label(gap.capability, broker.names())}")
+                continue
+            request = MioCapabilityRequest(
+                request_id=f"{cycle_id}:req:{index + 1}",
+                trace_id=frame.trace_id,
+                capability=gap.capability,
+                arguments={"question": gap.question, "frame_id": frame.frame_id},
+            )
+            trace.record(
+                state=ReasoningState.REQUEST_PLANNED.value,
+                kind="capability_request",
+                payload={"request_id": request.request_id, "capability": request.capability},
+            )
+            try:
+                result = broker.execute(request)
+                broker_calls += 1
+            except CapabilityBrokerError as exc:
+                errors.append(str(exc))
+                continue
+            if result.ok:  # only successful results count as broker-imported evidence
+                additional_refs.extend(result.evidence_refs)
+            broker_summaries.append(
+                {
+                    "request_id": result.request_id,
+                    "capability": result.capability,
+                    "ok": result.ok,
+                    "data": dict(result.data),
+                    "evidence_refs": list(result.evidence_refs),
+                    "error": result.error,
+                }
+            )
+            trace.record(
+                state=ReasoningState.EVIDENCE_COLLECTED.value,
+                kind="capability_result",
+                payload={"request_id": result.request_id, "ok": result.ok, "evidence_refs": list(result.evidence_refs)},
+            )
+
+        # New evidence must be allowed to strengthen, weaken, falsify, or leave
+        # hypotheses unresolved before a recommendation is produced. This step
+        # is skipped when no capability returned a result, avoiding a pointless
+        # model call on constrained hardware.
+        if broker_summaries:
+            if model_calls >= self.budget.max_model_calls:
+                errors.append("model_budget_exhausted_before_hypothesis_update")
+                return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None)
+            interrupted = self._interrupted(cancel_check, stale_check, errors)
+            if interrupted is not None:
+                return finish(interrupted, hypotheses, gaps, None)
+            try:
+                prompt = compile_task("update_hypotheses", hypotheses=hypotheses,
+                                      broker_results=broker_summaries)
+            except PromptCompileFailure:
+                return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+            enter_model_adapter("update_hypotheses")
+            try:
+                raw_u = self.model("update_hypotheses", prompt)
+                model_calls += 1
+            except (MioModelBlocked, MioModelUnavailable) as exc:
+                errors.append(_exception_code("model_dependency_unavailable", exc))
+                return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None)
+            except Exception as exc:
+                errors.append(_exception_code("model_hypothesis_update_error", exc))
+                return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+            if not isinstance(raw_u, Mapping):
+                errors.append("hypothesis_update_not_mapping")
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            raw_update_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_raw(raw_u)
+            if not raw_update_check.ok:
+                errors.extend(raw_update_check.errors)
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            update_items = raw_u.get("hypotheses", [])
+            if not isinstance(update_items, list):
+                errors.append("updated_hypotheses_not_list")
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            bad_status.extend(unparseable_status_ids(update_items[: self.budget.max_hypotheses]))
+            updated_hypotheses = tuple(
+                MioHypothesis.from_mapping(item, ordinal=i + 1)
+                for i, item in enumerate(update_items[: self.budget.max_hypotheses])
+                if isinstance(item, Mapping)
+            )
+            prior_slots = {h.hypothesis_id: h.hypothesis_alternative_id for h in hypotheses}
+            for updated in updated_hypotheses:
+                slot_id = updated.hypothesis_alternative_id
+                if slot_id not in trusted_alternatives:
+                    errors.append("unknown_hypothesis_alternative_id")
+                    return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+                if updated.hypothesis_id in prior_slots and slot_id != prior_slots[updated.hypothesis_id]:
+                    errors.append("hypothesis_alternative_id_changed")
+                    return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            updated_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_hypotheses(updated_hypotheses)
+            if not updated_check.ok:
+                errors.extend(updated_check.errors)
+                return finish(ReasoningState.VALIDATION_REJECTED, updated_hypotheses, gaps, None)
+            updated_hypotheses, scoped_updates = scope_hypotheses_to_frame(
+                updated_hypotheses, frame=frame, playbook=playbook, prior_hypotheses=hypotheses)
+            if scoped_updates:
+                trace.record(state=ReasoningState.HYPOTHESES_UPDATED.value, kind="semantic_scope_filter",
+                             payload={"filtered": [{"hypothesis_id": hypothesis_id,
+                                 "claim_classes": list(classes)} for hypothesis_id, classes in scoped_updates]})
+            lifecycle = apply_hypothesis_update(
+                hypotheses,
+                updated_hypotheses,
+                allowed_refs=set(frame.evidence_refs) | set(frame.knowledge_refs) | set(additional_refs),
+            )
+            if not lifecycle.ok:
+                errors.extend(lifecycle.errors)
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            live_hypotheses = tuple(h for h in lifecycle.hypotheses
+                                    if h.status not in {HypothesisStatus.FALSIFIED, HypothesisStatus.SUPERSEDED})
+            live_slots = [h.hypothesis_alternative_id for h in live_hypotheses]
+            if None in live_slots or len(live_slots) != len(set(live_slots)):
+                errors.append("duplicate_live_hypothesis_alternative_slot")
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            audit.extend(lifecycle.audit)
+            hypotheses = lifecycle.hypotheses
+            validated[:] = hypotheses
+            trace.record(
+                state=ReasoningState.HYPOTHESES_UPDATED.value,
+                kind="hypotheses_updated",
+                payload={"ids": [h.hypothesis_id for h in hypotheses], "evidence_refs": list(dict.fromkeys(additional_refs))[:32]},
+            )
+            trace.record(state=ReasoningState.HYPOTHESES_UPDATED.value, kind="hypothesis_alternative_slots",
+                         payload={"slots": [{"hypothesis_id": h.hypothesis_id,
+                             "alternative_id": h.hypothesis_alternative_id,
+                             "proposed_role": trusted_alternatives.get(h.hypothesis_alternative_id),
+                             "verification": "model_proposed_unverified"} for h in hypotheses]})
+
+        if model_calls >= self.budget.max_model_calls:
+            errors.append("model_budget_exhausted_before_recommendation")
+            return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None)
+        interrupted = self._interrupted(cancel_check, stale_check, errors)
+        if interrupted is not None:
+            return finish(interrupted, hypotheses, gaps, None)
+
+        try:
+            prompt = compile_task("recommend", hypotheses=hypotheses, broker_results=broker_summaries)
+        except PromptCompileFailure:
+            return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+        enter_model_adapter("recommend")
+        try:
+            raw_r = self.model("recommend", prompt)
+            model_calls += 1
+        except (MioModelBlocked, MioModelUnavailable) as exc:
+            errors.append(_exception_code("model_dependency_unavailable", exc))
+            return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None)
+        except Exception as exc:
+            errors.append(_exception_code("model_recommend_error", exc))
+            return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+        if not isinstance(raw_r, Mapping):
+            errors.append("recommendation_not_mapping")
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+        raw_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_raw(raw_r)
+        if not raw_check.ok:
+            errors.extend(raw_check.errors)
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+        recommendation = MioRecommendation.from_mapping(raw_r, advisory_id=f"{cycle_id}:advisory")
+        auth_context = is_authentication_context(frame, playbook)
+        scope_errors = claim_scope_violations(
+            (recommendation.summary, recommendation.rationale) + recommendation.limitations,
+            playbook=playbook,
+        )
+        if auth_context:
+            if scope_errors:
+                trace.record(state=ReasoningState.RECOMMENDATION_READY.value, kind="semantic_scope_filter",
+                             payload={"target": "recommendation", "claim_classes": list(scope_errors),
+                                      "projection": "trusted_static_auth_text"})
+            recommendation = ground_auth_recommendation(recommendation)
+        elif scope_errors:
+            errors.extend(f"unsupported_recommendation_claim:{value}" for value in scope_errors)
+            trace.record(state=ReasoningState.VALIDATION_REJECTED.value, kind="semantic_scope_filter",
+                         payload={"target": "recommendation", "claim_classes": list(scope_errors)})
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+        rec_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_recommendation(recommendation)
+        claim_audit = audit_claims(frame, hypotheses=hypotheses, recommendation=recommendation, imported_refs=additional_refs, unparseable_status=bad_status)
+        trace.record(state=ReasoningState.RECOMMENDATION_READY.value, kind="claim_audit", payload=claim_audit.to_dict())
+        if rec_check.ok and not claim_audit.ok:
+            errors.extend(claim_audit.errors())
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, recommendation)
+        if not rec_check.ok:
+            errors.extend(rec_check.errors)
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, recommendation)
+        trace.record(
+            state=ReasoningState.RECOMMENDATION_READY.value,
+            kind="recommendation",
+            payload={
+                "advisory_id": recommendation.advisory_id,
+                "recommended_action": recommendation.recommended_action,
+                "evidence_refs": list(recommendation.evidence_refs),
+                "executable": False,
+            },
+        )
+        trace.record(
+            state=ReasoningState.COMPLETE.value,
+            kind="complete",
+            payload={"model_calls": model_calls, "broker_calls": broker_calls},
+        )
+        return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events(), tuple(audit))
+
+    @staticmethod
+    def _finish(
+        trace: ReasoningTrace,
+        state: ReasoningState,
+        hypotheses: Sequence[MioHypothesis],
+        gaps: Sequence[MioEvidenceGap],
+        recommendation: MioRecommendation | None,
+        errors: Sequence[str],
+        *,
+        frame: MioSituationFrame,
+        playbook: ReasoningPlaybook,
+        audit: list[HypothesisAuditEntry],
+        validated: Sequence[MioHypothesis],
+    ) -> ReasoningOutcome:
+        if state is ReasoningState.STALE_SUPERSEDED:
+            # In-flight hypotheses of a dead cycle are retained, marked superseded.
+            audit.extend(supersede_all(validated, REASON_CYCLE_SUPERSEDED))
+        elif state is ReasoningState.OPERATOR_CANCELLED:
+            audit.extend(supersede_all(validated, REASON_CYCLE_CANCELLED))
+        handoff = None
+        if state in HANDOFF_STATES:
+            handoff = build_no_model_handoff(frame, reason=state.value, playbook=playbook, hypotheses=validated)
+        trace.record(state=state.value, kind="terminal", payload={"errors": list(errors)[:8]})
+        return ReasoningOutcome(state, tuple(hypotheses), tuple(gaps), recommendation, tuple(errors), trace.events(), tuple(audit), handoff)
