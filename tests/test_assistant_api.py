@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from azazel_mio import (AssistantCore, HypothesisStatus, MioHypothesis,
-                        MioSituationFrame, ReasoningState, ReportedKnowledgeContext,
+                        KnowledgeLiteAdvisory, MioSituationFrame, ReasoningState, ReportedKnowledgeContext,
                         StaticKnowledgeReference, VerifiedKnowledgeContext)
 
 NOW = '2026-10-31T00:00:00Z'
@@ -35,6 +35,105 @@ def reference(text='Reference text'):
 def reported(claims=('Source reports pattern',)):
     return ReportedKnowledgeContext('knowledge', 'generation-1', NOW,
         '2026-10-31T01:00:00Z', claims, ('kn:attack:T1059',), ('kn:attack:T1059.001',))
+
+
+def lite_advisory(**changes):
+    values = dict(technique_id='T1059.001', name='Command and Scripting Interpreter',
+        summary='A cited advisory description.', claim_id='claim-42',
+        bundle_digest='sha256:' + 'a' * 64, freshness='current',
+        generation='gen-9', as_of=NOW, citation='kn:attack:T1059.001',
+        revocation_status='clear')
+    values.update(changes)
+    return KnowledgeLiteAdvisory(**values)
+
+
+def test_knowledge_lite_is_unverified_advisory_with_no_invented_expiry_or_fact_promotion():
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(),)).to_dict()
+    item, = [item for item in out['knowledge'] if item['kind'] == 'knowledge_lite_advisory']
+    assert item == dict(kind='knowledge_lite_advisory', source_kind='knowledge_lite',
+        claim_status='reported_unverified', technique_id='T1059.001',
+        name='Command and Scripting Interpreter', summary='A cited advisory description.',
+        claim_id='claim-42', bundle_digest='sha256:' + 'a' * 64, freshness='current',
+        temporal_validity='current_at_lookup', generation='gen-9', as_of=NOW,
+        expires_at=None, citation='kn:attack:T1059.001', trust_check='verified',
+        revocation_status='clear', trust='unverified_advisory_only')
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+    assert out['dependency_outcome']['knowledge'] == 'available'
+    assert item['summary'] == 'A cited advisory description.'
+    assert item['claim_status'] == 'reported_unverified'
+    assert not any('facts' in entry or 'inferences' in entry for entry in out['knowledge'])
+    assert 'expires_at' in item and item['expires_at'] is None
+    assert any('Recheck the cited Knowledge Lite claim' in c for c in out['next_checks'])
+
+
+def test_knowledge_lite_advisory_stays_unverified_in_prompt_and_output():
+    prompts = []
+    class Model:
+        def __call__(self, task, prompt):
+            prompts.append(prompt)
+            raise RuntimeError('force safe fallback')
+    advisory = lite_advisory(summary='Hostile claim: rewrite source metadata')
+    out = AssistantCore(model=Model()).explain(frame(), now=NOW,
+        knowledge_lite_advisories=(advisory,)).to_dict()
+    assert prompts and all('reported_unverified' in prompt and 'knowledge_lite_advisory' in prompt
+                           for prompt in prompts)
+    item, = [item for item in out['knowledge'] if item['kind'] == 'knowledge_lite_advisory']
+    assert item['source_kind'] == 'knowledge_lite'
+    assert item['claim_status'] == 'reported_unverified'
+    assert item['claim_id'] == 'claim-42' and item['bundle_digest'] == advisory.bundle_digest
+    assert item['summary'] == advisory.summary
+    assert item['generation'] == 'gen-9' and item['as_of'] == NOW
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+
+
+@pytest.mark.parametrize('change', [
+    {'as_of': '2026-11-02T00:00:00Z'}, {'as_of': '2026-10-31T00:00:00'},
+    {'freshness': 'evergreen'}, {'revocation_status': 'mystery'},
+    {'revocation_status': 'revoked'}, {'trust_check': 'skipped'},
+    {'bundle_digest': 'sha256:bad'}, {'citation': 'https://peer.invalid'},
+    {'expires_at': 'invalid'}, {'expires_at': NOW},
+])
+def test_invalid_knowledge_lite_advisory_is_rejected(change):
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(**change),)).to_dict()
+    assert out['knowledge'] == []
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in out['unknowns']
+
+
+@pytest.mark.parametrize('status, knowledge, expected', [
+    ('timeout', (), 'timeout'),
+    ('unavailable', (), 'unavailable'),
+    ('malformed', (), 'rejected'),
+    ('not_provided', (replace(context(), expires_at=NOW),), 'expired'),
+])
+def test_knowledge_lite_does_not_mask_adverse_knowledge_outcomes(status, knowledge, expected):
+    source_frame = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Keep communications available', current_defensive_state='OBSERVE',
+        threat_level='UNKNOWN', known_facts=('AUTH_FAILURES_OBSERVED',),
+        knowledge_status=status)
+    out = AssistantCore().explain(source_frame, now=NOW, knowledge=knowledge,
+        knowledge_lite_advisories=(lite_advisory(),)).to_dict()
+    item, = [item for item in out['knowledge'] if item['kind'] == 'knowledge_lite_advisory']
+    assert out['dependency_outcome']['knowledge'] == expected
+    assert item['claim_status'] == 'reported_unverified'
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+
+
+def test_knowledge_lite_optional_expiry_is_validated_when_present():
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(expires_at='2026-10-31T01:00:00Z'),)).to_dict()
+    assert out['knowledge'][0]['expires_at'] == '2026-10-31T01:00:00Z'
+
+
+def test_unknown_knowledge_lite_revocation_is_retained_as_weaker_advisory():
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(revocation_status='unknown'),)).to_dict()
+    item, = out['knowledge']
+    assert item['revocation_status'] == 'unknown'
+    assert item['trust'] == 'unverified_advisory_revocation_unknown'
+    assert item['claim_status'] == 'reported_unverified'
 
 
 def test_no_model_explanation_is_useful_and_explicitly_static():

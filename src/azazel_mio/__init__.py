@@ -43,4 +43,5 @@ from .replay import ReplayFixture, run_replay, run_selected
 from .trace import ReasoningTrace, ReasoningTraceEvent
 
 from .lifecycle import ReasoningCoordinator
-from .assistant import AssistantCore, Assistance, ReportedKnowledgeContext, StaticKnowledgeReference, VerifiedKnowledgeContext
+from .assistant import (AssistantCore, Assistance, KnowledgeLiteAdvisory,
+    ReportedKnowledgeContext, StaticKnowledgeReference, VerifiedKnowledgeContext)

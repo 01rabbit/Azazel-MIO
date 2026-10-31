@@ -45,6 +45,32 @@ MIO bounds and checks all fields again, rejects expired/future/malformed context
 and preserves facts and inferences separately. A context grants no authority.
 `now` is mandatory, timezone-aware ISO 8601, supplied by the product clock.
 
+`KnowledgeLiteAdvisory(technique_id, name, summary, claim_id, bundle_digest,
+freshness, generation, as_of, citation, revocation_status, trust_check="verified",
+expires_at=None)` is accepted through `explain(...,
+knowledge_lite_advisories=(...), now=...)`. It is projected as
+`kind=knowledge_lite_advisory`, `source_kind=knowledge_lite`, and
+`claim_status=reported_unverified`. Its summary remains only a reported claim:
+it is not placed in observations or VerifiedKnowledgeContext facts/inferences.
+The projection preserves the claim, bundle, generation, timestamp, citation,
+freshness, trust check, and revocation status. Missing expiry stays `null`; MIO
+does not infer an expiry. A supplied expiry must be timezone-aware, later than
+`as_of`, and later than the caller's `now`.
+
+`freshness` is the closed enum `current | static`; `trust_check` must be
+`verified`; `revocation_status` is `clear | unknown | revoked`, with revoked
+claims rejected and unknown status retained under the weaker
+`unverified_advisory_revocation_unknown` trust label. A `current`
+claim is labelled `current_at_lookup`, not treated as timeless: callers must
+recheck the claim and revocation status before relying on it. The no-model path
+also emits a fixed read-only recheck suggestion. Knowledge Lite has no per-claim
+expiry, so consumers must not substitute the bundle freshness label for expiry.
+When a valid advisory is supplied with no other Knowledge outcome,
+`dependency_outcome.knowledge` changes from `absent` to `available`. It reports
+that Knowledge supplied a usable advisory projection, not that the claim was
+verified or promoted to a fact. Existing timeout, expiry, rejection, or
+unavailable outcomes retain precedence over an advisory.
+
 Products generate opaque trace/frame IDs from their accepted incident and current
 boot/material generation. Callers never take these IDs from operator/model text.
 Changed boot or material generation must use a new frame ID and supersede/cancel

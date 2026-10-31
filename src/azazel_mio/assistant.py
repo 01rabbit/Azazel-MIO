@@ -64,6 +64,28 @@ class ReportedKnowledgeContext:
 
 
 @dataclass(frozen=True)
+class KnowledgeLiteAdvisory:
+    """A source-cited Knowledge Lite claim, never verified grounding.
+
+    `current` freshness is captured as `current_at_lookup`; callers must
+    recheck it against their clock before reuse because Knowledge Lite has no
+    per-claim expiry. `expires_at` is optional and is never inferred.
+    """
+    technique_id: str
+    name: str
+    summary: str
+    claim_id: str
+    bundle_digest: str
+    freshness: str
+    generation: str
+    as_of: str
+    citation: str
+    revocation_status: str
+    trust_check: str = "verified"
+    expires_at: str | None = None
+
+
+@dataclass(frozen=True)
 class Assistance:
     _payload: dict[str, Any]
 
@@ -203,6 +225,61 @@ def _reported_context(value: Any, now: datetime) -> dict[str, Any] | None:
             "trust": "adapter_origin_not_verified_by_metadata"}
 
 
+_KNOWLEDGE_LITE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
+_KNOWLEDGE_LITE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None:
+    if type(value) is not KnowledgeLiteAdvisory:
+        return None
+    if not all(type(x) is str and _KNOWLEDGE_LITE_ID.fullmatch(x) for x in
+               (value.technique_id, value.claim_id, value.generation)):
+        return None
+    if type(value.bundle_digest) is not str or not _KNOWLEDGE_LITE_DIGEST.fullmatch(value.bundle_digest):
+        return None
+    if type(value.freshness) is not str or value.freshness not in ("current", "static"):
+        return None
+    if (type(value.trust_check) is not str or value.trust_check != "verified" or
+            type(value.revocation_status) is not str or
+            value.revocation_status not in ("clear", "unknown", "revoked")):
+        return None
+    if value.revocation_status == "revoked":
+        return None
+    if (type(value.name) is not str or not 0 < len(value.name) <= 160 or
+            any(ord(c) < 32 for c in value.name)):
+        return None
+    if (type(value.summary) is not str or not 0 < len(value.summary) <= 1200 or
+            any(ord(c) < 32 and c not in "\n\t" for c in value.summary)):
+        return None
+    if type(value.citation) is not str or not _KNOWLEDGE_LITE_ID.fullmatch(value.citation):
+        return None
+    try:
+        as_of = _time(value.as_of)
+    except ValueError:
+        return None
+    if as_of > now:
+        return None
+    if value.expires_at is not None:
+        try:
+            expiry = _time(value.expires_at)
+        except ValueError:
+            return None
+        if expiry <= now or expiry <= as_of:
+            return None
+    return {
+        "kind": "knowledge_lite_advisory", "source_kind": "knowledge_lite",
+        "claim_status": "reported_unverified", "technique_id": value.technique_id,
+        "name": value.name, "summary": value.summary, "claim_id": value.claim_id,
+        "bundle_digest": value.bundle_digest, "freshness": value.freshness,
+        "temporal_validity": "current_at_lookup" if value.freshness == "current" else "static",
+        "generation": value.generation, "as_of": value.as_of,
+        "expires_at": value.expires_at, "citation": value.citation,
+        "trust_check": value.trust_check, "revocation_status": value.revocation_status,
+        "trust": "unverified_advisory_only" if value.revocation_status == "clear"
+                 else "unverified_advisory_revocation_unknown",
+    }
+
+
 def _expired_context(value: Any, now: datetime) -> bool:
     """Recognize only typed, parseable date-bounded Knowledge projections."""
     if type(value) not in (VerifiedKnowledgeContext, ReportedKnowledgeContext):
@@ -247,7 +324,7 @@ class AssistantCore:
 
     def explain(self, frame: MioSituationFrame, *, knowledge=(), references=(),
                 reported_knowledge=(), now: str,
-                cancel_check=None, stale_check=None) -> Assistance:
+                knowledge_lite_advisories=(), cancel_check=None, stale_check=None) -> Assistance:
         instant = _time(now)
         # Rebuild even a directly constructed dataclass through the closed,
         # bounded v2 frame validator before interpreting it.
@@ -255,6 +332,7 @@ class AssistantCore:
         contexts: list[dict[str, Any]] = []
         static_references: list[dict[str, Any]] = []
         reported_contexts: list[dict[str, Any]] = []
+        lite_advisories: list[dict[str, Any]] = []
         rejected = False
         knowledge_expired = False
         if type(knowledge) not in (tuple, list) or len(knowledge) > 4:
@@ -286,6 +364,15 @@ class AssistantCore:
                     knowledge_expired = knowledge_expired or _expired_context(item, instant)
                 else:
                     reported_contexts.append(projected)
+        if type(knowledge_lite_advisories) not in (tuple, list) or len(knowledge_lite_advisories) > 8:
+            rejected = True
+        else:
+            for item in knowledge_lite_advisories:
+                projected = _knowledge_lite_advisory(item, instant)
+                if projected is None:
+                    rejected = True
+                else:
+                    lite_advisories.append(projected)
         refs = tuple(dict.fromkeys(ref for ctx in contexts + static_references for ref in ctx["evidence_refs"]
                                    if model_id_ok(ref, "evidence_ref")))[:32]
         reported_refs = tuple(dict.fromkeys(
@@ -302,7 +389,7 @@ class AssistantCore:
         selection = select_playbook(frame)
         broker = CapabilityBroker()
         try:
-            prompt_material = contexts + static_references + reported_contexts
+            prompt_material = contexts + static_references + reported_contexts + lite_advisories
             outcome = BoundedReasoningLoop(model=self.model, broker=broker, compiler=_KnowledgeCompiler(prompt_material)).run(
                 frame=frame, playbook=selection.playbook,
                 cycle_id="cycle-1", selection=selection,
@@ -354,10 +441,13 @@ class AssistantCore:
         knowledge_outcome = _frame_dependency_outcome(frame.knowledge_status)
         if knowledge_expired:
             knowledge_outcome = ContextDependencyOutcome.EXPIRED
-        elif rejected and not contexts and not reported_contexts and not static_references:
-            knowledge_outcome = ContextDependencyOutcome.REJECTED
         elif contexts or reported_contexts or static_references:
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
+            if rejected and not lite_advisories:
+                knowledge_outcome = ContextDependencyOutcome.REJECTED
+            elif lite_advisories:
+                knowledge_outcome = ContextDependencyOutcome.AVAILABLE
         deception_outcome = _frame_dependency_outcome(frame.deception_status)
         scenario_checks: list[str] = []
         if selection.playbook.playbook_id == AUTH_PLAYBOOK_ID:
@@ -386,6 +476,9 @@ class AssistantCore:
                 "Confirm AZ-06 observation coverage and adapter status for the incident window; unavailable or rejected telemetry does not establish that no interaction occurred.")
         if scenario_checks:
             checks = list(dict.fromkeys(scenario_checks + checks))[:4]
+        if lite_advisories:
+            check = "Recheck the cited Knowledge Lite claim and its revocation status against an authorized current source before relying on it."
+            checks = list(dict.fromkeys([check] + checks))[:4]
         return Assistance({
             "schema_version": "mio.assistance.v1", "trace_id": frame.trace_id,
             "frame_id": frame.frame_id,
@@ -398,7 +491,7 @@ class AssistantCore:
             "observations": [] if interrupted else list(frame.known_facts),
             "hypotheses": hypotheses, "unknowns": unknowns[:24],
             "next_checks": [] if interrupted else checks,
-            "knowledge": [] if interrupted else contexts + static_references + reported_contexts,
+            "knowledge": [] if interrupted else contexts + static_references + reported_contexts + lite_advisories,
             "handoff": handoff,
             "reasoning_trace": ([] if outcome.state is ReasoningState.VALIDATION_REJECTED
                                 else _public_reasoning_trace(outcome.trace)),
