@@ -404,7 +404,9 @@ class _AuditDelivery:
         self.pending: deque[dict[str, Any]] = deque()
         self.running = False
         self.worker: threading.Thread | None = None
-        self.generation = 0
+        self.startup_uncertain = False
+        self.worker_running = False
+        self.start_attempts = self.start_failures = 0
         self.accepted = self.delivered = self.failed = self.dropped = 0
 
     def enqueue(self, record: dict[str, Any]) -> str:
@@ -416,42 +418,34 @@ class _AuditDelivery:
                 return "full"
             self.pending.append(copy.deepcopy(record))
             if not self.running:
-                self.running = True
-                self.generation += 1
-                generation = self.generation
-                worker = threading.Thread(target=self._run, args=(generation,),
-                                          name="mio-audit-sink", daemon=True)
+                worker = threading.Thread(target=self._run, name="mio-audit-sink", daemon=True)
                 self.worker = worker
+                self.running = True  # Reserved even if startup cannot be observed.
+                self.startup_uncertain = True
+                self.start_attempts += 1
                 try:
                     worker.start()
                 except BaseException as exc:
-                    # start() can raise after starting the thread. While holding
-                    # this lock that worker cannot yet consume the queue. Keep
-                    # its ownership and admission if startup is observable.
-                    if worker.ident is not None or worker.is_alive():
-                        self.accepted += 1
-                    else:
-                        # Revoke ownership before allowing a replacement: even
-                        # an interrupted bootstrap that becomes visible later
-                        # must exit without calling the sink.
-                        self.generation += 1
-                        self.worker = None
-                        self.running = False
-                        self.pending.pop()
-                        self.dropped += 1
+                    # Neither ident nor is_alive can prove that an interrupted
+                    # bootstrap will not run later. Retain the sole reservation
+                    # and bounded queue until this exact worker enters _run.
+                    self.start_failures += 1
+                    self.accepted += 1
                     if not isinstance(exc, Exception):
                         raise
-                    return "queued" if self.running else "start_failed"
+                    return "startup_uncertain"
             self.accepted += 1
-            return "queued"
+            return "startup_uncertain" if self.startup_uncertain and self.start_failures else "queued"
 
-    def _run(self, generation: int) -> None:
+    def _run(self) -> None:
+        with self.lock:
+            self.startup_uncertain = False
+            self.worker_running = True
         while True:
             with self.lock:
-                if generation != self.generation:
-                    return
                 if not self.pending:
                     self.running = False
+                    self.worker_running = False
                     self.worker = None
                     return
                 record = self.pending.popleft()
@@ -468,7 +462,10 @@ class _AuditDelivery:
     def stats(self) -> dict[str, int]:
         with self.lock:
             return dict(capacity=self.capacity, pending=len(self.pending),
-                        worker_running=int(self.running), accepted=self.accepted,
+                        worker_running=int(self.worker_running), worker_reserved=int(self.running),
+                        startup_uncertain=int(self.startup_uncertain),
+                        start_attempts=self.start_attempts, start_failures=self.start_failures,
+                        accepted=self.accepted,
                         delivered=self.delivered, failed=self.failed, dropped=self.dropped)
 
 
@@ -599,7 +596,7 @@ class CapabilityBroker:
         """Bound handler waiting by its timeout; never wait for the audit sink.
 
         With an injected sink, limitations includes audit_sink_queued, full, or
-        start_failed. Delivery is best effort and observable via
+        startup_uncertain. Delivery is best effort and observable via
         audit_delivery_stats(); queued is not a durability acknowledgement.
         Ordinary failures become results; process-control BaseException propagates
         after safe audit admission containment. Validation, sanitization and scheduling

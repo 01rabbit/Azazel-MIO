@@ -109,21 +109,29 @@ new cycles. Handler timeout still bounds handler waiting; validation,
 sanitization, thread scheduling and audit enqueue add overhead.
 
 With a sink configured, result `limitations` includes `audit_sink_queued`,
-`audit_sink_full`, or `audit_sink_start_failed` (`audit_sink_record_failed` if even fallback
-recording fails). Queue saturation drops the newest
-sink delivery without changing capability status, data, or provenance. Every
-record still enters the broker's bounded sanitized local audit history.
+`audit_sink_full`, or `audit_sink_startup_uncertain` (`audit_sink_record_failed`
+if even fallback recording fails). Queue saturation drops the newest sink
+admission without changing capability status, data, or provenance. Every record
+still enters the broker's bounded sanitized local audit history.
 `audit_delivery_stats()` reports shared `accepted`, `delivered`, `failed`,
-`dropped`, `pending`, `capacity`, and `worker_running` counters, plus per-cycle
-`local_evicted`. Sink exceptions increment `failed`; failed and dropped deliveries
-are not retried. `queued` acknowledges admission only, not durable persistence.
-`close()` cancels the reasoning cycle without waiting for or discarding queued
-audit delivery. There is no flush guarantee at process exit; products requiring
-durable audit persistence must monitor these counters and own persistence.
+`dropped`, `pending`, `capacity`, `worker_running`, `worker_reserved`,
+`startup_uncertain`, `start_attempts`, and `start_failures` counters, plus
+per-cycle `local_evicted`. `worker_running` means the delivery loop has entered;
+`worker_reserved` also includes a thread whose startup is unconfirmed. Sink
+exceptions increment `failed`; failed and dropped deliveries are not retried.
+`queued` acknowledges admission only, not durable persistence. `close()` cancels
+the reasoning cycle without waiting for or discarding queued audit delivery.
+There is no flush guarantee at process exit; products requiring durable audit
+persistence must monitor these counters and own persistence.
 
-Ordinary audit worker startup failures return `audit_sink_start_failed`.
-Process-control exceptions such as `KeyboardInterrupt` and `SystemExit` propagate
-from startup after safe containment. If the worker already started, its queued
-admission is retained and counted as accepted; it remains the sole delivery
-worker. Otherwise admission is dropped and counted, and the startup generation
-is revoked so a delayed bootstrap cannot consume records after a retry.
+Any exception from worker startup retains the sole worker reservation and queued
+admission, increments `start_failures`, and leaves startup uncertain until that
+exact worker enters its delivery loop. Ordinary exceptions return
+`audit_sink_startup_uncertain`; process-control exceptions such as
+`KeyboardInterrupt` and `SystemExit` propagate after containment. Further calls
+may fill the bounded queue but cannot launch another worker. If no thread was
+actually launched, delivery remains stalled for that broker family permanently;
+this intentionally trades recovery for a hard bound on outstanding startup
+attempts. No `ident`/`is_alive` observation is treated as proof that a delayed
+bootstrap cannot run. Once the worker enters, it clears uncertainty and drains
+the retained queue normally.

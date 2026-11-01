@@ -107,30 +107,33 @@ def test_audit_worker_start_failure_is_returned_and_counted(monkeypatch):
     broker = CapabilityBroker(audit_sink=lambda _: None)
     result = broker.submit(request())
     assert result.status == 'rejected'
-    assert 'audit_sink_start_failed' in result.limitations
+    assert 'audit_sink_startup_uncertain' in result.limitations
     assert len(broker.audit_records()) == 1
     stats = broker.audit_delivery_stats()
-    assert stats['dropped'] == 1
-    assert stats['pending'] == stats['worker_running'] == stats['accepted'] == 0
+    assert stats['dropped'] == 0
+    assert stats['pending'] == stats['accepted'] == stats['worker_reserved'] == 1
+    assert stats['worker_running'] == 0
+    assert stats['startup_uncertain'] == stats['start_failures'] == 1
 
 
-def test_audit_start_interrupt_cleans_admission_and_allows_retry(monkeypatch):
+def test_audit_start_interrupt_reserves_slot_fail_closed(monkeypatch):
     import pytest
 
     def interrupt_start(_):
         raise KeyboardInterrupt()
 
-    broker = CapabilityBroker(audit_sink=lambda _: None)
+    broker = CapabilityBroker(audit_sink=lambda _: None, audit_capacity=2)
     with monkeypatch.context() as patch:
         patch.setattr(threading.Thread, 'start', interrupt_start)
         with pytest.raises(KeyboardInterrupt):
             broker.submit(request())
+    assert 'audit_sink_startup_uncertain' in broker.submit(request(2)).limitations
+    assert 'audit_sink_full' in broker.submit(request(3)).limitations
     stats = broker.audit_delivery_stats()
-    assert stats['pending'] == stats['worker_running'] == stats['accepted'] == 0
+    assert stats['pending'] == stats['accepted'] == 2
+    assert stats['worker_running'] == 0
+    assert stats['startup_uncertain'] == stats['worker_reserved'] == stats['start_attempts'] == 1
     assert stats['dropped'] == 1
-    assert 'audit_sink_queued' in broker.submit(request(2)).limitations
-    wait_until(lambda: broker.audit_delivery_stats()['delivered'] == 1)
-    assert broker.audit_delivery_stats()['accepted'] == 1
 
 
 def test_audit_start_then_interrupt_retains_single_worker_and_admission(monkeypatch):
@@ -171,3 +174,49 @@ def test_audit_start_then_interrupt_retains_single_worker_and_admission(monkeypa
     wait_until(lambda: broker.audit_delivery_stats()['worker_running'] == 0)
     assert broker.audit_delivery_stats()['delivered'] == 3
     assert len(set(calls)) == 1
+
+
+def test_delayed_unobservable_bootstrap_keeps_one_start_reservation(monkeypatch):
+    import _thread
+    import pytest
+
+    original_start = threading.Thread.start
+    original_bootstrap = threading.Thread._bootstrap
+    bootstrap_entered = threading.Event()
+    resume_bootstrap = threading.Event()
+    delivered = []
+    attempts = []
+
+    def gated_bootstrap(worker):
+        bootstrap_entered.set()
+        assert resume_bootstrap.wait(2)
+        original_bootstrap(worker)
+
+    def interrupted_start(worker):
+        attempts.append(worker)
+        _thread.start_new_thread(original_start, (worker,))
+        assert bootstrap_entered.wait(1)
+        assert worker.ident is None and not worker.is_alive()
+        raise KeyboardInterrupt()
+
+    broker = CapabilityBroker(audit_sink=lambda record: delivered.append(record), audit_capacity=2)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(threading.Thread, '_bootstrap', gated_bootstrap)
+            patch.setattr(threading.Thread, 'start', interrupted_start)
+            with pytest.raises(KeyboardInterrupt):
+                broker.submit(request())
+            for number in range(2, 30):
+                result = broker.submit(request(number))
+                assert ('audit_sink_startup_uncertain' if number == 2 else 'audit_sink_full') in result.limitations
+            assert len(attempts) == 1
+            stats = broker.audit_delivery_stats()
+            assert stats['pending'] == 2
+            assert stats['worker_running'] == 0
+            assert stats['worker_reserved'] == stats['startup_uncertain'] == stats['start_attempts'] == 1
+            assert stats['dropped'] == 27
+    finally:
+        resume_bootstrap.set()
+    wait_until(lambda: broker.audit_delivery_stats()['delivered'] == 2)
+    assert len(delivered) == 2
+    assert broker.audit_delivery_stats()['startup_uncertain'] == 0
