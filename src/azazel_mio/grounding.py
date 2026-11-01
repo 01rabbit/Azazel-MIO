@@ -46,7 +46,7 @@ class GroundingValidator:
         ]
         visited_nodes = 0
         visited_text_chars = 0
-        raw_refs: Any = ()
+        raw_refs: list[Any] = []
         while stack:
             action, value, path, depth, ancestors = stack.pop()
             if action == "iterate":
@@ -59,13 +59,13 @@ class GroundingValidator:
                     errors.append("raw_payload_unreadable")
                     break
                 stack.append(("iterate", iterator, path, depth, ancestors))
-                key_text = key if type(key) is str else ""
+                key_text = str.__str__(key) if isinstance(key, str) else ""
                 visited_text_chars += len(key_text)
                 if visited_text_chars > _MAX_RAW_TEXT_CHARS:
                     errors.append("raw_payload_too_large")
                     break
-                if not path and key_text == "evidence_refs":
-                    raw_refs = nested
+                if path == "evidence_refs":
+                    raw_refs.append(nested)
                 lower_key = key_text.lower() if len(key_text) <= 48 else ""
                 shown = key_text if lower_key in FORBIDDEN_DIRECTIVE_KEYS or _KEY_RE.fullmatch(key_text) else "invalid-key"
                 child_path = f"{path}.{shown}" if path else shown
@@ -101,14 +101,12 @@ class GroundingValidator:
 
         if errors and any(error.startswith("raw_payload_") for error in errors):
             return GroundingResult(False, tuple(errors))
-        refs = raw_refs
-        if isinstance(refs, (list, tuple)):
-            for ref in refs:
-                shown = safe_model_id(ref, "evidence_ref")
-                if shown == INVALID_MODEL_ID:
-                    errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
-                elif str(ref) not in self._allowed_refs:
-                    errors.append(f"unknown_evidence_ref:{shown}")
+        for ref in raw_refs:
+            shown = safe_model_id(ref, "evidence_ref")
+            if shown == INVALID_MODEL_ID:
+                errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
+            elif str(ref) not in self._allowed_refs:
+                errors.append(f"unknown_evidence_ref:{shown}")
         return GroundingResult(not errors, tuple(errors))
 
     def validate_hypotheses(self, hypotheses: Sequence[MioHypothesis]) -> GroundingResult:

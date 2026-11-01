@@ -579,6 +579,36 @@ def test_unbounded_raw_model_payload_is_rejected_without_leaking_model_output(ho
     assert secret not in public
 
 
+def test_grounding_refs_are_checked_only_from_bounded_traversal_and_string_subclass_keys_are_seen():
+    from azazel_mio.grounding import GroundingValidator
+
+    class SinglePassRefs(list):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            if self.iterations > 1:
+                raise AssertionError('evidence refs must not be iterated a second time')
+            return super().__iter__()
+
+    class ModelKey(str):
+        def __str__(self):
+            return 'harmless'
+
+        def lower(self):
+            return 'harmless'
+
+    refs = SinglePassRefs(['ev:ssh:1'])
+    validator = GroundingValidator(frame())
+    result = validator.validate_raw({'evidence_refs': refs})
+    assert result.ok
+    assert refs.iterations == 1
+
+    key_result = validator.validate_raw({ModelKey('execute'): 'ignored'})
+    assert not key_result.ok
+    assert 'forbidden_directive_key:execute' in key_result.errors
+
+
 def test_late_validation_rejection_suppresses_prior_model_output_everywhere():
     fabricated_claim = 'FABRICATED_LATE_REJECTED_CLAIM_172900'
     rejected_ref = 'ev:auth:172900'
