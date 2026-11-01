@@ -90,6 +90,26 @@ that Knowledge supplied a usable advisory projection, not that the claim was
 verified or promoted to a fact. Existing timeout, expiry, rejection, or
 unavailable outcomes retain precedence over an advisory.
 
+`KnowledgeContextResponseAdvisory(context_response: Mapping[str, Any])` accepts
+one bounded response matching the `ContextResponse` schema at Knowledge
+`09d234cde0ceb447a3ebc7e9704eef4758ac4a4d`. MIO checks required and optional
+top-level fields, JSON size/depth/node limits, and selected field types. It
+emits a separate `knowledge_context_response_advisory` receipt with
+`claim_status=reported_unverified`. The projection contains only public
+ATT&CK technique IDs from `threat_context.attack_mapping`, typed
+`source_freshness` values (`oldest_feed_days`, `attack_version`), and a
+canonical defensive state from MIO's closed vocabulary. It drops source text,
+IOC values, actor/event data, advisory/provenance IDs, scores, recommendations
+and actions, references, and other metadata. This advisory is not prompt
+material, an observation, a verified fact, evidence, or authority. Invalid or
+oversize input is rejected and degrades the result. A valid response marks
+Knowledge available only when the frame has no stronger dependency outcome.
+
+This is an in-process input seam only. Production networking, authentication
+principal and token rotation, TLS, privacy/retention approval, and request
+deadline ownership remain product-adapter inputs and are not implemented.
+MIO does not infer response generation, expiry, or revocation.
+
 Products generate opaque trace/frame IDs from their accepted incident and current
 boot/material generation. Callers never take these IDs from operator/model text.
 Changed boot or material generation must use a new frame ID and supersede/cancel
