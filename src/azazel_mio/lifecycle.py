@@ -461,6 +461,24 @@ class ReasoningCoordinator:
             self._prune()
             return True
 
+    def cancel_ticket(self, ticket: CycleTicket, *, reason: str = "operator_cancelled") -> bool:
+        """Cancel only the exact in-flight cycle named by ``ticket``.
+
+        Unlike ``cancel(trace_id)``, this remains safe when another material
+        cycle for the same trace starts before a worker handles cancellation.
+        """
+        with self._lock:
+            if not _well_typed(ticket) or ticket.epoch != self.epoch:
+                return False
+            cycle = self._cycles.get(ticket.cycle_id)
+            if cycle is None or not _same_cycle(ticket, cycle.ticket) or cycle.status is not CycleStatus.IN_FLIGHT:
+                return False
+            cycle.status = CycleStatus.CANCELLED
+            self._log("cycle_cancelled", cycle, reason=str(reason)[:64])
+            self._close_broker(cycle.ticket.cycle_id)
+            self._prune()
+            return True
+
     def complete(self, ticket: CycleTicket, outcome: Any) -> CompletionResult:
         """Offer a finished outcome. Only the current in-flight cycle of the
         current epoch is accepted; anything else is discarded and audited."""
