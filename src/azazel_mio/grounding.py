@@ -18,6 +18,9 @@ from .id_grammar import UNREGISTERED_CAPABILITY, capability_label  # noqa: F401
 
 # Model-written keys echoed into error paths must look like schema keys.
 _KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}\Z")
+_MAX_RAW_NODES = 4096
+_MAX_RAW_DEPTH = 64
+_MAX_RAW_TEXT_CHARS = 1_000_000
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
 # Errors name a capability only when the broker registry knows it
@@ -36,23 +39,69 @@ class GroundingValidator:
 
     def validate_raw(self, payload: Mapping[str, Any]) -> GroundingResult:
         errors: list[str] = []
+        # Use iterator frames instead of recursion or materializing container items.
+        # Injected Mapping implementations may be cyclic or arbitrarily broad.
+        stack: list[tuple[str, Any, str, int, frozenset[int]]] = [
+            ("visit", payload, "", 0, frozenset())
+        ]
+        visited_nodes = 0
+        visited_text_chars = 0
+        raw_refs: Any = ()
+        while stack:
+            action, value, path, depth, ancestors = stack.pop()
+            if action == "iterate":
+                iterator = value
+                try:
+                    key, nested = next(iterator)
+                except StopIteration:
+                    continue
+                except Exception:
+                    errors.append("raw_payload_unreadable")
+                    break
+                stack.append(("iterate", iterator, path, depth, ancestors))
+                key_text = key if type(key) is str else ""
+                visited_text_chars += len(key_text)
+                if visited_text_chars > _MAX_RAW_TEXT_CHARS:
+                    errors.append("raw_payload_too_large")
+                    break
+                if not path and key_text == "evidence_refs":
+                    raw_refs = nested
+                lower_key = key_text.lower() if len(key_text) <= 48 else ""
+                shown = key_text if lower_key in FORBIDDEN_DIRECTIVE_KEYS or _KEY_RE.fullmatch(key_text) else "invalid-key"
+                child_path = f"{path}.{shown}" if path else shown
+                if lower_key in FORBIDDEN_DIRECTIVE_KEYS:
+                    errors.append(f"forbidden_directive_key:{child_path}")
+                stack.append(("visit", nested, child_path, depth + 1, ancestors))
+                continue
 
-        def walk(value: Any, path: str = "") -> None:
-            if isinstance(value, Mapping):
-                for key, nested in value.items():
-                    key_text = str(key)
-                    # Keys are model-written: only id-shaped keys are echoed into errors.
-                    shown = key_text if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS or _KEY_RE.match(key_text) else "invalid-key"
-                    child_path = f"{path}.{shown}" if path else shown
-                    if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS:
-                        errors.append(f"forbidden_directive_key:{child_path}")
-                    walk(nested, child_path)
-            elif isinstance(value, (list, tuple)):
-                for index, nested in enumerate(value):
-                    walk(nested, f"{path}[{index}]")
+            visited_nodes += 1
+            if visited_nodes > _MAX_RAW_NODES:
+                errors.append("raw_payload_too_many_nodes")
+                break
+            if isinstance(value, str):
+                visited_text_chars += len(value)
+                if visited_text_chars > _MAX_RAW_TEXT_CHARS:
+                    errors.append("raw_payload_too_large")
+                    break
+            if isinstance(value, (Mapping, list, tuple)):
+                if depth >= _MAX_RAW_DEPTH:
+                    errors.append("raw_payload_too_deep")
+                    break
+                identity = id(value)
+                if identity in ancestors:
+                    errors.append("raw_payload_cycle")
+                    break
+                nested_ancestors = ancestors | {identity}
+                try:
+                    iterator = iter(value.items()) if isinstance(value, Mapping) else iter(enumerate(value))
+                except Exception:
+                    errors.append("raw_payload_unreadable")
+                    break
+                stack.append(("iterate", iterator, path, depth, nested_ancestors))
 
-        walk(payload)
-        refs = payload.get("evidence_refs", ())
+        if errors and any(error.startswith("raw_payload_") for error in errors):
+            return GroundingResult(False, tuple(errors))
+        refs = raw_refs
         if isinstance(refs, (list, tuple)):
             for ref in refs:
                 shown = safe_model_id(ref, "evidence_ref")

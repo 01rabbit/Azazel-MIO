@@ -535,6 +535,50 @@ def test_validation_rejected_model_claims_and_refs_are_not_publicly_exposed():
     assert all(item.get('kind') == 'static_alternative' for item in out['hypotheses'])
 
 
+@pytest.mark.parametrize('hostile_value', [
+    'deep', 'broad', 'cycle',
+], ids=['deep-container', 'broad-container', 'cyclic-container'])
+def test_unbounded_raw_model_payload_is_rejected_without_leaking_model_output(hostile_value):
+    from azazel_mio.grounding import GroundingValidator
+    secret = 'RAW_MODEL_OUTPUT_MUST_NOT_ESCAPE_9817'
+    if hostile_value == 'deep':
+        nested = secret
+        for _ in range(1200):
+            nested = [nested]
+    elif hostile_value == 'broad':
+        nested = {f'key_{i}': None for i in range(5000)}
+        nested['secret'] = secret
+    else:
+        nested = {}
+        nested['loop'] = nested
+        nested['secret'] = secret
+
+    validation = GroundingValidator(frame()).validate_raw({'injected': nested})
+    assert not validation.ok
+    assert any(error in validation.errors for error in (
+        'raw_payload_too_deep', 'raw_payload_too_many_nodes', 'raw_payload_cycle'))
+
+    calls = []
+    def model(task, prompt):
+        calls.append(task)
+        if task == 'generate_hypotheses':
+            return {'hypotheses': [], 'injected': nested}
+        raise AssertionError('invalid raw payload must stop model tasks')
+
+    from azazel_mio.broker import CapabilityBroker
+    from azazel_mio.playbook import select_playbook
+    from azazel_mio.reasoning import BoundedReasoningLoop
+    selection = select_playbook(frame(), requested_id='auth-ambiguity-v1')
+    out = BoundedReasoningLoop(model=model, broker=CapabilityBroker()).run(
+        frame=frame(), playbook=selection.playbook, cycle_id='cycle-bounded-raw', selection=selection)
+    public = repr(out) + out.handoff.to_canonical_json().decode('ascii')
+    assert calls == ['generate_hypotheses']
+    assert out.state is ReasoningState.VALIDATION_REJECTED
+    assert out.handoff.to_dict()['model_contribution'] == 'none'
+    assert out.handoff.to_dict()['model_proposed_hypotheses'] == []
+    assert secret not in public
+
+
 def test_late_validation_rejection_suppresses_prior_model_output_everywhere():
     fabricated_claim = 'FABRICATED_LATE_REJECTED_CLAIM_172900'
     rejected_ref = 'ev:auth:172900'
