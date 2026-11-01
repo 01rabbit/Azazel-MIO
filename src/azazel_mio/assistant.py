@@ -453,6 +453,10 @@ class AssistantCore:
         if selection.playbook.playbook_id == AUTH_PLAYBOOK_ID:
             scenario_checks.append(
                 "Compare the observed authentication timing and counts with an approved automation schedule and authorized change record for that window; if neither is available, leave the benign explanation unresolved.")
+        if any(re.fullmatch(r"Observed normalized event outcome:\s*allowed", fact, re.I)
+               for fact in frame.known_facts):
+            scenario_checks.append(
+                "Clarify if 'allowed' means network acceptance or successful authentication; correlate event time/target with authentication and approved change/automation records before claiming access succeeded.")
         if knowledge_outcome is ContextDependencyOutcome.TIMEOUT:
             scenario_checks.append(
                 "Confirm the Knowledge peer health and timed-out request timestamp through its authorized status view; request a fresh read-only retrieval only after service recovery.")
@@ -465,13 +469,22 @@ class AssistantCore:
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(
                 "Confirm whether an authorized Knowledge context was requested and supplied for this frame.")
-        if deception_outcome is ContextDependencyOutcome.ABSENT:
+        deception_relevant = (
+            selection.playbook.playbook_id == "deception-observation-v1"
+            or bool(re.search(r"\b(?:deception|decoy|honeypot|az[-_ ]?06)\b",
+                              " ".join((frame.mission, frame.soc_summary, frame.noc_summary)), re.I))
+            # known_facts are bounded but may contain attacker-derived prose,
+            # so only accept canonical fixed-label forms here, never sentences.
+            or any(re.fullmatch(r"(?:DECEPTION|DECOY|HONEYPOT|AZ06)(?:_[A-Z0-9]+)+", fact.upper())
+                   for fact in frame.known_facts)
+        )
+        if deception_relevant and deception_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(
                 "Confirm AZ-06 environment coverage and observation availability for the incident window; missing decoy telemetry does not establish that no decoy interaction occurred.")
-        elif deception_outcome is ContextDependencyOutcome.TIMEOUT:
+        elif deception_relevant and deception_outcome is ContextDependencyOutcome.TIMEOUT:
             scenario_checks.append(
                 "Confirm AZ-06 observation-service health and the timed-out request window through its authorized status view.")
-        elif deception_outcome in {ContextDependencyOutcome.REJECTED, ContextDependencyOutcome.UNAVAILABLE}:
+        elif deception_relevant and deception_outcome in {ContextDependencyOutcome.REJECTED, ContextDependencyOutcome.UNAVAILABLE}:
             scenario_checks.append(
                 "Confirm AZ-06 observation coverage and adapter status for the incident window; unavailable or rejected telemetry does not establish that no interaction occurred.")
         if scenario_checks:

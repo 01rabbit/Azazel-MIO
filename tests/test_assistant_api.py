@@ -174,10 +174,68 @@ def test_dependency_outcomes_and_checks_distinguish_peer_failures_without_adopti
 
 
 def test_missing_deception_telemetry_recommends_coverage_confirmation():
-    out = AssistantCore().explain(frame(), now=NOW).to_dict()
+    relevant = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review suspicious honeypot interaction', current_defensive_state='OBSERVE',
+        threat_level='UNKNOWN')
+    out = AssistantCore().explain(relevant, now=NOW).to_dict()
     assert out['dependency_outcome']['deception'] == 'absent'
     assert any('AZ-06 environment coverage' in check and 'does not establish' in check
                for check in out['next_checks'])
+
+
+def test_generic_suricata_admin_scenario_does_not_get_az06_check_when_deception_absent():
+    generic = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review Suricata alert for admin access', current_defensive_state='OBSERVE',
+        threat_level='UNKNOWN', soc_summary='Suricata reports possible admin access',
+        known_facts=('SURICATA_ADMIN_ACCESS_ALERT',))
+    out = AssistantCore().explain(generic, now=NOW).to_dict()
+    assert out['dependency_outcome']['deception'] == 'absent'
+    assert not any('AZ-06' in check or 'decoy telemetry' in check for check in out['next_checks'])
+
+
+def test_allowed_normalized_event_outcome_gets_bounded_authentication_clarification():
+    allowed = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN',
+        known_facts=('Observed normalized event outcome: allowed',))
+    out = AssistantCore().explain(allowed, now=NOW).to_dict()
+    checks = out['next_checks']
+    clarification = next(check for check in checks if "Clarify if 'allowed'" in check)
+    assert 'network acceptance' in clarification and 'successful authentication' in clarification
+    assert 'event time/target' in clarification
+    assert 'approved change/automation records' in clarification
+    assert 'before claiming access succeeded' in clarification
+    assert len(clarification) <= 200
+    assert 'Observed normalized event outcome' not in clarification
+    assert not any('AZ-06' in check or 'decoy telemetry' in check for check in checks)
+
+
+def test_generic_or_nonallowed_outcome_does_not_get_allowed_disposition_check():
+    generic = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN')
+    other = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN',
+        known_facts=('Observed normalized event outcome: denied',))
+    for candidate in (generic, other):
+        out = AssistantCore().explain(candidate, now=NOW).to_dict()
+        assert not any("Clarify if 'allowed'" in check for check in out['next_checks'])
+
+
+def test_canonical_deception_known_fact_retains_az06_check_without_summary_signal():
+    relevant = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN',
+        known_facts=('HONEYPOT_INTERACTION_OBSERVED',))
+    out = AssistantCore().explain(relevant, now=NOW).to_dict()
+    assert any('AZ-06 environment coverage' in check and 'does not establish' in check
+               for check in out['next_checks'])
+
+
+def test_action_record_alone_does_not_mark_scenario_deception_relevant():
+    generic = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN',
+        actions=({'role': 'current', 'action': 'OBSERVE', 'decision_ref': 'decision-1',
+                  'applied_state': 'none', 'mode': 'none'},))
+    out = AssistantCore().explain(generic, now=NOW).to_dict()
+    assert not any('AZ-06' in check or 'decoy telemetry' in check for check in out['next_checks'])
 
 
 def test_auth_context_asks_for_approved_change_and_timing_evidence():
