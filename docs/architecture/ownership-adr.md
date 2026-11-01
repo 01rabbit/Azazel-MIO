@@ -1,9 +1,9 @@
 # ADR: Ownership boundaries for M.I.O.
 
-**Status:** Proposed; owner agreement and product migration are not established.
-**Decision date:** 2026-10-31
+**Status:** Project-owner direction recorded; cross-product adoption and contract acceptance pending.
+**Decision date:** 2026-10-31; direction/evidence refresh 2026-11-02
 
-**Evidence update (2026-11-01):** Current Edge and Nexus working candidates now contain the routes summarized in [the AI inventory](ai-inventory.md). This updates candidate evidence only. It does not establish main/release adoption, product-owner agreement, HIL, or production operation.
+The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. MIO `main` remains `6302e665c3ac6cf7004407965299d81dc9ddfc8a`; the implementation reviewed here is PR #15 `26a5046dd493a3587f0b03dbc574211ff781d1d1`.
 
 ## Context and decision
 
@@ -22,17 +22,11 @@ Edge remains the deterministic decision and enforcement authority. M.I.O. may ex
 
 ## Candidate routes and migration boundaries
 
-| Area | Current candidate evidence | Compatibility and limit |
-| --- | --- | --- |
-| Edge shared assistance | Edge candidate asynchronously routes a bounded event through `py/azazel_edge_ai/mio_live_auxiliary.py` to `AssistantCore`; the optional model lane is separate in `py/azazel_edge_ai/agent.py`. One local-only `qwen3.5:0.8b` smoke passed for one event. | Keep Edge deterministic judgment/enforcement in control. This does not prove HIL, production operation, or an Edge main/release switch. Retain compatibility imports during any staged source migration and verify frame/replay behavior before release. |
-| Nexus runtime path | The local Nexus candidate source contains entryd → locald → MIO `AssistantCore` fast assistance in `runtime/src/azazel_nexus_runtime/mio_entryd.py`, `mio_locald.py`, and `mio_fast_assistance.py`. An isolated ARM64/Python 3.12 verification passed 264 shared-wheel tests and one degraded no-wheel real-process test; a post-commit repeat passed the same checks. Independent audit of the candidate tree and logs completed with no discrepancies; there is no public PR head yet. | This verifies the local consumer path with a re-signed test Knowledge fixture, not a live Knowledge producer or full-node interoperability. It is not CI, HIL, mainline, release, or production evidence. Nexus retains admission, launch, runtime health, resource controls and operator presentation. This is not live Edge producer-to-API proof; Nexus main/release adoption is unverified. |
-| Knowledge and shared contracts | Nexus candidate provides an authenticated local Knowledge Lite socket/client in `runtime/src/azazel_nexus_runtime/knowledge_lited.py` and `knowledge_client.py`; MIO accepts caller-projected typed Knowledge context. Separately, `mio_referenced.py` serves deterministic, model-free references from verified Mission Pack playbooks, with no Knowledge or MIO model path. | The test bundle is a fixture, not a live Knowledge producer. Approved Knowledge REST authentication/configuration is absent; downstream revocation behavior for MIO-consumed references is unknown. The Mission Pack playbook reference is not a Knowledge deep-reference route. Fabric owns cross-product schemas. REST-to-Fabric mapping/version policy remains undecided. |
+The [AI inventory](ai-inventory.md) records exact candidate heads and remaining product callsites; the [migration matrix](../migration.md#compatibility-and-rollout-matrix) records supported claims and unproven combinations. Shared semantics belong in MIO under the project direction; moving those semantics does not move Edge's immediate deterministic decisions/enforcement, Nexus lifecycle/admission/operator entry, Knowledge provenance, or Fabric wire contracts.
 
-Keep the MIO internal Python API (`docs/api-v1.md`) separate from Fabric wire contracts. Product adapters translate at the boundary. Preserve established frame v2 bytes and replay behavior when changing Python ownership metadata; verify compatibility against fixtures/golden records before release. Source extraction and compatibility aliases indicate migration work, not a completed Edge switch.
+Edge still contains legacy product model paths. Its optional PR #525 auxiliary path calls the shared core without a model; its separate model/Knowledge work and refreshed local stack are not evidence that all product assistance has migrated. Nexus #398 supplies shared fast assistance, while its local inference/retrieval orchestration remains product code. A common separate-time Knowledge-to-LLM reasoning path has not been established at these heads. Deterministic Mission Pack references are not that path.
 
-## Historical evidence superseded by the current candidate cut
-
-An earlier 2026-11-01 review recorded Edge MIO as shadow/replay work, described a failed Qwen 0.8B attempt, and cited an older Nexus route/test status. Those were historical results for that earlier candidate state. The current Edge candidate has the single-event local smoke recorded above; the local Nexus candidate's isolated ARM64/Python 3.12 verification passed 264 shared-wheel tests and one degraded no-wheel real-process test using a re-signed Knowledge fixture, and a post-commit repeat passed the same checks. Independent audit of the candidate tree and logs completed with no discrepancies. The candidate has no public PR head. This newer evidence supersedes earlier status only at local candidate scope. It does not establish live Knowledge producer/full-node interoperability, CI, mainline or release adoption, HIL, or production operation.
+Keep the MIO internal Python API (`docs/api-v1.md`) separate from Fabric wire contracts. Product adapters translate at the boundary. Preserve frame v2 canonical bytes and replay behavior when changing Python ownership metadata; compatibility requires verification for each release combination. Extraction or import aliases alone do not prove a deployed consumer switch.
 
 ## Safety and rollout constraints
 
@@ -45,4 +39,4 @@ An earlier 2026-11-01 review recorded Edge MIO as shadow/replay work, described 
 
 ## Review required
 
-Product owners must confirm the Edge and Nexus adapter seams, Knowledge trust/generation and revocation contract, REST-to-Fabric mapping/version policy, and Deception approved-control flow before this ADR is accepted. Tracking references: MIO #1, #2, #12, #14; Edge #524; Nexus #395; Knowledge #111; Fabric #72. This ADR remains proposed and does not assert completed integration.
+Product owners must confirm the Edge and Nexus adapter seams, Knowledge trust/generation and revocation contract, REST-to-Fabric mapping/version policy, and Deception approved-control flow before cross-product contracts and rollout are accepted. The project-owner direction above does not supply those approvals. Tracking references: MIO #1, #2, #12, #14; Edge #524; Nexus #395; Knowledge #111; Fabric #72. This ADR remains proposed and does not assert completed integration.

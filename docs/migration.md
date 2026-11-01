@@ -42,3 +42,21 @@ Stable hypothesis IDs must keep their original slot. The selected ID appears in
 Assistance and a trace event marked `model_proposed_unverified`; the trace also
 shows its `proposed_role` with that same verification status. Invalid selections
 follow the existing deterministic no-model handoff path.
+
+
+## Compatibility and rollout matrix
+
+This matrix records claims at the 2026-11-02 [inventory cut](architecture/ai-inventory.md). The project direction assigns common assistance semantics to MIO; it does not assert a consumer switch or another product owner's acceptance.
+
+| Product / common-core combination | Compatibility claim | Evidence and remaining gate |
+| --- | --- | --- |
+| Existing product paths / MIO main `6302e665c3ac6cf7004407965299d81dc9ddfc8a` | Existing product operation does not require assuming PR #15 API availability. | Main is a foundation baseline; no migration completion claim. |
+| Legacy Edge imports / extracted shared core | Historical aliases and unchanged frame-v2 bytes are the intended seam. | Original extraction fixtures/replay apply to their source versions; validate installed aliases, packaging and golden records for the actual release pair. |
+| Edge #525 `e4c0661dcfd0f3835d174292756e2cff7a1b84fa` / MIO #15 `26a5046dd493a3587f0b03dbc574211ff781d1d1` | Optional auxiliary/model lanes; deterministic Edge decisions retain authority. | Source inspection only for this exact pair in this docs update. Edge current-head CI fails module-installer coverage. No exact-pair release, HIL or production claim. |
+| Nexus #398 `c90deb865735e1e53fac86d2a49b53753caf82c8` / MIO #15 | Shared fast assistance candidate; product inference remains separate. | Earlier local base `3e6170e` and fixture-based test results are historical, not exact-head certification. Current exact-pair process, admission/resource and rollout evidence remains to be attached. |
+| Product old adapter / new prompt `1.5.0` | Adapters missing distinct trusted alternative IDs are incompatible with the structured multi-prompt requirement above. | Reject invalid output and degrade explicitly; do not silently interpret old output as the new schema. |
+| Product adapter / MIO #16–#18 stack | Feedback, citations and ContextResponse are candidate additions; availability must be feature/version checked. | Validate the selected wheel/head with the consumer. A #18 projection test is not live producer or model integration. |
+| Refreshed local Edge stack / newer MIO candidates | Local-only candidate combinations, not public current PR heads. | Keep tests tied to their exact candidate hashes; do not transfer them to public PRs or main. |
+| Missing MIO/model/Knowledge | Explicit unavailable/unknown/static guidance; Edge deterministic path remains independent. | Degraded-path tests apply only to their tested source combinations; unproven external/HG/admission gates remain open. |
+
+This documentation-only refresh ran no tests and changes no code or contracts. Historical fixture, unit, replay, process and single-event smoke results are not interchangeable with current-head CI, live authenticated Knowledge, HIL or production evidence. Verified operational training labels and the shared separate-time Knowledge-to-LLM path remain unavailable; migration must not imply either exists. Each rollout still needs product acceptance, exact installed-version/packaging checks, canonical-frame/replay compatibility, cancellation/stale-result behavior and the applicable admission/resource/egress gates.
