@@ -328,6 +328,7 @@ _CONTEXT_RESPONSE_OPTIONAL = frozenset({
     "advisory_notice", "engage_refs", "rule_refs", "reported_defensive_state",
     "engagement_advisory", "engagement_repeatability_score",
 })
+_SOURCE_GROUP_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 _ATTACK_TECHNIQUE_RE = re.compile(r"T\d{4}(?:\.\d{3})?\Z")
 _ATTACK_VERSION_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){0,2}\Z")
 
@@ -335,7 +336,7 @@ _ATTACK_VERSION_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){0,2}\Z")
 def _bounded_context_response(value: Any) -> dict[str, Any] | None:
     """Validate the current Knowledge ContextResponse shape and project it.
 
-    Only public ATT&CK technique identifiers, source freshness metadata and
+    Only bounded source group labels, public ATT&CK identifiers, freshness and
     an exact canonical reported-state enum can leave this boundary. No source
     prose, IOC, actor, event, recommendation, score or provenance ID is kept.
     """
@@ -411,6 +412,28 @@ def _bounded_context_response(value: Any) -> dict[str, Any] | None:
         elif item is not None and type(item) not in (str, int, float, bool):
             return None
     threat = data["threat_context"]
+    # Knowledge emits config feed groups (fallback: feed_id), never IOC values.
+    # Reject the whole receipt rather than silently keeping a partial source set.
+    matches = threat.get("ioc_matches", [])
+    if type(matches) is not list or len(matches) > 32:
+        return None
+    source_groups: set[str] = set()
+    source_count = 0
+    for match in matches:
+        if type(match) is not dict:
+            return None
+        sources = match.get("sources", [])
+        if type(sources) is not list or len(sources) > 16:
+            return None
+        source_count += len(sources)
+        if source_count > 64:
+            return None
+        for source in sources:
+            if type(source) is not str or not _SOURCE_GROUP_RE.fullmatch(source):
+                return None
+            source_groups.add(source)
+        if len(source_groups) > 16:
+            return None
     freshness = data["source_freshness"]
     mappings = threat.get("attack_mapping", [])
     if type(mappings) is not list or len(mappings) > 32:
@@ -457,13 +480,14 @@ def _bounded_context_response(value: Any) -> dict[str, Any] | None:
         if state.get("is_canonical") is True and type(canonical) is str and canonical in {
                 "OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}:
             reported_state = canonical
-    if not techniques and not projected_freshness and reported_state is None:
+    if not techniques and not source_groups and not projected_freshness and reported_state is None:
         return None
     return {
         "kind": "knowledge_context_response_advisory",
         "source_kind": "knowledge_context_response",
         "claim_status": "reported_unverified",
         "attack_techniques": techniques,
+        "source_groups": sorted(source_groups),
         "source_freshness": projected_freshness,
         "reported_canonical_state": reported_state,
         "trust": "unverified_advisory_only",

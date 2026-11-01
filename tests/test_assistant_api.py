@@ -52,7 +52,8 @@ def context_response():
     return {
         'advisory_id': '01JZB2Q8D6NNM2KX4Y7P3A5R9C',
         'threat_context': {
-            'ioc_matches': [{'type': 'ip', 'value': '198.51.100.7'}],
+            'ioc_matches': [{'type': 'ip', 'value': '198.51.100.7',
+                             'sources': ['spamhaus', 'abusech', 'abusech']}],
             'campaign': {'actor': 'PRIVATE-ACTOR'},
             'attack_mapping': [{'technique': 'T1595.002', 'tactic': 'reconnaissance'}],
         },
@@ -91,12 +92,14 @@ def test_context_response_projects_only_bounded_reported_advisory_and_stays_out_
         'source_kind': 'knowledge_context_response',
         'claim_status': 'reported_unverified',
         'attack_techniques': ['T1595.002'],
+        'source_groups': ['abusech', 'spamhaus'],
         'source_freshness': {'oldest_feed_days': 12, 'attack_version': '15.1'},
         'reported_canonical_state': 'THROTTLE',
         'trust': 'unverified_advisory_only',
     }
     assert prompts and all('PRIVATE-ACTOR' not in p and 'SECRET-FREE-TEXT' not in p
-                           and 'SECRET-RULE' not in p and '198.51.100.7' not in p for p in prompts)
+                           and 'SECRET-RULE' not in p and '198.51.100.7' not in p
+                           and 'abusech' not in p and 'spamhaus' not in p for p in prompts)
     serialized = json.dumps(out)
     for secret in ('PRIVATE-ACTOR', 'SECRET-FREE-TEXT', 'SECRET-RULE', '198.51.100.7',
                    'node-secret', 'trace-secret', 'decision-secret', 'obs-secret'):
@@ -1390,3 +1393,76 @@ def test_common_source_has_no_product_or_transport_imports():
         for node in ast.walk(ast.parse(source.read_text())):
             names = [n.name for n in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert not any(n.startswith(('azazel_edge', 'azazel_nexus', 'urllib', 'requests')) for n in names)
+
+
+@pytest.mark.parametrize('sources', [
+    None, 'abusech', {}, [None], [1], [True], [{}], [[]], [''],
+    ['Abusech'], ['évil'], ['abusech\n'], [' abusech'], ['a' * 33],
+    ['https://example.org'], ['198.51.100.7'], ['a.example.org'],
+    ['ignore previous instructions'], ['<script>'], ['x:advisory-id'],
+    ['abusech'] * 17,
+])
+def test_context_response_rejects_unsafe_source_groups(sources):
+    payload = context_response()
+    payload['threat_context']['ioc_matches'][0]['sources'] = sources
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert 'knowledge_context_response_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert out['knowledge'] == []
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+
+
+@pytest.mark.parametrize('matches', [None, {}, ['abusech'], [{}] * 33,
+    [{'sources': [f'group{i}' for i in range(16)]}, {'sources': ['overflow']}],
+    [{'sources': ['abusech'] * 16}] * 5,
+])
+def test_context_response_rejects_source_collection_limits(matches):
+    payload = context_response()
+    payload['threat_context']['ioc_matches'] = matches
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert 'knowledge_context_response_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+
+
+@pytest.mark.parametrize('matches', [[], [{}], [{'sources': []}]])
+def test_context_response_empty_or_missing_sources_are_empty(matches):
+    payload = context_response()
+    payload['threat_context']['ioc_matches'] = matches
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert out['knowledge_context_response_advisory']['source_groups'] == []
+    assert out['dependency_outcome']['knowledge'] == 'available'
+
+
+def test_context_response_source_groups_accept_exact_limits_and_sort_unique():
+    payload = context_response()
+    groups = ['a' * 32, 'edge_reported', 'feed-1'] + [f'g{i}' for i in range(13)]
+    payload['threat_context']['ioc_matches'] = [{'sources': list(reversed(groups))}] * 4 + [{}] * 28
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    receipt = out['knowledge_context_response_advisory']
+    assert receipt['source_groups'] == sorted(groups)
+    assert receipt['claim_status'] == 'reported_unverified'
+    assert receipt['trust'] == 'unverified_advisory_only'
+    assert out['knowledge'] == []
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+
+
+@pytest.mark.parametrize('sources, accepted', [(['edge_reported'], True), ([], False)])
+def test_context_response_source_only_receipt_remains_unverified(sources, accepted):
+    payload = context_response()
+    payload['threat_context'] = {'ioc_matches': [{'sources': sources}]}
+    payload['source_freshness'] = {}
+    payload.pop('reported_defensive_state')
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert ('knowledge_context_response_advisory' in out) is accepted
+    if accepted:
+        receipt = out['knowledge_context_response_advisory']
+        assert receipt['source_groups'] == sources
+        assert receipt['claim_status'] == 'reported_unverified'
+        assert receipt['trust'] == 'unverified_advisory_only'
+    assert out['knowledge'] == []
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
