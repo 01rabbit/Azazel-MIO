@@ -579,7 +579,7 @@ def test_unbounded_raw_model_payload_is_rejected_without_leaking_model_output(ho
     assert secret not in public
 
 
-def test_grounding_rejects_container_subclasses_and_detects_string_subclass_keys():
+def test_grounding_rejects_container_and_key_subclasses():
     from azazel_mio.grounding import GroundingValidator
 
     class SinglePassRefs(list):
@@ -608,7 +608,7 @@ def test_grounding_rejects_container_subclasses_and_detects_string_subclass_keys
 
     key_result = validator.validate_raw({ModelKey('execute'): 'ignored'})
     assert not key_result.ok
-    assert 'forbidden_directive_key:execute' in key_result.errors
+    assert key_result.errors == ('raw_payload_unsupported_key',)
 
 
 def test_grounding_rejects_custom_mappings_without_calling_hooks_and_falls_back():
@@ -697,6 +697,53 @@ def test_grounding_rejects_hostile_string_subclass_before_text_projection():
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
     assert outcome.handoff.to_dict()['model_contribution'] == 'none'
     assert secret not in public
+
+
+def test_grounding_rejects_arbitrary_scalar_without_calling_conversion_hooks():
+    from azazel_mio.grounding import GroundingValidator
+
+    secret = 'HOSTILE_OBJECT_LEAK_9082'
+    class HostileObject:
+        calls = []
+
+        def __str__(self):
+            self.calls.append('__str__')
+            raise AssertionError(secret)
+
+        def __bool__(self):
+            self.calls.append('__bool__')
+            raise AssertionError(secret)
+
+    hostile = HostileObject()
+    result = GroundingValidator(frame()).validate_raw({'injected': hostile})
+    assert not result.ok
+    assert result.errors == ('raw_payload_unsupported_value',)
+    assert hostile.calls == []
+    validator = GroundingValidator(frame())
+    assert validator.validate_raw({'bool': False, 'float': 1.25, 'none': None, 'int': 42}).ok
+    assert validator.validate_raw({'number': float('nan')}).errors == ('raw_payload_unsupported_value',)
+    assert validator.validate_raw({'number': float('inf')}).errors == ('raw_payload_unsupported_value',)
+    assert validator.validate_raw({'number': 1 << 5000}).errors == ('raw_payload_too_large',)
+
+    calls = []
+    def model(task, prompt):
+        calls.append(task)
+        if task == 'generate_hypotheses':
+            return {'hypotheses': [], 'injected': hostile}
+        raise AssertionError('unsupported scalar must stop model tasks')
+
+    from azazel_mio.broker import CapabilityBroker
+    from azazel_mio.playbook import select_playbook
+    from azazel_mio.reasoning import BoundedReasoningLoop
+    selection = select_playbook(frame(), requested_id='auth-ambiguity-v1')
+    outcome = BoundedReasoningLoop(model=model, broker=CapabilityBroker()).run(
+        frame=frame(), playbook=selection.playbook, cycle_id='cycle-hostile-object', selection=selection)
+    public = repr(outcome) + outcome.handoff.to_canonical_json().decode('ascii')
+    assert calls == ['generate_hypotheses']
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert outcome.handoff.to_dict()['model_contribution'] == 'none'
+    assert secret not in public
+    assert hostile.calls == []
 
 
 def test_late_validation_rejection_suppresses_prior_model_output_everywhere():

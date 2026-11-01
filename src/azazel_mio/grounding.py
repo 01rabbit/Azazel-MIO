@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -21,6 +22,7 @@ _KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}\Z")
 _MAX_RAW_NODES = 4096
 _MAX_RAW_DEPTH = 64
 _MAX_RAW_TEXT_CHARS = 1_000_000
+_MAX_RAW_INT_BITS = 4096
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
 # Errors name a capability only when the broker registry knows it
@@ -44,14 +46,14 @@ class GroundingValidator:
         if type(payload) is not dict:
             return GroundingResult(False, ("raw_payload_unsupported_container",))
         # Use iterator frames instead of recursion or materializing container items.
-        stack: list[tuple[str, Any, str, int, frozenset[int]]] = [
-            ("visit", payload, "", 0, frozenset())
+        stack: list[tuple[str, Any, str, int, frozenset[int], bool]] = [
+            ("visit", payload, "", 0, frozenset(), False)
         ]
         visited_nodes = 0
         visited_text_chars = 0
         raw_refs: list[Any] = []
         while stack:
-            action, value, path, depth, ancestors = stack.pop()
+            action, value, path, depth, ancestors, is_mapping = stack.pop()
             if action == "iterate":
                 iterator = value
                 try:
@@ -61,30 +63,33 @@ class GroundingValidator:
                 except Exception:
                     errors.append("raw_payload_unreadable")
                     break
-                stack.append(("iterate", iterator, path, depth, ancestors))
-                key_text = str.__str__(key) if isinstance(key, str) else ""
-                visited_text_chars += len(key_text)
-                if visited_text_chars > _MAX_RAW_TEXT_CHARS:
-                    errors.append("raw_payload_too_large")
-                    break
-                if path == "evidence_refs":
-                    raw_refs.append(nested)
-                lower_key = key_text.lower() if len(key_text) <= 48 else ""
-                shown = key_text if lower_key in FORBIDDEN_DIRECTIVE_KEYS or _KEY_RE.fullmatch(key_text) else "invalid-key"
-                child_path = f"{path}.{shown}" if path else shown
-                if lower_key in FORBIDDEN_DIRECTIVE_KEYS:
-                    errors.append(f"forbidden_directive_key:{child_path}")
-                stack.append(("visit", nested, child_path, depth + 1, ancestors))
+                stack.append(("iterate", iterator, path, depth, ancestors, is_mapping))
+                if is_mapping:
+                    if type(key) is not str:
+                        errors.append("raw_payload_unsupported_key")
+                        break
+                    key_text = key
+                    visited_text_chars += len(key_text)
+                    if visited_text_chars > _MAX_RAW_TEXT_CHARS:
+                        errors.append("raw_payload_too_large")
+                        break
+                    if path == "evidence_refs":
+                        raw_refs.append(nested)
+                    lower_key = key_text.lower() if len(key_text) <= 48 else ""
+                    shown = key_text if lower_key in FORBIDDEN_DIRECTIVE_KEYS or _KEY_RE.fullmatch(key_text) else "invalid-key"
+                    child_path = f"{path}.{shown}" if path else shown
+                    if lower_key in FORBIDDEN_DIRECTIVE_KEYS:
+                        errors.append(f"forbidden_directive_key:{child_path}")
+                else:
+                    child_path = f"{path}[{key}]"
+                stack.append(("visit", nested, child_path, depth + 1, ancestors, False))
                 continue
 
             visited_nodes += 1
             if visited_nodes > _MAX_RAW_NODES:
                 errors.append("raw_payload_too_many_nodes")
                 break
-            if isinstance(value, str):
-                if type(value) is not str:
-                    errors.append("raw_payload_unsupported_value")
-                    break
+            if type(value) is str:
                 visited_text_chars += str.__len__(value)
                 if visited_text_chars > _MAX_RAW_TEXT_CHARS:
                     errors.append("raw_payload_too_large")
@@ -108,9 +113,20 @@ class GroundingValidator:
                 except Exception:
                     errors.append("raw_payload_unreadable")
                     break
-                stack.append(("iterate", iterator, path, depth, nested_ancestors))
+                stack.append(("iterate", iterator, path, depth, nested_ancestors, type(value) is dict))
             elif isinstance(value, (Mapping, list, tuple)):
                 errors.append("raw_payload_unsupported_container")
+                break
+            elif type(value) is int:
+                if value.bit_length() > _MAX_RAW_INT_BITS:
+                    errors.append("raw_payload_too_large")
+                    break
+            elif type(value) is float:
+                if not math.isfinite(value):
+                    errors.append("raw_payload_unsupported_value")
+                    break
+            elif type(value) not in (str, bool, type(None)):
+                errors.append("raw_payload_unsupported_value")
                 break
 
         if errors and any(error.startswith("raw_payload_") for error in errors):
