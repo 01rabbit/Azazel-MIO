@@ -1,6 +1,6 @@
 # M.I.O. internal API v1
 
-`azazel_mio.assistant.AssistantCore(model=None).explain(frame, *, knowledge=(), now: str, cancel_check=None, stale_check=None) -> Assistance`
+`azazel_mio.assistant.AssistantCore(model=None).explain(frame, *, knowledge=(), now: str, knowledge_attempted: bool = True, cancel_check=None, stale_check=None) -> Assistance`
 
 `frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
 `Assistance.to_dict()` returns schema_version (`mio.assistance.v1`), trace_id,
@@ -8,7 +8,7 @@ frame_id, generation_method (`static_reference` or `model`), state, observations
 hypotheses, unknowns, next_checks, knowledge, handoff, reasoning_trace.
 The v1 response retains those fields and adds the optional
 `dependency_outcome` object. Its `knowledge` value uses the closed enum
-`available | absent | timeout | expired | rejected | unavailable`; `deception`
+`available | absent | not_queried | timeout | expired | rejected | unavailable`; `deception`
 uses `available | absent | timeout | rejected | unavailable` (`expired` is
 only applicable to date-bounded Knowledge context).
 This additive field is orthogonal to `state` (which remains
@@ -19,6 +19,14 @@ v1 extension. `next_checks` may add fixed, scenario-specific read-only checks
 when these typed outcomes are present. Dependency-specific checks use only
 closed status values and typed expiry validation; authentication checks are
 gated by the selected closed playbook ID. None use peer response prose.
+`knowledge_attempted` defaults to `True`, preserving existing behavior. A caller
+may pass the exact boolean `False` to report `not_queried` only when the frame
+has no Knowledge refs or adverse dependency status and no Knowledge context,
+reference, or advisory inputs were supplied. Invalid values raise `TypeError`.
+The result adds a fixed next-check stating that this fast assessment did not
+query Knowledge and directing the consumer to the separate validated Knowledge
+analysis lane. It contains no action recommendation and does not change the
+serialized `MioSituationFrame` schema.
 Existing BoundedReasoningLoop, ReasoningCoordinator, playbook and broker APIs keep
 their names. For `generate_hypotheses`, multi-prompt playbooks now require at least
 two hypotheses with distinct `hypothesis_alternative_id` values selected from

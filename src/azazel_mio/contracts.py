@@ -86,6 +86,7 @@ class ContextDependencyOutcome(str, Enum):
 
     AVAILABLE = "available"
     ABSENT = "absent"
+    NOT_QUERIED = "not_queried"
     TIMEOUT = "timeout"
     EXPIRED = "expired"
     REJECTED = "rejected"

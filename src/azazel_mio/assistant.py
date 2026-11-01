@@ -329,7 +329,10 @@ class AssistantCore:
 
     def explain(self, frame: MioSituationFrame, *, knowledge=(), references=(),
                 reported_knowledge=(), now: str,
-                knowledge_lite_advisories=(), cancel_check=None, stale_check=None) -> Assistance:
+                knowledge_lite_advisories=(), knowledge_attempted: bool = True,
+                cancel_check=None, stale_check=None) -> Assistance:
+        if type(knowledge_attempted) is not bool:
+            raise TypeError("knowledge_attempted_must_be_bool")
         instant = _time(now)
         # Rebuild even a directly constructed dataclass through the closed,
         # bounded v2 frame validator before interpreting it.
@@ -453,8 +456,17 @@ class AssistantCore:
                 knowledge_outcome = ContextDependencyOutcome.REJECTED
             elif lite_advisories:
                 knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        if (knowledge_attempted is False and not rejected
+                and not frame.knowledge_refs
+                and not contexts and not static_references and not reported_contexts and not lite_advisories
+                and not knowledge and not references and not reported_knowledge and not knowledge_lite_advisories
+                and knowledge_outcome is ContextDependencyOutcome.ABSENT):
+            knowledge_outcome = ContextDependencyOutcome.NOT_QUERIED
         deception_outcome = _frame_dependency_outcome(frame.deception_status)
         scenario_checks: list[str] = []
+        if knowledge_outcome is ContextDependencyOutcome.NOT_QUERIED:
+            scenario_checks.append(
+                "This fast result did not query Knowledge; consult the separate validated Knowledge analysis lane for Knowledge context before relying on this assessment.")
         if selection.playbook.playbook_id == AUTH_PLAYBOOK_ID:
             scenario_checks.append(
                 "Compare the observed authentication timing and counts with an approved automation schedule and authorized change record for that window; if neither is available, leave the benign explanation unresolved.")

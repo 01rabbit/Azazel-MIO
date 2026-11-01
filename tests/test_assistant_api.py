@@ -263,8 +263,35 @@ def test_assistance_v1_legacy_fields_remain_and_dependency_outcome_is_additive()
             'observations', 'hypotheses', 'unknowns', 'next_checks', 'knowledge',
             'handoff', 'reasoning_trace'} <= set(out)
     assert set(out['dependency_outcome']) == {'knowledge', 'deception'}
-    assert out['dependency_outcome']['knowledge'] in {'available', 'absent', 'timeout', 'expired', 'rejected', 'unavailable'}
+    assert out['dependency_outcome']['knowledge'] in {'available', 'absent', 'not_queried', 'timeout', 'expired', 'rejected', 'unavailable'}
     assert out['dependency_outcome']['deception'] in {'available', 'absent', 'timeout', 'rejected', 'unavailable'}
+
+
+def test_knowledge_attempted_defaults_to_legacy_absent_and_false_is_explicit_not_queried():
+    source_frame = frame()
+    default = AssistantCore().explain(source_frame, now=NOW).to_dict()
+    fast = AssistantCore().explain(source_frame, now=NOW, knowledge_attempted=False).to_dict()
+    assert default['dependency_outcome']['knowledge'] == 'absent'
+    assert fast['dependency_outcome']['knowledge'] == 'not_queried'
+    assert any('did not query Knowledge' in check and 'separate validated Knowledge analysis lane' in check
+               for check in fast['next_checks'])
+
+
+def test_knowledge_attempted_false_does_not_mask_supplied_knowledge_or_frame_outcome():
+    with_context = AssistantCore().explain(frame(), now=NOW, knowledge=(context(),),
+        knowledge_attempted=False).to_dict()
+    assert with_context['dependency_outcome']['knowledge'] == 'available'
+    timed_out_frame = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review', current_defensive_state='OBSERVE', threat_level='UNKNOWN',
+        knowledge_status='timeout')
+    timed_out = AssistantCore().explain(timed_out_frame, now=NOW,
+        knowledge_attempted=False).to_dict()
+    assert timed_out['dependency_outcome']['knowledge'] == 'timeout'
+
+
+def test_knowledge_attempted_requires_exact_bool():
+    with pytest.raises(TypeError, match='knowledge_attempted_must_be_bool'):
+        AssistantCore().explain(frame(), now=NOW, knowledge_attempted=0)
 
 
 def test_model_hypotheses_are_explicitly_unverified_not_observations(monkeypatch):
