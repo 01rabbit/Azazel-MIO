@@ -4,7 +4,7 @@
 
 **Decision date:** 2026-10-31
 
-**Evidence note (2026-11-01):** This remains a proposed ownership boundary. The combined MIO candidate is `65a75834291df47467a1022407eea8b839a5b9f8`; Edge `0ead255d7aee32dcb505f582a1179709487d20a`, Knowledge `b260ac725fea4e3da6ae2d182e7d9d4d8ec87f1c`, and Fabric `76169d1082512384a7a2092e0d989b4847a30bd9` are workspace candidates. This evidence does not establish owner agreement, release, or production adoption.
+**Evidence note (2026-11-01):** At the historical base commit `77cbaeeb5189c87fe32179cedb18e9f0557c71c0`, this remained a proposed ownership boundary. Current cross-repo candidate pins and review evidence are tracked in the task work ledger. This evidence does not establish owner agreement, release, or production adoption.
 
 ## Context and decision
 
