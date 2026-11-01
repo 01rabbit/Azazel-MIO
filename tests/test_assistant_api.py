@@ -458,6 +458,119 @@ def test_knowledge_attempted_requires_exact_bool():
         AssistantCore().explain(frame(), now=NOW, knowledge_attempted=0)
 
 
+def test_coordinated_assistant_discards_concurrent_stale_model_completion(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    import azazel_mio.assistant as assistant_module
+    from azazel_mio.lifecycle import ReasoningCoordinator
+
+    entered, release = threading.Event(), threading.Event()
+    hypothesis = MioHypothesis('h1', 'STALE MODEL CONTENT', HypothesisStatus.PROPOSED,
+        supporting_evidence_refs=('ev:ssh:1',))
+
+    class Loop:
+        def __init__(self, *, model, **kwargs):
+            self.model = model
+
+        def run(self, **kwargs):
+            if self.model is not None:
+                entered.set()
+                assert release.wait(3)
+                return SimpleNamespace(state=ReasoningState.COMPLETE, hypotheses=(hypothesis,),
+                    handoff=None, trace=(), recommendation=None)
+            return SimpleNamespace(state=ReasoningState.INSUFFICIENT_EVIDENCE, hypotheses=(),
+                handoff=None, trace=(), recommendation=None)
+
+    monkeypatch.setattr(assistant_module, 'BoundedReasoningLoop', Loop)
+    coordinator = ReasoningCoordinator()
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault('old', AssistantCore(
+        model=object(), coordinator=coordinator).explain(frame(), now=NOW).to_dict()))
+    worker.start()
+    assert entered.wait(3)
+    newer = MioSituationFrame.build(frame_id='frame-2', trace_id='trace-1', created_at=NOW,
+        mission='Keep communications available', current_defensive_state='OBSERVE',
+        threat_level='HIGH', known_facts=('AUTH_FAILURES_OBSERVED', 'NEW_MATERIAL_FACT'),
+        unknowns=('ADMIN_AUTOMATION_UNKNOWN',), evidence_refs=('ev:ssh:1',))
+    coordinator.begin(newer)
+    release.set()
+    worker.join(3)
+    assert not worker.is_alive()
+    assert 'STALE MODEL CONTENT' not in str(result['old'])
+    assert result['old']['generation_method'] == 'static_reference'
+    assert result['old']['cycle_disposition'] == 'stale_cycle_superseded'
+    assert result['old']['observations'] == result['old']['next_checks'] == []
+    assert result['old']['knowledge'] == result['old']['hypotheses'] == []
+    assert coordinator.current('trace-1') is None
+
+
+@pytest.mark.parametrize('callback_name', ['cancel_check', 'stale_check'])
+def test_coordinated_assistant_fails_closed_for_non_callable_callback(monkeypatch, callback_name):
+    from types import SimpleNamespace
+    import azazel_mio.assistant as assistant_module
+    from azazel_mio.lifecycle import ReasoningCoordinator
+
+    model_calls = []
+    class Loop:
+        def __init__(self, *, model, **kwargs):
+            self.model = model
+        def run(self, **kwargs):
+            interrupted = False
+            for name in ('stale_check', 'cancel_check'):
+                try:
+                    interrupted = kwargs[name]()
+                except Exception:
+                    interrupted = True
+                if interrupted:
+                    break
+            if interrupted:
+                return SimpleNamespace(state=ReasoningState.OPERATOR_CANCELLED, hypotheses=(),
+                    handoff=None, trace=(), recommendation=None)
+            if self.model is not None:
+                model_calls.append(True)
+            return SimpleNamespace(state=ReasoningState.COMPLETE, hypotheses=(),
+                handoff=None, trace=(), recommendation=None)
+
+    monkeypatch.setattr(assistant_module, 'BoundedReasoningLoop', Loop)
+    out = AssistantCore(model=object(), coordinator=ReasoningCoordinator()).explain(
+        frame(), now=NOW, **{callback_name: object()}).to_dict()
+    assert model_calls == []
+    assert out['cycle_disposition'] == 'stale_cycle_cancelled'
+    assert out['observations'] == out['next_checks'] == out['knowledge'] == []
+
+
+def test_coordinated_assistant_cleans_up_ticket_when_loop_raises(monkeypatch):
+    import azazel_mio.assistant as assistant_module
+    from azazel_mio.lifecycle import ReasoningCoordinator
+
+    class Loop:
+        def __init__(self, **kwargs):
+            pass
+        def run(self, **kwargs):
+            raise RuntimeError('model loop failed')
+
+    monkeypatch.setattr(assistant_module, 'BoundedReasoningLoop', Loop)
+    coordinator = ReasoningCoordinator()
+    with pytest.raises(RuntimeError, match='model loop failed'):
+        AssistantCore(model=object(), coordinator=coordinator).explain(frame(), now=NOW)
+    ticket = coordinator.begin(frame())
+    assert not ticket.deduplicated
+
+
+def test_ticket_cancel_does_not_cancel_newer_material_cycle():
+    from azazel_mio.lifecycle import ReasoningCoordinator
+
+    coordinator = ReasoningCoordinator()
+    old = coordinator.begin(frame())
+    newer_frame = MioSituationFrame.build(frame_id='frame-2', trace_id='trace-1', created_at=NOW,
+        mission='Keep communications available', current_defensive_state='OBSERVE',
+        threat_level='HIGH', known_facts=('AUTH_FAILURES_OBSERVED', 'NEW_MATERIAL_FACT'),
+        unknowns=('ADMIN_AUTOMATION_UNKNOWN',), evidence_refs=('ev:ssh:1',))
+    newer = coordinator.begin(newer_frame)
+    assert not coordinator.cancel_ticket(old)
+    assert coordinator.is_current(newer)
+
+
 def test_model_hypotheses_are_explicitly_unverified_not_observations(monkeypatch):
     from types import SimpleNamespace
     import azazel_mio.assistant as assistant_module
