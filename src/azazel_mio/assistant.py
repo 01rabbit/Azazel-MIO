@@ -5,6 +5,7 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import html
 import re
 from typing import Any, Mapping, Sequence
 
@@ -75,6 +76,8 @@ class KnowledgeLiteAdvisory:
     `current` freshness is captured as `current_at_lookup`; callers must
     recheck it against their clock before reuse because Knowledge Lite has no
     per-claim expiry. `expires_at` is optional and is never inferred.
+    `citation` identifies the claim; optional `source_citation` is separate,
+    untrusted dataset display text. An empty summary stays empty.
     """
     technique_id: str
     name: str
@@ -88,6 +91,7 @@ class KnowledgeLiteAdvisory:
     revocation_status: str
     trust_check: str = "verified"
     expires_at: str | None = None
+    source_citation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -234,6 +238,19 @@ _KNOWLEDGE_LITE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
 _KNOWLEDGE_LITE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
+def _source_citation_ok(value: Any) -> bool:
+    """Accept bounded, already-cleaned source display text without rewriting it."""
+    if type(value) is not str or len(value) > 160 or any(not c.isprintable() for c in value):
+        return False
+    # Match the Knowledge citation plain-text policy, retaining dataset underscores.
+    plain = html.unescape(value)
+    plain = re.sub(r"<[^>]*>", " ", plain)
+    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", plain)
+    plain = re.sub(r"https?://\S+|www\.\S+", " ", plain)
+    plain = plain.translate(str.maketrans("", "", "`*#"))
+    return " ".join(plain.split()) == value
+
+
 def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None:
     if type(value) is not KnowledgeLiteAdvisory:
         return None
@@ -253,10 +270,12 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
     if (type(value.name) is not str or not 0 < len(value.name) <= 160 or
             any(ord(c) < 32 for c in value.name)):
         return None
-    if (type(value.summary) is not str or not 0 < len(value.summary) <= 1200 or
+    if (type(value.summary) is not str or len(value.summary) > 1200 or
             any(ord(c) < 32 and c not in "\n\t" for c in value.summary)):
         return None
     if type(value.citation) is not str or not _KNOWLEDGE_LITE_ID.fullmatch(value.citation):
+        return None
+    if value.source_citation is not None and not _source_citation_ok(value.source_citation):
         return None
     try:
         as_of = _time(value.as_of)
@@ -271,7 +290,7 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
             return None
         if expiry <= now or expiry <= as_of:
             return None
-    return {
+    projection = {
         "kind": "knowledge_lite_advisory", "source_kind": "knowledge_lite",
         "claim_status": "reported_unverified", "technique_id": value.technique_id,
         "name": value.name, "summary": value.summary, "claim_id": value.claim_id,
@@ -283,6 +302,9 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
         "trust": "unverified_advisory_only" if value.revocation_status == "clear"
                  else "unverified_advisory_revocation_unknown",
     }
+    if value.source_citation is not None:
+        projection["source_citation"] = value.source_citation
+    return projection
 
 
 def _expired_context(value: Any, now: datetime) -> bool:

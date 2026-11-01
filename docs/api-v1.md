@@ -55,11 +55,22 @@ and preserves facts and inferences separately. A context grants no authority.
 
 `KnowledgeLiteAdvisory(technique_id, name, summary, claim_id, bundle_digest,
 freshness, generation, as_of, citation, revocation_status, trust_check="verified",
-expires_at=None)` is accepted through `explain(...,
+expires_at=None, source_citation=None)` is accepted through `explain(...,
 knowledge_lite_advisories=(...), now=...)`. It is projected as
 `kind=knowledge_lite_advisory`, `source_kind=knowledge_lite`, and
 `claim_status=reported_unverified`. Its summary remains only a reported claim:
 it is not placed in observations or VerifiedKnowledgeContext facts/inferences.
+`summary` may be empty and is preserved exactly, with no fabricated fallback.
+`citation` remains the canonical identifier; adapters mapping a KnowledgeRef use
+its `claim_id` for this field, not its human-readable dataset citation.
+The optional trailing `source_citation` carries that source's dataset citation
+separately as untrusted display text. It accepts at most 160 printable characters,
+including the empty string, under Knowledge's already-cleaned plain-text policy
+(no HTML/Markdown formatting, HTTP URLs, or control characters). MIO rejects
+unclean text rather than rewriting source content. `None` omits the projected
+field, preserving the output shape for existing callers; explicit `""` includes
+`source_citation: ""`. Source citations establish no trust or authority and do
+not enable learning, fact promotion, or enforcement.
 The projection preserves the claim, bundle, generation, timestamp, citation,
 freshness, trust check, and revocation status. Missing expiry stays `null`; MIO
 does not infer an expiry. A supplied expiry must be timezone-aware, later than

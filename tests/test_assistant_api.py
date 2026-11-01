@@ -67,6 +67,41 @@ def test_knowledge_lite_is_unverified_advisory_with_no_invented_expiry_or_fact_p
     assert any('Recheck the cited Knowledge Lite claim' in c for c in out['next_checks'])
 
 
+@pytest.mark.parametrize('source_citation', [
+    'MITRE ATT&CK technique, as ingested into azazel-knowledge intel.attack_technique',
+    '', '😀' * 160,
+])
+def test_knowledge_lite_source_citation_and_empty_summary_roundtrip(source_citation):
+    advisory = lite_advisory(summary='', claim_id='T1059.001', citation='T1059.001',
+                             source_citation=source_citation, revocation_status='unknown')
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(advisory,)).to_dict()
+    item, = out['knowledge']
+    assert item['source_citation'] == source_citation
+    assert item['citation'] == item['claim_id'] == 'T1059.001'
+    assert item['summary'] == ''
+    assert item['claim_status'] == 'reported_unverified'
+    assert item['revocation_status'] == 'unknown'
+    assert item['trust'] == 'unverified_advisory_revocation_unknown'
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+    assert not any('facts' in entry or 'inferences' in entry for entry in out['knowledge'])
+    assert not any(key in out for key in ('execute', 'command', 'admit', 'learn'))
+
+
+@pytest.mark.parametrize('source_citation', [
+    'x' * 161, 'source\nline', 'source\tline', 'source\x00', 'source\x7f',
+    'source\x85', 'source\u202e', 'source\u200b', 'https://peer.invalid', 'www.peer.invalid',
+    '<b>source</b>', '[source](https://peer.invalid)', '`source`', '*source*',
+    '#source', 42,
+])
+def test_knowledge_lite_invalid_source_citation_is_rejected(source_citation):
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(source_citation=source_citation),)).to_dict()
+    assert out['knowledge'] == []
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in out['unknowns']
+
+
 def test_knowledge_lite_advisory_stays_unverified_in_prompt_and_output():
     prompts = []
     class Model:
@@ -93,6 +128,9 @@ def test_knowledge_lite_advisory_stays_unverified_in_prompt_and_output():
     {'revocation_status': 'revoked'}, {'trust_check': 'skipped'},
     {'bundle_digest': 'sha256:bad'}, {'citation': 'https://peer.invalid'},
     {'expires_at': 'invalid'}, {'expires_at': NOW},
+    {'summary': 'x' * 1201}, {'summary': None},
+    {'source_citation': 'Source', 'revocation_status': 'revoked'},
+    {'source_citation': 'Source', 'trust_check': 'skipped'},
 ])
 def test_invalid_knowledge_lite_advisory_is_rejected(change):
     out = AssistantCore().explain(frame(), now=NOW,
