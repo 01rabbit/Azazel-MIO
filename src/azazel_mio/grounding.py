@@ -82,6 +82,9 @@ class GroundingValidator:
                 errors.append("raw_payload_too_many_nodes")
                 break
             if isinstance(value, str):
+                if type(value) is not str:
+                    errors.append("raw_payload_unsupported_value")
+                    break
                 visited_text_chars += str.__len__(value)
                 if visited_text_chars > _MAX_RAW_TEXT_CHARS:
                     errors.append("raw_payload_too_large")

@@ -665,6 +665,40 @@ def test_grounding_rejects_custom_mappings_without_calling_hooks_and_falls_back(
     assert hostile.calls == []
 
 
+def test_grounding_rejects_hostile_string_subclass_before_text_projection():
+    from azazel_mio.grounding import GroundingValidator
+
+    secret = 'HOSTILE_STRING_SUBCLASS_LEAK_9081'
+    class HostileText(str):
+        def __str__(self):
+            return secret
+
+    hostile = HostileText('safe underlying string')
+    validator = GroundingValidator(frame())
+    result = validator.validate_raw({'injected': hostile})
+    assert not result.ok
+    assert result.errors == ('raw_payload_unsupported_value',)
+
+    calls = []
+    def model(task, prompt):
+        calls.append(task)
+        if task == 'generate_hypotheses':
+            return {'hypotheses': [], 'injected': hostile}
+        raise AssertionError('unsupported scalar must stop model tasks')
+
+    from azazel_mio.broker import CapabilityBroker
+    from azazel_mio.playbook import select_playbook
+    from azazel_mio.reasoning import BoundedReasoningLoop
+    selection = select_playbook(frame(), requested_id='auth-ambiguity-v1')
+    outcome = BoundedReasoningLoop(model=model, broker=CapabilityBroker()).run(
+        frame=frame(), playbook=selection.playbook, cycle_id='cycle-hostile-text', selection=selection)
+    public = repr(outcome) + outcome.handoff.to_canonical_json().decode('ascii')
+    assert calls == ['generate_hypotheses']
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert outcome.handoff.to_dict()['model_contribution'] == 'none'
+    assert secret not in public
+
+
 def test_late_validation_rejection_suppresses_prior_model_output_everywhere():
     fabricated_claim = 'FABRICATED_LATE_REJECTED_CLAIM_172900'
     rejected_ref = 'ev:auth:172900'
