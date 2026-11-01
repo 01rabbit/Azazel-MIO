@@ -120,3 +120,8 @@ are not retried. `queued` acknowledges admission only, not durable persistence.
 `close()` cancels the reasoning cycle without waiting for or discarding queued
 audit delivery. There is no flush guarantee at process exit; products requiring
 durable audit persistence must monitor these counters and own persistence.
+
+Ordinary audit worker startup failures return `audit_sink_start_failed`.
+Process-control exceptions such as `KeyboardInterrupt` and `SystemExit` propagate
+from startup after pending queue and worker state are restored and the dropped
+admission is counted.

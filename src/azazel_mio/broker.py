@@ -417,10 +417,12 @@ class _AuditDelivery:
                 self.running = True
                 try:
                     threading.Thread(target=self._run, name="mio-audit-sink", daemon=True).start()
-                except Exception:
+                except BaseException as exc:
                     self.running = False
                     self.pending.pop()
                     self.dropped += 1
+                    if not isinstance(exc, Exception):
+                        raise
                     return "start_failed"
             self.accepted += 1
             return "queued"
@@ -578,7 +580,9 @@ class CapabilityBroker:
         With an injected sink, limitations includes audit_sink_queued, full, or
         start_failed. Delivery is best effort and observable via
         audit_delivery_stats(); queued is not a durability acknowledgement.
-        Validation, sanitization and scheduling add bounded-work overhead.
+        Ordinary failures become results; process-control BaseException propagates
+        after audit admission cleanup. Validation, sanitization and scheduling
+        add bounded-work overhead.
         """
         started = time.monotonic()
         params_audit: dict[str, Any] = {}

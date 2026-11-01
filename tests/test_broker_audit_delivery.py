@@ -112,3 +112,22 @@ def test_audit_worker_start_failure_is_returned_and_counted(monkeypatch):
     stats = broker.audit_delivery_stats()
     assert stats['dropped'] == 1
     assert stats['pending'] == stats['worker_running'] == stats['accepted'] == 0
+
+
+def test_audit_start_interrupt_cleans_admission_and_allows_retry(monkeypatch):
+    import pytest
+
+    def interrupt_start(_):
+        raise KeyboardInterrupt()
+
+    broker = CapabilityBroker(audit_sink=lambda _: None)
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, 'start', interrupt_start)
+        with pytest.raises(KeyboardInterrupt):
+            broker.submit(request())
+    stats = broker.audit_delivery_stats()
+    assert stats['pending'] == stats['worker_running'] == stats['accepted'] == 0
+    assert stats['dropped'] == 1
+    assert 'audit_sink_queued' in broker.submit(request(2)).limitations
+    wait_until(lambda: broker.audit_delivery_stats()['delivered'] == 1)
+    assert broker.audit_delivery_stats()['accepted'] == 1
