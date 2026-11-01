@@ -406,6 +406,7 @@ class _AuditDelivery:
         self.worker: threading.Thread | None = None
         self.startup_uncertain = False
         self.worker_running = False
+        self.worker_finished = False
         self.start_attempts = self.start_failures = 0
         self.accepted = self.delivered = self.failed = self.dropped = 0
 
@@ -413,11 +414,24 @@ class _AuditDelivery:
         if self.sink is None:
             return "disabled"
         with self.lock:
+            # Target return is not thread termination: bootstrap/teardown may
+            # still be executing. Only reap a worker known to have entered and
+            # finished our target, once Thread confirms termination. This is a
+            # nonblocking observation; ambiguous startup is never reaped.
+            if self.worker_finished and self.worker is not None and not self.worker.is_alive():
+                self.worker = None
+                self.running = False
             if len(self.pending) >= self.capacity:
                 self.dropped += 1
-                return "full"
-            self.pending.append(copy.deepcopy(record))
+                outcome = "full"
+            else:
+                self.pending.append(copy.deepcopy(record))
+                self.accepted += 1
+                outcome = "queued"
+            if not self.pending:
+                return outcome
             if not self.running:
+                self.worker_finished = False
                 worker = threading.Thread(target=self._run, name="mio-audit-sink", daemon=True)
                 self.worker = worker
                 self.running = True  # Reserved even if startup cannot be observed.
@@ -430,12 +444,10 @@ class _AuditDelivery:
                     # bootstrap will not run later. Retain the sole reservation
                     # and bounded queue until this exact worker enters _run.
                     self.start_failures += 1
-                    self.accepted += 1
                     if not isinstance(exc, Exception):
                         raise
-                    return "startup_uncertain"
-            self.accepted += 1
-            return "startup_uncertain" if self.startup_uncertain and self.start_failures else "queued"
+                    return "full" if outcome == "full" else "startup_uncertain"
+            return "startup_uncertain" if outcome != "full" and self.startup_uncertain and self.start_failures else outcome
 
     def _run(self) -> None:
         with self.lock:
@@ -444,9 +456,8 @@ class _AuditDelivery:
         while True:
             with self.lock:
                 if not self.pending:
-                    self.running = False
                     self.worker_running = False
-                    self.worker = None
+                    self.worker_finished = True
                     return
                 record = self.pending.popleft()
             try:
