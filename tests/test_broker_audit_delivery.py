@@ -131,3 +131,43 @@ def test_audit_start_interrupt_cleans_admission_and_allows_retry(monkeypatch):
     assert 'audit_sink_queued' in broker.submit(request(2)).limitations
     wait_until(lambda: broker.audit_delivery_stats()['delivered'] == 1)
     assert broker.audit_delivery_stats()['accepted'] == 1
+
+
+def test_audit_start_then_interrupt_retains_single_worker_and_admission(monkeypatch):
+    import pytest
+
+    original_start = threading.Thread.start
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def sink(_):
+        calls.append(threading.get_ident())
+        entered.set()
+        release.wait(2)
+
+    def start_then_interrupt(worker):
+        original_start(worker)
+        raise KeyboardInterrupt()
+
+    broker = CapabilityBroker(audit_sink=sink, audit_capacity=2)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(threading.Thread, 'start', start_then_interrupt)
+            with pytest.raises(KeyboardInterrupt):
+                broker.submit(request())
+        assert entered.wait(1)
+        assert 'audit_sink_queued' in broker.submit(request(2)).limitations
+        assert 'audit_sink_queued' in broker.submit(request(3)).limitations
+        assert 'audit_sink_full' in broker.submit(request(4)).limitations
+        stats = broker.audit_delivery_stats()
+        assert stats['worker_running'] == 1
+        assert stats['pending'] == 2
+        assert stats['accepted'] == 3
+        assert stats['dropped'] == 1
+        assert len(calls) == 1
+    finally:
+        release.set()
+    wait_until(lambda: broker.audit_delivery_stats()['worker_running'] == 0)
+    assert broker.audit_delivery_stats()['delivered'] == 3
+    assert len(set(calls)) == 1

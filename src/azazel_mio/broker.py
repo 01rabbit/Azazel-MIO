@@ -403,6 +403,8 @@ class _AuditDelivery:
         self.lock = threading.Lock()
         self.pending: deque[dict[str, Any]] = deque()
         self.running = False
+        self.worker: threading.Thread | None = None
+        self.generation = 0
         self.accepted = self.delivered = self.failed = self.dropped = 0
 
     def enqueue(self, record: dict[str, Any]) -> str:
@@ -415,23 +417,42 @@ class _AuditDelivery:
             self.pending.append(copy.deepcopy(record))
             if not self.running:
                 self.running = True
+                self.generation += 1
+                generation = self.generation
+                worker = threading.Thread(target=self._run, args=(generation,),
+                                          name="mio-audit-sink", daemon=True)
+                self.worker = worker
                 try:
-                    threading.Thread(target=self._run, name="mio-audit-sink", daemon=True).start()
+                    worker.start()
                 except BaseException as exc:
-                    self.running = False
-                    self.pending.pop()
-                    self.dropped += 1
+                    # start() can raise after starting the thread. While holding
+                    # this lock that worker cannot yet consume the queue. Keep
+                    # its ownership and admission if startup is observable.
+                    if worker.ident is not None or worker.is_alive():
+                        self.accepted += 1
+                    else:
+                        # Revoke ownership before allowing a replacement: even
+                        # an interrupted bootstrap that becomes visible later
+                        # must exit without calling the sink.
+                        self.generation += 1
+                        self.worker = None
+                        self.running = False
+                        self.pending.pop()
+                        self.dropped += 1
                     if not isinstance(exc, Exception):
                         raise
-                    return "start_failed"
+                    return "queued" if self.running else "start_failed"
             self.accepted += 1
             return "queued"
 
-    def _run(self) -> None:
+    def _run(self, generation: int) -> None:
         while True:
             with self.lock:
+                if generation != self.generation:
+                    return
                 if not self.pending:
                     self.running = False
+                    self.worker = None
                     return
                 record = self.pending.popleft()
             try:
@@ -581,7 +602,7 @@ class CapabilityBroker:
         start_failed. Delivery is best effort and observable via
         audit_delivery_stats(); queued is not a durability acknowledgement.
         Ordinary failures become results; process-control BaseException propagates
-        after audit admission cleanup. Validation, sanitization and scheduling
+        after safe audit admission containment. Validation, sanitization and scheduling
         add bounded-work overhead.
         """
         started = time.monotonic()

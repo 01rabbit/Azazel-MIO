@@ -123,5 +123,7 @@ durable audit persistence must monitor these counters and own persistence.
 
 Ordinary audit worker startup failures return `audit_sink_start_failed`.
 Process-control exceptions such as `KeyboardInterrupt` and `SystemExit` propagate
-from startup after pending queue and worker state are restored and the dropped
-admission is counted.
+from startup after safe containment. If the worker already started, its queued
+admission is retained and counted as accepted; it remains the sole delivery
+worker. Otherwise admission is dropped and counted, and the startup generation
+is revoked so a delayed bootstrap cannot consume records after a retry.
