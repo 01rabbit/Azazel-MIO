@@ -39,8 +39,11 @@ class GroundingValidator:
 
     def validate_raw(self, payload: Mapping[str, Any]) -> GroundingResult:
         errors: list[str] = []
+        # The downstream parser reads model responses as dictionaries. Reject custom
+        # mappings before touching their hooks so validation and parsing see one shape.
+        if type(payload) is not dict:
+            return GroundingResult(False, ("raw_payload_unsupported_container",))
         # Use iterator frames instead of recursion or materializing container items.
-        # Injected Mapping implementations may be cyclic or arbitrarily broad.
         stack: list[tuple[str, Any, str, int, frozenset[int]]] = [
             ("visit", payload, "", 0, frozenset())
         ]
@@ -79,11 +82,11 @@ class GroundingValidator:
                 errors.append("raw_payload_too_many_nodes")
                 break
             if isinstance(value, str):
-                visited_text_chars += len(value)
+                visited_text_chars += str.__len__(value)
                 if visited_text_chars > _MAX_RAW_TEXT_CHARS:
                     errors.append("raw_payload_too_large")
                     break
-            if isinstance(value, (Mapping, list, tuple)):
+            if type(value) in (dict, list, tuple):
                 if depth >= _MAX_RAW_DEPTH:
                     errors.append("raw_payload_too_deep")
                     break
@@ -93,19 +96,28 @@ class GroundingValidator:
                     break
                 nested_ancestors = ancestors | {identity}
                 try:
-                    iterator = iter(value.items()) if isinstance(value, Mapping) else iter(enumerate(value))
+                    if type(value) is dict:
+                        iterator = iter(dict.items(value))
+                    elif type(value) is list:
+                        iterator = iter(enumerate(list.__iter__(value)))
+                    else:
+                        iterator = iter(enumerate(tuple.__iter__(value)))
                 except Exception:
                     errors.append("raw_payload_unreadable")
                     break
                 stack.append(("iterate", iterator, path, depth, nested_ancestors))
+            elif isinstance(value, (Mapping, list, tuple)):
+                errors.append("raw_payload_unsupported_container")
+                break
 
         if errors and any(error.startswith("raw_payload_") for error in errors):
             return GroundingResult(False, tuple(errors))
         for ref in raw_refs:
-            shown = safe_model_id(ref, "evidence_ref")
+            normalized_ref = str.__str__(ref) if isinstance(ref, str) else None
+            shown = safe_model_id(normalized_ref, "evidence_ref")
             if shown == INVALID_MODEL_ID:
                 errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
-            elif str(ref) not in self._allowed_refs:
+            elif normalized_ref not in self._allowed_refs:
                 errors.append(f"unknown_evidence_ref:{shown}")
         return GroundingResult(not errors, tuple(errors))
 

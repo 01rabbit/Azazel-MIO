@@ -579,7 +579,7 @@ def test_unbounded_raw_model_payload_is_rejected_without_leaking_model_output(ho
     assert secret not in public
 
 
-def test_grounding_refs_are_checked_only_from_bounded_traversal_and_string_subclass_keys_are_seen():
+def test_grounding_rejects_container_subclasses_and_detects_string_subclass_keys():
     from azazel_mio.grounding import GroundingValidator
 
     class SinglePassRefs(list):
@@ -601,12 +601,68 @@ def test_grounding_refs_are_checked_only_from_bounded_traversal_and_string_subcl
     refs = SinglePassRefs(['ev:ssh:1'])
     validator = GroundingValidator(frame())
     result = validator.validate_raw({'evidence_refs': refs})
-    assert result.ok
-    assert refs.iterations == 1
+    assert not result.ok
+    assert result.errors == ('raw_payload_unsupported_container',)
+    assert refs.iterations == 0
+    assert validator.validate_raw({'evidence_refs': ['ev:ssh:1']}).ok
 
     key_result = validator.validate_raw({ModelKey('execute'): 'ignored'})
     assert not key_result.ok
     assert 'forbidden_directive_key:execute' in key_result.errors
+
+
+def test_grounding_rejects_custom_mappings_without_calling_hooks_and_falls_back():
+    from collections.abc import Mapping
+    from azazel_mio.grounding import GroundingValidator
+
+    class HookedMapping(Mapping):
+        calls = []
+
+        def __getitem__(self, key):
+            self.calls.append('__getitem__')
+            raise AssertionError('mapping hook must not run')
+
+        def __iter__(self):
+            self.calls.append('__iter__')
+            raise AssertionError('mapping hook must not run')
+
+        def __len__(self):
+            self.calls.append('__len__')
+            raise AssertionError('mapping hook must not run')
+
+        def items(self):
+            self.calls.append('items')
+            raise AssertionError('mapping hook must not run')
+
+        def get(self, key, default=None):
+            self.calls.append('get')
+            raise AssertionError('mapping hook must not run')
+
+    hostile = HookedMapping()
+    validator = GroundingValidator(frame())
+    direct = validator.validate_raw(hostile)
+    nested = validator.validate_raw({'injected': hostile})
+    assert not direct.ok and not nested.ok
+    assert direct.errors == nested.errors == ('raw_payload_unsupported_container',)
+    assert hostile.calls == []
+
+    calls = []
+    def model(task, prompt):
+        calls.append(task)
+        if task == 'generate_hypotheses':
+            return {'hypotheses': [], 'injected': hostile}
+        raise AssertionError('unsupported container must stop model tasks')
+
+    from azazel_mio.broker import CapabilityBroker
+    from azazel_mio.playbook import select_playbook
+    from azazel_mio.reasoning import BoundedReasoningLoop
+    selection = select_playbook(frame(), requested_id='auth-ambiguity-v1')
+    outcome = BoundedReasoningLoop(model=model, broker=CapabilityBroker()).run(
+        frame=frame(), playbook=selection.playbook, cycle_id='cycle-custom-map', selection=selection)
+    assert calls == ['generate_hypotheses']
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert outcome.handoff.to_dict()['model_contribution'] == 'none'
+    assert hostile.calls == []
 
 
 def test_late_validation_rejection_suppresses_prior_model_output_everywhere():
