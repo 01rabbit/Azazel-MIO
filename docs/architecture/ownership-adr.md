@@ -1,50 +1,48 @@
 # ADR: Ownership boundaries for M.I.O.
 
-**Status:** Proposed; documents intended ownership, not completed product migration.
-
+**Status:** Proposed; owner agreement and product migration are not established.
 **Decision date:** 2026-10-31
 
-**Evidence note (2026-11-01):** At the historical base commit `77cbaeeb5189c87fe32179cedb18e9f0557c71c0`, this remained a proposed ownership boundary. Current cross-repo candidate pins and review evidence are tracked in the task work ledger. This evidence does not establish owner agreement, release, or production adoption.
+**Evidence update (2026-11-01):** Current Edge and Nexus working candidates now contain the routes summarized in [the AI inventory](ai-inventory.md). This updates candidate evidence only. It does not establish main/release adoption, product-owner agreement, HIL, or production operation.
 
 ## Context and decision
 
-Azazel products need shared, evidence-aware assistance without giving a model authority over enforcement or making product lifecycle assumptions part of a common reasoning library. M.I.O. owns product-neutral interpretation of accepted observations: bounded reasoning, hypothesis and unknown representation, evidence-linked explanations, safe read-only information requests, handoff content, and behavioral evaluation. M.I.O. does not own input authentication, product permissions, network transport, persistence, model deployment, or actuation.
+Azazel products need shared, evidence-aware assistance without giving a model authority over enforcement or embedding product lifecycle assumptions in a common reasoning library. M.I.O. owns product-neutral cognition and explanation: bounded interpretation of accepted observations, hypothesis and unknown representation, evidence-linked explanation, read-only information requests, handoff content, model abstraction, and behavioral evaluation. M.I.O. does not own product authorization, process supervision, persistence, transport, model deployment, or actuation.
 
 | Component | Owns | Explicitly does not own |
 | --- | --- | --- |
-| **Azazel-MIO** | Shared reasoning semantics, bounded context composition, model-independent behavior, model adapter interface, explanation/handoff shape, replay/evaluation semantics | Product authorization, collection, process supervision, durable audit sinks, enforcement, shared wire protocol |
-| **Azazel-Edge** | Local telemetry and observation, deterministic risk/control decisions, communication policy, enforcement, expiry and rollback; observability of actual applied result | Shared cognitive semantics and model authority |
-| **Azazel-Nexus** | Product lifecycle, admission and consent, resource budgets, model/runtime selection and process launch/health, service integration, operator UI | Independent enforcement of Edge controls; common reasoning semantics |
-| **Azazel-Knowledge** | Curated knowledge lifecycle: ingestion, provenance/trust assessment, validation, storage, search and delivery | M.I.O. conclusions or product authorization |
-| **Azazel-Fabric** | Cross-product wire types and compatibility/version policy | Internal M.I.O. Python API and reasoning policy |
-| **Azazel-Deception** | Isolation and lifecycle of approved deception runtimes, exposure controls, and collection of their observations | M.I.O. decisions to launch, expose, or manage a runtime |
+| **Azazel-MIO** | Shared cognition and explanation semantics, bounded context composition, model-independent behavior, model adapter interface, handoff shape, evaluation semantics | Product authorization, observation collection, process supervision, durable product audit sinks, enforcement, shared wire protocol |
+| **Azazel-Edge** | Observation, deterministic judgment, enforcement, expiry and rollback; record of actual applied result | Common cognition authority or model-driven controls |
+| **Azazel-Nexus** | Product admission, runtime/model selection and supervision, resource measurement, service integration and operator entry | Replacing Edge judgment or common cognition semantics |
+| **Azazel-Knowledge** | Sourced facts/context, ingestion, provenance/trust assessment, validation, storage, search and delivery | M.I.O. conclusions or product authorization |
+| **Azazel-Fabric** | Cross-product wire schemas and compatibility/version policy | Internal M.I.O. Python API or reasoning policy |
+| **Azazel-Deception** | Approved decoy execution, isolation, exposure control and observation collection | M.I.O. decisions to launch or expose a runtime |
 
-Edge remains the deterministic enforcement authority. M.I.O. may propose a check or explain an Edge decision; only Edge's authorized deterministic path decides and applies a control. Nexus owns the product agent process, admission and resource supervision. A returned explanation or Knowledge item is data, never an authorization. Deception operations require their own approved product control path; an AI hypothesis cannot cause launch or exposure.
+Edge remains the deterministic decision and enforcement authority. M.I.O. may explain an Edge result or suggest a check; only Edge's authorized deterministic path decides and applies controls. Nexus owns host lifecycle and operator entry. Knowledge content and model output are data, not authority. Deception actions require their approved product control path; an AI hypothesis cannot launch or expose a decoy.
 
-## Migration and compatibility
+## Candidate routes and migration boundaries
 
-The MIO candidate's `docs/migration.md` records extraction of public Edge core at Edge commit `47c880b2503d7f771bbdacba9b6205dafe03c4c7`; this is a source-history statement, not evidence that Edge production has switched to M.I.O. Edge may retain deprecated import aliases during a staged migration. The Python owner metadata may change while the v2 frame wire field set and canonical bytes remain stable; verify this with existing golden/replay fixtures before release. Fabric, not M.I.O., owns any cross-product wire versioning.
+| Area | Current candidate evidence | Compatibility and limit |
+| --- | --- | --- |
+| Edge shared assistance | Edge candidate asynchronously routes a bounded event through `py/azazel_edge_ai/mio_live_auxiliary.py` to `AssistantCore`; the optional model lane is separate in `py/azazel_edge_ai/agent.py`. One local-only `qwen3.5:0.8b` smoke passed for one event. | Keep Edge deterministic judgment/enforcement in control. This does not prove HIL, production operation, or an Edge main/release switch. Retain compatibility imports during any staged source migration and verify frame/replay behavior before release. |
+| Nexus runtime path | The local Nexus candidate source contains entryd → locald → MIO `AssistantCore` fast assistance in `runtime/src/azazel_nexus_runtime/mio_entryd.py`, `mio_locald.py`, and `mio_fast_assistance.py`. An isolated ARM64/Python 3.12 verification passed 264 shared-wheel tests and one degraded no-wheel real-process test; a post-commit repeat passed the same checks. Independent audit of the candidate tree and logs completed with no discrepancies; there is no public PR head yet. | This verifies the local consumer path with a re-signed test Knowledge fixture, not a live Knowledge producer or full-node interoperability. It is not CI, HIL, mainline, release, or production evidence. Nexus retains admission, launch, runtime health, resource controls and operator presentation. This is not live Edge producer-to-API proof; Nexus main/release adoption is unverified. |
+| Knowledge and shared contracts | Nexus candidate provides an authenticated local Knowledge Lite socket/client in `runtime/src/azazel_nexus_runtime/knowledge_lited.py` and `knowledge_client.py`; MIO accepts caller-projected typed Knowledge context. Separately, `mio_referenced.py` serves deterministic, model-free references from verified Mission Pack playbooks, with no Knowledge or MIO model path. | The test bundle is a fixture, not a live Knowledge producer. Approved Knowledge REST authentication/configuration is absent; downstream revocation behavior for MIO-consumed references is unknown. The Mission Pack playbook reference is not a Knowledge deep-reference route. Fabric owns cross-product schemas. REST-to-Fabric mapping/version policy remains undecided. |
 
-| Existing/source area | Intended target | Compatibility/migration treatment | Evidence state |
-| --- | --- | --- | --- |
-| Edge `py/azazel_edge/mio/` shared broker, frame/contracts, scoring, grounding, handoff, lifecycle, playbooks, reasoning, redaction, replay, trace, claim audit | M.I.O. core; Edge adapter retains observation and deterministic enforcement | Keep old Edge imports as aliases while callers migrate; preserve frame v2 bytes, fixture/golden behavior and trace semantics | Extracted in MIO candidate history; product adoption and production rollout unverified |
-| Edge model transport/governance and deployment/resource measurement | Edge/Nexus product adapter according to deployment site; stable narrow MIO model-call interface underneath | Product keeps consent, endpoint allow-list, classification/minimization, timeout and budget controls; adapter maps approved structured response/errors | Proposed boundary. Process evidence used older Edge `3cad7e7...` plus MIO `f7f8a1e...` and covered transport only with model-disabled fallback; current Edge Qwen 0.8B attempt failed. No model success or production enablement established. |
-| Edge OS trace persistence/export and local execution outcome | Edge | MIO returns explanation/trace data only; Edge persists accepted inputs, decisions, applied results, expiry and rollback using its existing audit boundary | Target only; no completed migration claim |
-| Nexus startup/admission/runtime/resource and operator presentation | Nexus | Nexus adapter constructs bounded MIO frame, applies generation/cancellation tickets, supervises the agent process and projects result into UI | Nexus route candidate `64f522d...` has 45 exact installed-wheel tests passing; dependency lock/pin and product-process proof remain absent. Nexus retains lifecycle/UI ownership; release adoption is unverified. |
-| Knowledge service | Knowledge; MIO consumes adapter-projected contexts | Authenticate origin, authorize, validate signature/schema/revocation/privacy and generations before creating context; preserve explicit unverified reports | Workspace candidate `b260ac7...`; MIO API accepts typed context values. Live production route and verified learning corpus remain unverified. |
-| Shared product wire payloads | Fabric | Translate Fabric wire data at product adapters; do not freeze MIO internal Python structs as cross-product API | Workspace candidate `76169d1...`; ownership boundary is proposed and mapping/version compatibility has not been agreed or verified in a release. |
+Keep the MIO internal Python API (`docs/api-v1.md`) separate from Fabric wire contracts. Product adapters translate at the boundary. Preserve established frame v2 bytes and replay behavior when changing Python ownership metadata; verify compatibility against fixtures/golden records before release. Source extraction and compatibility aliases indicate migration work, not a completed Edge switch.
 
-The `docs/api-v1.md` describes an internal Python API (`AssistantCore.explain`) and typed Knowledge projections; it is not a Fabric wire contract, deployment guarantee, or claim of product integration. `docs/migration.md` describes extraction lineage and import/schema-owner compatibility. Read them together: extraction establishes a candidate common-code source and intended ownership, while product adoption, persistence integration, and runtime deployment remain separate work.
+## Historical evidence superseded by the current candidate cut
+
+An earlier 2026-11-01 review recorded Edge MIO as shadow/replay work, described a failed Qwen 0.8B attempt, and cited an older Nexus route/test status. Those were historical results for that earlier candidate state. The current Edge candidate has the single-event local smoke recorded above; the local Nexus candidate's isolated ARM64/Python 3.12 verification passed 264 shared-wheel tests and one degraded no-wheel real-process test using a re-signed Knowledge fixture, and a post-commit repeat passed the same checks. Independent audit of the candidate tree and logs completed with no discrepancies. The candidate has no public PR head. This newer evidence supersedes earlier status only at local candidate scope. It does not establish live Knowledge producer/full-node interoperability, CI, mainline or release adoption, HIL, or production operation.
 
 ## Safety and rollout constraints
 
-- Observation facts, Knowledge reports, model hypotheses, Edge decisions and applied outcomes remain separately labeled and linked to provenance.
-- Model and Knowledge loss, rejection, staleness, cancellation or timeout must degrade to explicit unknowns/static guidance; never block Edge's deterministic control path.
-- Product adapters provide trusted time, opaque IDs, authentication, authorization, cancellation/supersession, egress policy and persistence. Model output cannot choose trusted playbooks or identifiers.
-- MIO requests stay bounded and read-only. No control, permission change, deception launch/exposure, or arbitrary command is exposed as an MIO operation.
+- Keep observed facts, Knowledge reports, model hypotheses, Edge decisions and applied outcomes separately labeled and linked to provenance.
+- Missing, rejected, stale, cancelled or timed-out model/Knowledge inputs must degrade to explicit unknowns or static guidance; they must not block Edge's deterministic path.
+- Product adapters provide trusted time, identifiers, authentication, authorization, cancellation/supersession, egress policy and persistence. Model output cannot choose trusted playbooks or identifiers.
+- MIO requests remain bounded and read-only. No control, permission change, deception launch/exposure, or arbitrary command is an MIO operation.
 - External model egress requires product consent, data classification/minimization, destination approval and a budget. No default remote egress is implied.
-- Verify unit/replay behavior, service integration, VM and hardware separately; a candidate fixture or lab run is not production proof.
+- Treat unit/replay, process integration, VM, HIL and production evidence as distinct claims.
 
 ## Review required
 
-Product owners should confirm the exact Edge and Nexus adapter seams, Fabric mapping/version policy, Knowledge trust-generation contract, and Deception approved-control flow before treating this ADR as accepted. This ADR does not assert those integrations are complete.
+Product owners must confirm the Edge and Nexus adapter seams, Knowledge trust/generation and revocation contract, REST-to-Fabric mapping/version policy, and Deception approved-control flow before this ADR is accepted. Tracking references: MIO #1, #2, #12, #14; Edge #524; Nexus #395; Knowledge #111; Fabric #72. This ADR remains proposed and does not assert completed integration.
