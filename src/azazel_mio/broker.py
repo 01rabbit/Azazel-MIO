@@ -394,6 +394,61 @@ class _SharedLimits:
         self.in_flight_per_capability: dict[str, int] = {}
 
 
+class _AuditDelivery:
+    """One lazy daemon worker and bounded pending records, shared across cycles."""
+
+    def __init__(self, sink: Callable[[Mapping[str, Any]], None] | None, capacity: int):
+        self.sink = sink
+        self.capacity = capacity
+        self.lock = threading.Lock()
+        self.pending: deque[dict[str, Any]] = deque()
+        self.running = False
+        self.accepted = self.delivered = self.failed = self.dropped = 0
+
+    def enqueue(self, record: dict[str, Any]) -> str:
+        if self.sink is None:
+            return "disabled"
+        with self.lock:
+            if len(self.pending) >= self.capacity:
+                self.dropped += 1
+                return "full"
+            self.pending.append(copy.deepcopy(record))
+            if not self.running:
+                self.running = True
+                try:
+                    threading.Thread(target=self._run, name="mio-audit-sink", daemon=True).start()
+                except Exception:
+                    self.running = False
+                    self.pending.pop()
+                    self.dropped += 1
+                    return "start_failed"
+            self.accepted += 1
+            return "queued"
+
+    def _run(self) -> None:
+        while True:
+            with self.lock:
+                if not self.pending:
+                    self.running = False
+                    return
+                record = self.pending.popleft()
+            try:
+                assert self.sink is not None
+                self.sink(record)
+            except BaseException:
+                with self.lock:
+                    self.failed += 1
+            else:
+                with self.lock:
+                    self.delivered += 1
+
+    def stats(self) -> dict[str, int]:
+        with self.lock:
+            return dict(capacity=self.capacity, pending=len(self.pending),
+                        worker_running=int(self.running), accepted=self.accepted,
+                        delivered=self.delivered, failed=self.failed, dropped=self.dropped)
+
+
 class CapabilityBroker:
     """Typed, allowlisted, read-only capability surface for M.I.O.
 
@@ -427,7 +482,8 @@ class CapabilityBroker:
         # One lock for this broker's per-cycle state and the shared limits.
         self._lock = self._shared.lock
         self._audit: deque[dict[str, Any]] = deque(maxlen=max(1, min(int(audit_capacity), 4096)))
-        self._audit_sink = audit_sink
+        self._audit_delivery = _AuditDelivery(audit_sink, self._audit.maxlen or 1)
+        self._audit_evicted = 0
         # Cycle end: set by close(); wakes every waiting submit at once.
         self._closed = False
         self._waiters: set[threading.Event] = set()
@@ -472,8 +528,9 @@ class CapabilityBroker:
             max_quarantined=self._shared.max_quarantined,
             clock=self._clock,
             audit_capacity=self._audit.maxlen or 1,
-            audit_sink=self._audit_sink,
+            audit_sink=None,
         )
+        new._audit_delivery = self._audit_delivery
         new._shared = self._shared
         new._lock = self._shared.lock
         with self._lock:
@@ -486,6 +543,17 @@ class CapabilityBroker:
     def audit_records(self) -> tuple[dict[str, Any], ...]:
         with self._lock:
             return tuple(copy.deepcopy(item) for item in self._audit)
+
+    def audit_delivery_stats(self) -> dict[str, int]:
+        """Delivery counters shared across cycles; local eviction count is per cycle.
+
+        queued means accepted, not durable delivery. Failed/dropped records are
+        not retried. A hung sink occupies the sole worker; pending stays bounded.
+        """
+        stats = self._audit_delivery.stats()
+        with self._lock:
+            stats["local_evicted"] = self._audit_evicted
+        return stats
 
     def quarantine_limit(self) -> int:
         """Upper bound on quarantined workers (and on running + quarantined)."""
@@ -505,7 +573,13 @@ class CapabilityBroker:
         return result
 
     def submit(self, request: MioCapabilityRequest) -> MioCapabilityResult:
-        """Never raises and never blocks beyond the capability timeout."""
+        """Bound handler waiting by its timeout; never wait for the audit sink.
+
+        With an injected sink, limitations includes audit_sink_queued, full, or
+        start_failed. Delivery is best effort and observable via
+        audit_delivery_stats(); queued is not a durability acknowledgement.
+        Validation, sanitization and scheduling add bounded-work overhead.
+        """
         started = time.monotonic()
         params_audit: dict[str, Any] = {}
         try:
@@ -514,7 +588,7 @@ class CapabilityBroker:
             result = self._result(request, CapabilityStatus.ERROR, f"broker_internal_error:{type(exc).__name__}")
         result = replace(result, latency_ms=int((time.monotonic() - started) * 1000))
         try:
-            self._record_audit(request, result, params_audit)
+            delivery = self._record_audit(request, result, params_audit)
         except Exception:
             try:
                 fallback: dict[str, Any] = dict.fromkeys(AUDIT_RECORD_FIELDS)
@@ -522,9 +596,11 @@ class CapabilityBroker:
                     schema="mio_capability_audit/v1", decision="refused" if result.status in REFUSAL_STATUSES else "allowed",
                     status=result.status, reason="audit_error", params={}, purpose_hypothesis_ids=[], evidence_refs=[],
                 )
-                self._append_audit(fallback)
+                delivery = self._append_audit(fallback)
             except Exception:
-                pass
+                delivery = "record_failed"
+        if delivery != "disabled":
+            result = replace(result, limitations=(*result.limitations, f"audit_sink_{delivery}"))
         return result
 
     # -- internals ------------------------------------------------------------
@@ -797,16 +873,14 @@ class CapabilityBroker:
             return self._result(request, CapabilityStatus.STALE, reason, **common)
         return self._result(request, CapabilityStatus.OK, "", data=data, evidence_refs=tuple(clean_refs), **common)
 
-    def _append_audit(self, record: dict[str, Any]) -> None:
+    def _append_audit(self, record: dict[str, Any]) -> str:
         with self._lock:
+            if len(self._audit) == self._audit.maxlen:
+                self._audit_evicted += 1
             self._audit.append(record)
-        if self._audit_sink is not None:
-            try:
-                self._audit_sink(copy.deepcopy(record))
-            except Exception:
-                pass  # audit sink failure must not affect Edge or the loop
+        return self._audit_delivery.enqueue(record)
 
-    def _record_audit(self, request: Any, result: MioCapabilityResult, params_audit: Mapping[str, Any]) -> None:
+    def _record_audit(self, request: Any, result: MioCapabilityResult, params_audit: Mapping[str, Any]) -> str:
         capability = _attr(request, "capability")
         allowlisted = type(capability) is str and capability in self._capabilities
         purpose = _attr(request, "purpose_hypothesis_ids", ())
@@ -833,4 +907,4 @@ class CapabilityBroker:
             record["purpose_hypothesis_ids"] = record["purpose_hypothesis_ids"][:2]
             record["params"] = {"omitted": True}
             record["audit_truncated"] = True
-        self._append_audit(record)
+        return self._append_audit(record)
