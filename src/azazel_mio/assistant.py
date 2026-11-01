@@ -14,6 +14,7 @@ from .playbook import DEFAULT_PLAYBOOKS, PromptCompiler, select_playbook
 from .contracts import model_id_ok
 from .handoff import build_no_model_handoff
 from .reasoning import BoundedReasoningLoop
+from .lifecycle import ReasoningCoordinator
 from .tactical_grounding import (
     AUTH_PLAYBOOK_ID,
     authentication_frame_unknowns,
@@ -324,8 +325,9 @@ class AssistantCore:
     consent changes. `now` belongs to their clock, not to the model or a peer.
     """
 
-    def __init__(self, model=None):
+    def __init__(self, model=None, *, coordinator: ReasoningCoordinator | None = None):
         self.model = model
+        self.coordinator = coordinator
 
     def explain(self, frame: MioSituationFrame, *, knowledge=(), references=(),
                 reported_knowledge=(), now: str,
@@ -398,10 +400,47 @@ class AssistantCore:
         broker = CapabilityBroker()
         try:
             prompt_material = contexts + static_references + reported_contexts + lite_advisories
-            outcome = BoundedReasoningLoop(model=self.model, broker=broker, compiler=_KnowledgeCompiler(prompt_material)).run(
-                frame=frame, playbook=selection.playbook,
-                cycle_id="cycle-1", selection=selection,
-                cancel_check=cancel_check, stale_check=stale_check)
+            loop = BoundedReasoningLoop(model=self.model, broker=broker, compiler=_KnowledgeCompiler(prompt_material))
+            coordinator = self.coordinator
+            ticket = None
+            cycle_disposition = None
+            if coordinator is not None:
+                try:
+                    ticket = coordinator.begin(frame)
+                except RuntimeError as exc:
+                    if str(exc) != "reasoning_coordinator_backpressure":
+                        raise
+                    cycle_disposition = "backpressure"
+                if ticket is not None and ticket.deduplicated:
+                    # This call is already represented by an in-flight request.
+                    ticket = None
+                    cycle_disposition = "in_flight_duplicate"
+                elif ticket is not None:
+                    original_cancel, original_stale = cancel_check, stale_check
+                    def combined_cancel():
+                        return (coordinator.cancel_check(ticket)() or
+                                (original_cancel() if original_cancel is not None else False))
+                    def combined_stale():
+                        return (coordinator.stale_check(ticket)() or
+                                (original_stale() if original_stale is not None else False))
+                    cancel_check, stale_check = combined_cancel, combined_stale
+            if coordinator is not None and ticket is None:
+                # Backpressure or an identical in-flight request: answer with
+                # the deterministic no-model path, without publishing model content.
+                loop = BoundedReasoningLoop(model=None, broker=broker, compiler=_KnowledgeCompiler(prompt_material))
+            try:
+                outcome = loop.run(frame=frame, playbook=selection.playbook,
+                                   cycle_id=ticket.cycle_id if ticket is not None else "cycle-1",
+                                   selection=selection, cancel_check=cancel_check, stale_check=stale_check)
+                if coordinator is not None and ticket is not None:
+                    if outcome.state in {ReasoningState.OPERATOR_CANCELLED, ReasoningState.STALE_SUPERSEDED}:
+                        coordinator.cancel_ticket(ticket, reason=outcome.state.value)
+                    completion = coordinator.complete(ticket, outcome)
+                    cycle_disposition = "current" if completion.accepted else completion.reason
+            except BaseException:
+                if coordinator is not None and ticket is not None:
+                    coordinator.cancel_ticket(ticket, reason="cycle_failed")
+                raise
         finally:
             broker.close()
         auth_context = is_authentication_context(frame, selection.playbook)
@@ -508,7 +547,7 @@ class AssistantCore:
         if lite_advisories:
             check = "Recheck the cited Knowledge Lite claim and its revocation status against an authorized current source before relying on it."
             checks = list(dict.fromkeys([check] + checks))[:4]
-        return Assistance({
+        payload = {
             "schema_version": "mio.assistance.v1", "trace_id": frame.trace_id,
             "frame_id": frame.frame_id,
             "generation_method": "model" if self.model is not None and outcome.hypotheses and outcome.state is not ReasoningState.VALIDATION_REJECTED else "static_reference",
@@ -524,4 +563,17 @@ class AssistantCore:
             "handoff": handoff,
             "reasoning_trace": ([] if outcome.state is ReasoningState.VALIDATION_REJECTED
                                 else _public_reasoning_trace(outcome.trace)),
-        })
+        }
+        if coordinator is not None:
+            payload["cycle_disposition"] = cycle_disposition or "unknown"
+            if cycle_disposition != "current":
+                # The frame and dependency material belong to a rejected or
+                # unstarted request. Do not expose them as a current answer.
+                payload.update({
+                    "generation_method": "static_reference", "observations": [],
+                    "hypotheses": [], "unknowns": [], "next_checks": [],
+                    "knowledge": [], "handoff": None, "reasoning_trace": [],
+                    "dependency_outcome": {"knowledge": ContextDependencyOutcome.UNAVAILABLE.value,
+                                           "deception": ContextDependencyOutcome.UNAVAILABLE.value},
+                })
+        return Assistance(payload)

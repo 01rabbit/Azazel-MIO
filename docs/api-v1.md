@@ -3,6 +3,16 @@
 `azazel_mio.assistant.AssistantCore(model=None).explain(frame, *, knowledge=(), now: str, knowledge_attempted: bool = True, cancel_check=None, stale_check=None) -> Assistance`
 
 `frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
+`AssistantCore(model, coordinator=...)` may opt into product-neutral request lifecycle
+coordination. Coordinated responses add `cycle_disposition`: `current` means the
+cycle was accepted by the coordinator; any other value (`backpressure`,
+`in_flight_duplicate`, or a fixed stale/cancel/restart reason) means the result is
+not current. For every non-current disposition, observations, hypotheses,
+unknowns, checks, knowledge, handoff, and reasoning trace are empty, and dependency
+outcomes are `unavailable`. Consumers must not use the frame ID or state in such a
+response as a current assessment. Calls without a coordinator retain the original
+response shape and behavior.
+
 `Assistance.to_dict()` returns schema_version (`mio.assistance.v1`), trace_id,
 frame_id, generation_method (`static_reference` or `model`), state, observations,
 hypotheses, unknowns, next_checks, knowledge, handoff, reasoning_trace.
