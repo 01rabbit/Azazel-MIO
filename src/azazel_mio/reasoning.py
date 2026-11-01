@@ -186,7 +186,7 @@ class BoundedReasoningLoop:
         def enter_model_adapter(task: str) -> None:
             trace.record(state="adapter_entered", kind="model_adapter", payload={"task": task})
 
-        trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id})
+        trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id, "frame_material_digest": "sha256:" + frame.canonical_digest()})
         selection = guard_selection(playbook, selection)  # invalid playbook -> generic, never compiled
         playbook = selection.playbook
         trace.record(state=ReasoningState.FRAME_READY.value, kind="reasoning_provenance", payload=reasoning_provenance(playbook, selection))
@@ -549,6 +549,7 @@ class BoundedReasoningLoop:
             kind="recommendation",
             payload={
                 "advisory_id": recommendation.advisory_id,
+                "recommendation_material_digest": recommendation.canonical_digest(),
                 "recommended_action": recommendation.recommended_action,
                 "evidence_refs": list(recommendation.evidence_refs),
                 "executable": False,
