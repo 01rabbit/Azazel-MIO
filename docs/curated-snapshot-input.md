@@ -45,11 +45,22 @@ expiry, revocation and artifact compatibility gates remain in force.
 
 ## Connection is separate from eligibility
 
-`knowledge_curated_snapshot_connected` is derived from consistent record inputs
-actually passed to evaluation. It cannot be enabled with a boolean or a current
-context alone. Reports retain snapshot/source identity and bounded rejection and
+`knowledge_curated_snapshot_projection_consistent` is derived only from locally
+self-consistent projection inputs supplied to evaluation. It is not evidence that Knowledge produced, authenticated or freshly
+exported those inputs. The report hardcodes
+`knowledge_snapshot_producer_authenticated: false`. The CLI manifest fields and
+unkeyed digests are caller-controlled; no authenticated/current producer receipt
+or current producer generation pin is available. Reports retain snapshot/source identity and bounded rejection and
 frame-quarantine reasons in `snapshot_input_provenance`; the opaque admission JSON
-is not copied into reports. No network/live-service claim follows from this flag.
+is not copied into reports. No producer-authentication, current-generation freshness or network/live-service
+claim follows from this flag. Stale registry rollback remains a separate and
+unresolved concern.
+
+For v1 consumer compatibility, `knowledge_curated_snapshot_connected` remains as
+a deprecated alias of `knowledge_curated_snapshot_projection_consistent`; the
+legacy `curated_snapshot_input_connected_not_training_evidence` limit token is
+also retained. Both names describe only local projection consistency. Neither
+authenticates Knowledge or establishes a live/current producer connection.
 
 The existing Knowledge observation has no current defensive state. Without a
 product-verified `trusted_frames[record_ref]` context, the adapter supplies an

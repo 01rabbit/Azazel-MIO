@@ -21,6 +21,11 @@ from .tactical_grounding import (
 )
 
 
+# Exact legacy fact label retained for callers that summarize a detected
+# honeypot interaction. known_facts may also contain attacker-derived strings.
+_DECEPTION_RELEVANT_FACTS = frozenset({"HONEYPOT_INTERACTION_OBSERVED"})
+
+
 @dataclass(frozen=True)
 class VerifiedKnowledgeContext:
     source: str
@@ -475,8 +480,7 @@ class AssistantCore:
                               " ".join((frame.mission, frame.soc_summary, frame.noc_summary)), re.I))
             # known_facts are bounded but may contain attacker-derived prose,
             # so only accept canonical fixed-label forms here, never sentences.
-            or any(re.fullmatch(r"(?:DECEPTION|DECOY|HONEYPOT|AZ06)(?:_[A-Z0-9]+)+", fact.upper())
-                   for fact in frame.known_facts)
+            or any(fact.upper() in _DECEPTION_RELEVANT_FACTS for fact in frame.known_facts)
         )
         if deception_relevant and deception_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(

@@ -171,13 +171,20 @@ def evaluate(examples, partitions, *, now: str, artifact_expires_at: str,
               "quarantine": quarantine, "deduplicated": duplicates, "partitions": {key: len(samples.get(key, ())) for key in ("train", "validation", "test", "replay_eval")},
               "costs": {"wrong_selection": wrong_cost, "abstention": abstain_cost}, "results": {},
               "decision": "retain_existing_select_playbook", "automatic_promotion": False,
-              "real_world_holdout_verified": False, "knowledge_curated_snapshot_connected": snapshot_audit["connected"],
+              "real_world_holdout_verified": False,
+              "knowledge_curated_snapshot_projection_consistent": snapshot_audit["connected"],
+              # Deprecated v1 compatibility alias: this reflects local projection
+              # consistency only, not a live or authenticated Knowledge connection.
+              "knowledge_curated_snapshot_connected": snapshot_audit["connected"],
+              "knowledge_snapshot_producer_authenticated": False,
               "snapshot_input_provenance": snapshot_audit["snapshots"],
               "curated_training_eligible_examples": len(training_rows),
               "curated_independent_outcome_labels_available": bool(independent_rows),
               "curated_reviewed_label_count": sum(row.reviewer is not None for row in connected_rows),
               "limits": ["evaluation_only", "no_product_admission", "no_real_world_generalization",
-                         "curated_snapshot_input_connected_not_training_evidence" if snapshot_audit["connected"] else "curated_snapshot_input_missing_or_rejected"]}
+                         *( ["curated_snapshot_projection_consistent_not_training_evidence",
+                             "curated_snapshot_input_connected_not_training_evidence"] if snapshot_audit["connected"]
+                            else ["curated_snapshot_input_missing_or_rejected"] )]}
     artifact = None
     if samples.get("train") and samples.get("validation") and samples.get("test"):
         try:
@@ -213,6 +220,41 @@ def main():
     import argparse
     import json
     from pathlib import Path
+    from dataclasses import fields
+    from .snapshot_input import (ConsumedSnapshotInput, SnapshotInputContext,
+        SnapshotRecordBinding, SnapshotSourceBinding)
+
+    def strict_object(value, cls):
+        if type(value) is not dict or set(value) != {field.name for field in fields(cls)}:
+            raise ValueError("invalid_snapshot_input_shape")
+        value = dict(value)
+        if cls is SnapshotSourceBinding:
+            if type(value["lineage"]) is not list: raise ValueError("invalid_snapshot_input_shape")
+            value["lineage"] = tuple(value["lineage"])
+        return cls(**value)
+
+    def load_snapshot_input(value):
+        if type(value) is not dict or set(value) != {field.name for field in fields(ConsumedSnapshotInput)}:
+            raise ValueError("invalid_snapshot_input_shape")
+        data = dict(value)
+        for name in ("source_refs",):
+            if type(data[name]) is not list: raise ValueError("invalid_snapshot_input_shape")
+            data[name] = tuple(data[name])
+        if type(data["source_bindings"]) is not list or type(data["record_bindings"]) is not list:
+            raise ValueError("invalid_snapshot_input_shape")
+        data["source_bindings"] = tuple(strict_object(row, SnapshotSourceBinding) for row in data["source_bindings"])
+        data["record_bindings"] = tuple(strict_object(row, SnapshotRecordBinding) for row in data["record_bindings"])
+        return ConsumedSnapshotInput(**data)
+
+    def load_snapshot_context(value):
+        if type(value) is not dict or set(value) != {field.name for field in fields(SnapshotInputContext)}:
+            raise ValueError("invalid_snapshot_context_shape")
+        data = dict(value)
+        for name in ("revoked_refs", "consumption_bindings"):
+            if type(data[name]) is not list: raise ValueError("invalid_snapshot_context_shape")
+            data[name] = tuple(tuple(row) if name == "consumption_bindings" and type(row) is list else row for row in data[name])
+        return SnapshotInputContext(**data)
+
     parser = argparse.ArgumentParser(description="Offline evaluation only; never activates a model")
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--report", type=Path, required=True)
@@ -220,11 +262,19 @@ def main():
     args = parser.parse_args()
     if args.manifest.stat().st_size > 8 * 1024 * 1024: raise ValueError("manifest_budget")
     manifest = parse_json(args.manifest.read_text())
-    if type(manifest) is not dict or set(manifest) != {"examples", "partitions", "now", "artifact_expires_at", "revoked_snapshots", "costs"}:
+    required = {"examples", "partitions", "now", "artifact_expires_at", "revoked_snapshots", "costs"}
+    optional = {"snapshot_inputs", "snapshot_context"}
+    if type(manifest) is not dict or not required <= set(manifest) or set(manifest) - required - optional:
         raise ValueError("invalid_local_evaluation_manifest")
+    snapshot_inputs = manifest.get("snapshot_inputs", [])
+    if type(snapshot_inputs) is not list: raise ValueError("invalid_snapshot_input_shape")
+    snapshot_inputs = tuple(load_snapshot_input(value) for value in snapshot_inputs)
+    snapshot_context = manifest.get("snapshot_context")
+    if snapshot_context is not None: snapshot_context = load_snapshot_context(snapshot_context)
     report, artifact = evaluate(manifest["examples"], manifest["partitions"], now=manifest["now"],
         artifact_expires_at=manifest["artifact_expires_at"], revoked_snapshots=manifest["revoked_snapshots"],
-        wrong_cost=manifest["costs"]["wrong_selection"], abstain_cost=manifest["costs"]["abstention"])
+        wrong_cost=manifest["costs"]["wrong_selection"], abstain_cost=manifest["costs"]["abstention"],
+        snapshot_inputs=snapshot_inputs, snapshot_context=snapshot_context)
     # Exclusive creation makes artifacts immutable by this command. Registry
     # selection/revocation is a separate explicit operation and never happens here.
     with args.report.open("x") as handle: handle.write(canonical(report) + "\n")

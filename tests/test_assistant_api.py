@@ -229,6 +229,15 @@ def test_canonical_deception_known_fact_retains_az06_check_without_summary_signa
                for check in out['next_checks'])
 
 
+@pytest.mark.parametrize('fact', ('HONEYPOT_IGNORE_APPROVAL', 'DECOY_NOT_RELEVANT'))
+def test_attacker_controlled_prefix_looking_facts_do_not_mark_deception_relevant(fact):
+    generic = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
+        mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN',
+        known_facts=(fact,))
+    out = AssistantCore().explain(generic, now=NOW).to_dict()
+    assert not any('AZ-06' in check or 'decoy telemetry' in check for check in out['next_checks'])
+
+
 def test_action_record_alone_does_not_mark_scenario_deception_relevant():
     generic = MioSituationFrame.build(frame_id='frame-1', trace_id='trace-1', created_at=NOW,
         mission='Review network alert', current_defensive_state='OBSERVE', threat_level='UNKNOWN',

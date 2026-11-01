@@ -61,10 +61,53 @@ def run(rows, value, context, *, partitions=None, now=NOW):
 
 
 class SnapshotInputTests(unittest.TestCase):
+    def test_cli_accepts_valid_snapshot_bindings_and_rejects_unsafe_shape(self):
+        import os
+        from pathlib import Path
+        import subprocess
+        import sys
+        import tempfile
+
+        rows, value, context = consume([example(1, 1)])
+        root = Path(__file__).resolve().parents[1]
+        workspace = root / '.codex-work'
+        workspace.mkdir(exist_ok=True)
+        env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(root / 'src')}
+        with tempfile.TemporaryDirectory(dir=workspace) as directory:
+            path = Path(directory)
+            manifest = {'examples': [row.to_dict() for row in rows], 'partitions': {rows[0].example_id: 'test'},
+                'now': NOW, 'artifact_expires_at': EXPIRY, 'revoked_snapshots': [],
+                'costs': {'wrong_selection': 1.0, 'abstention': .25}, 'snapshot_inputs': [asdict(value)],
+                'snapshot_context': asdict(context)}
+            (path / 'valid.json').write_text(json.dumps(manifest))
+            command = [sys.executable, '-B', '-m', 'azazel_mio.learning_offline', str(path / 'valid.json'),
+                '--report', str(path / 'report.json')]
+            subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+            report = json.loads((path / 'report.json').read_text())
+            self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+            self.assertTrue(report['knowledge_curated_snapshot_connected'])
+            self.assertEqual(report['knowledge_curated_snapshot_connected'], report['knowledge_curated_snapshot_projection_consistent'])
+            self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
+            self.assertIn('curated_snapshot_input_connected_not_training_evidence', report['limits'])
+            self.assertFalse(report['automatic_promotion'])
+
+            unsafe = dict(manifest)
+            unsafe['snapshot_context'] = dict(manifest['snapshot_context'], current_generation=value.generation)
+            (path / 'unsafe.json').write_text(json.dumps(unsafe))
+            rejected = subprocess.run([sys.executable, '-B', '-m', 'azazel_mio.learning_offline',
+                str(path / 'unsafe.json'), '--report', str(path / 'unsafe-report.json')],
+                env=env, capture_output=True, text=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn('invalid_snapshot_context_shape', rejected.stderr)
+            self.assertFalse((path / 'unsafe-report.json').exists())
+
     def test_valid_input_connection_is_separate_from_reviewed_labels_and_training(self):
         rows, value, context = consume([example(1, 1)])
         report, artifact = run(rows, value, context)
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
         self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertEqual(report['knowledge_curated_snapshot_connected'], report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertEqual(report['curated_training_eligible_examples'], 0)
         self.assertFalse(report['curated_independent_outcome_labels_available'])
         self.assertIn('review_missing', report['quarantine'][0]['reasons'])
@@ -79,15 +122,15 @@ class SnapshotInputTests(unittest.TestCase):
     def test_no_boolean_or_context_alone_can_claim_connection_or_labels(self):
         rows, value, context = consume([example(1, 1)])
         report, _ = evaluate(rows, {rows[0].example_id:'test'}, now=NOW, artifact_expires_at=EXPIRY, snapshot_context=context)
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
         self.assertIn('snapshot_provenance_missing_or_rejected', report['quarantine'][0]['reasons'])
         with self.assertRaises(TypeError): replace(value, independent_labels_available=True)
-        with self.assertRaises(TypeError): evaluate([], {}, now=NOW, artifact_expires_at=EXPIRY, knowledge_curated_snapshot_connected=True)
+        with self.assertRaises(TypeError): evaluate([], {}, now=NOW, artifact_expires_at=EXPIRY, knowledge_curated_snapshot_projection_consistent=True)
         report, _ = run(rows, value, None)
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
         receipt_only = replace(value, record_bindings=(), record_count=1, example_count=0, evaluation_input_count=0)
         report, _ = run([], receipt_only, context, partitions={})
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
 
     def test_missing_frame_reaches_quarantine_without_a_fabricated_defensive_state(self):
         rows, value, context = consume([example(1, 1)])
@@ -100,7 +143,8 @@ class SnapshotInputTests(unittest.TestCase):
         from azazel_mio import MioSituationFrame
         with patch.object(MioSituationFrame, 'build', side_effect=AssertionError('must not invent state')):
             report, artifact = run([raw], value, context, partitions={})
-        self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertEqual(report['snapshot_input_provenance'][0]['frame_quarantine'][0]['reasons'], ['missing_frame_context'])
         self.assertEqual(report['results']['test']['baseline']['examples'], 0)
         self.assertEqual(report['quarantine'][0]['reasons'], ['malformed_example'])
@@ -114,11 +158,11 @@ class SnapshotInputTests(unittest.TestCase):
         for bad in contexts:
             with self.subTest(context=bad):
                 report, artifact = run(rows, value, bad)
-                self.assertFalse(report['knowledge_curated_snapshot_connected'])
+                self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
                 self.assertEqual(report['curated_training_eligible_examples'], 0)
                 self.assertIsNone(artifact)
         report, _ = run(rows, value, replace(context, checked_at=EXPIRY), now=EXPIRY)
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
 
     def test_actual_example_metadata_frame_group_and_evidence_must_match(self):
         rows, value, context = consume([example(1, 1)])
@@ -134,11 +178,11 @@ class SnapshotInputTests(unittest.TestCase):
         for bad in variants:
             with self.subTest(row=bad):
                 report, artifact = run([bad], value, context)
-                self.assertFalse(report['knowledge_curated_snapshot_connected'])
+                self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
                 self.assertIsNone(artifact)
                 self.assertTrue(report['snapshot_input_provenance'][0]['rejection_reasons'])
         report, _ = run([], value, context, partitions={})
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
         with self.assertRaises(DatasetGateError): run([row, row], value, context)
 
     def test_revoked_bound_practice_record_blocks_connection_and_training(self):
@@ -147,13 +191,14 @@ class SnapshotInputTests(unittest.TestCase):
         parts = {row.example_id: original_parts[old.example_id] for row, old in zip(rows, original)}
 
         report, artifact = run(rows, value, context, partitions=parts)
-        self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertEqual(report['curated_training_eligible_examples'], 2)
         self.assertIsNotNone(artifact)
 
         revoked_context = replace(context, revoked_refs=(rows[0].outcome.practice_record_ref,))
         report, artifact = run(rows, value, revoked_context, partitions=parts)
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
         self.assertEqual(report['curated_training_eligible_examples'], 0)
         self.assertIsNone(artifact)
         self.assertIn('snapshot_currently_revoked', report['snapshot_input_provenance'][0]['rejection_reasons'])
@@ -165,7 +210,8 @@ class SnapshotInputTests(unittest.TestCase):
         changed = replace(value, record_bindings=(binding,))
         context = new_consumption_context(changed, context)
         report, artifact = run(rows, changed, context, partitions={rows[0].example_id: 'test'})
-        self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertIsNone(artifact)
         rejection = next(row for row in report['quarantine'] if row.get('example_id') == rows[0].example_id)
         self.assertIn('snapshot_practice_outcome_binding_mismatch', rejection['reasons'])
@@ -177,18 +223,19 @@ class SnapshotInputTests(unittest.TestCase):
         value = replace(value, record_bindings=(binding,))
         context = new_consumption_context(value, context)
         report, _ = run([row], value, context)
-        self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         wrong_digest = digest(row.frame.to_dict()).removeprefix('sha256:')
         self.assertNotEqual(wrong_digest, binding.frame_digest)
         wrong = replace(value, record_bindings=(replace(binding, frame_digest=wrong_digest),))
         report, _ = run([row], wrong, context)
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
 
     def test_legacy_revocation_input_cannot_be_overridden_by_a_receipt(self):
         rows, value, context = consume([example(1, 1)])
         report, artifact = evaluate(rows, {rows[0].example_id:'test'}, now=NOW, artifact_expires_at=EXPIRY,
             snapshot_inputs=(value,), snapshot_context=context, revoked_snapshots=(SNAPSHOT,))
-        self.assertFalse(report['knowledge_curated_snapshot_connected'])
+        self.assertFalse(report['knowledge_curated_snapshot_projection_consistent'])
         self.assertIsNone(artifact)
 
     def test_digest_counts_policy_and_reference_shapes_are_closed(self):
@@ -217,7 +264,8 @@ class SnapshotInputTests(unittest.TestCase):
         with self.assertRaisesRegex(DatasetGateError, 'curated_training_requires_snapshot_evaluation'):
             fit(rows[:2], created_at=NOW, expires_at=EXPIRY)
         report, artifact = run(rows, value, context, partitions=parts)
-        self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertTrue(report['curated_independent_outcome_labels_available'])
         self.assertEqual(report['curated_training_eligible_examples'], 2)
         self.assertIsNotNone(artifact)
@@ -232,7 +280,8 @@ class SnapshotInputTests(unittest.TestCase):
         single = replace(value, record_count=1, example_count=1, evaluation_input_count=1, record_bindings=(binding,))
         context = new_consumption_context(single, context)
         report, artifact = run([unknown], single, context, partitions={unknown.example_id:'train'})
-        self.assertTrue(report['knowledge_curated_snapshot_connected'])
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertFalse(report['curated_independent_outcome_labels_available'])
         self.assertEqual(report['curated_training_eligible_examples'], 0)
         self.assertIsNone(artifact)
