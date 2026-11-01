@@ -6,7 +6,15 @@ with `frame=...`, `outcome=...`, then call `append(record, now=adapter_clock)`.
 Every `OperatorDisposition` repeats the exact trace, cycle, advisory, and
 `sha256:`-prefixed canonical frame digest. The reasoning trace records this
 material digest at frame entry, so replacing material under the same frame ID
-fails validation. Legacy traces without the digest are deliberately refused.
+fails validation. A second canonical digest binds every recommendation field
+(summary, rationale, limitations, evidence, action, advisory ID, executable flag)
+to the recommendation trace event. Replacing material under the same advisory ID
+fails validation. Legacy traces without either digest are deliberately refused.
+The constructor also requires strict consecutive event sequence numbers, one
+initial frame event, one penultimate recommendation event, and one final complete
+event, with matching cycle identity, state and projected payloads. These checks
+establish internal consistency; adapter custody of the original trace remains
+necessary because hashes alone do not authenticate a producer.
 
 Records contain a digest reference for the reviewer, a disposition
 (`accepted`, `corrected`, `rejected`, `held`), a timezone-aware review time, and
@@ -21,7 +29,15 @@ reference and observation time. Observation time must follow review time and
 not exceed the adapter's clock. `succeeded` requires a defensive applied state;
 `pending` and `not_applied` forbid one. These are operator-reported facts, not
 proof of execution or causation. A correction or later outcome is a new record
-with a new record reference; prior entries are retained. A log holds at most
+with a new record reference; prior entries are retained. Review timestamps must
+be nondecreasing in append order (equal timestamps are allowed). Outcome times
+must also be nondecreasing for the same action reference. A later result can be
+appended using the original review time or a later review time, provided it does
+not precede the last appended review. An earlier observation arriving late is
+refused rather than inserted into history. If newer reviews have already been
+appended, report a fresh review and fresh observation satisfying these bounds;
+do not rewrite the timestamp of the old observation. Archival late-arrival
+support needs a separate ingestion-time contract. A log holds at most
 256 records and rejects overflow without evicting history. `records()` returns
 an immutable tuple. The adapter owns durable append-only persistence, reviewer
 authentication, source provenance, and selecting the original completed cycle.

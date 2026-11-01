@@ -8,6 +8,7 @@ import re
 from .contracts import DEFENSIVE_STATES, MioSituationFrame, ReasoningState, model_id_ok
 from .id_grammar import id_ok
 from .reasoning import ReasoningOutcome
+from .trace import ReasoningTraceEvent
 
 
 def _time(value: str) -> datetime:
@@ -67,17 +68,39 @@ class OperatorDispositionLog:
         if (type(outcome) is not ReasoningOutcome or outcome.state is not ReasoningState.COMPLETE
                 or outcome.recommendation is None or not outcome.trace):
             raise ValueError("feedback_requires_completed_advisory")
-        first = outcome.trace[0]
+        events = outcome.trace
+        if (type(events) is not tuple or len(events) < 3
+                or any(type(e) is not ReasoningTraceEvent or type(e.seq) is not int
+                       or e.seq != i for i, e in enumerate(events, 1))):
+            raise ValueError("feedback_trace_binding_mismatch")
+        first, recommendation_event, complete = events[0], events[-2], events[-1]
+        recommendation = outcome.recommendation
+        expected_recommendation = {
+            "advisory_id": recommendation.advisory_id,
+            "recommendation_material_digest": recommendation.canonical_digest(),
+            "recommended_action": recommendation.recommended_action,
+            "evidence_refs": list(recommendation.evidence_refs),
+            "executable": False,
+        }
         if (not id_ok(frame.trace_id, ("trace_id",))
                 or not id_ok(first.cycle_id, ("cycle_request_id",))
                 or any(e.trace_id != frame.trace_id or e.cycle_id != first.cycle_id
-                       for e in outcome.trace)
-                or first.kind != "frame" or first.payload.get("frame_id") != frame.frame_id
-                or first.payload.get("frame_material_digest") != "sha256:" + frame.canonical_digest()
-                or outcome.recommendation.advisory_id != first.cycle_id + ":advisory"
-                or not any(e.kind == "recommendation" and
-                           e.payload.get("advisory_id") == outcome.recommendation.advisory_id
-                           for e in outcome.trace)):
+                       for e in events)
+                or [e.kind for e in events].count("frame") != 1
+                or [e.kind for e in events].count("recommendation") != 1
+                or [e.kind for e in events].count("complete") != 1
+                or first.kind != "frame" or first.state != ReasoningState.FRAME_READY.value
+                or first.payload != {"frame_id": frame.frame_id,
+                                     "frame_material_digest": "sha256:" + frame.canonical_digest()}
+                or recommendation.advisory_id != first.cycle_id + ":advisory"
+                or recommendation.executable is not False
+                or recommendation_event.kind != "recommendation"
+                or recommendation_event.state != ReasoningState.RECOMMENDATION_READY.value
+                or recommendation_event.payload != expected_recommendation
+                or complete.kind != "complete" or complete.state != ReasoningState.COMPLETE.value
+                or type(complete.payload) is not dict
+                or set(complete.payload) != {"model_calls", "broker_calls"}
+                or any(type(x) is not int or x < 0 for x in complete.payload.values())):
             raise ValueError("feedback_trace_binding_mismatch")
         self._binding = (frame.trace_id, first.cycle_id,
                          outcome.recommendation.advisory_id, "sha256:" + frame.canonical_digest())
@@ -109,7 +132,8 @@ class OperatorDispositionLog:
             raise ValueError("invalid_feedback_review")
         reviewed = _time(record.reviewed_at)
         instant = _time(now)
-        if not self._created_at <= reviewed <= instant:
+        if (not self._created_at <= reviewed <= instant
+                or self._records and reviewed < _time(self._records[-1].reviewed_at)):
             raise ValueError("invalid_feedback_chronology")
         if (type(record.outcome) is not str or record.outcome not in
                 {"unknown", "pending", "succeeded", "failed", "not_applied"}):
@@ -123,7 +147,10 @@ class OperatorDispositionLog:
         else:
             if record.action_ref is None or record.outcome_at is None:
                 raise ValueError("feedback_action_binding_required")
-            if not reviewed <= _time(record.outcome_at) <= instant:
+            prior_outcome_times = [_time(x.outcome_at) for x in self._records
+                                   if x.action_ref == record.action_ref and x.outcome_at is not None]
+            if (not reviewed <= _time(record.outcome_at) <= instant
+                    or prior_outcome_times and _time(record.outcome_at) < max(prior_outcome_times)):
                 raise ValueError("invalid_feedback_outcome_time")
             if record.outcome == "succeeded" and record.applied_state is None:
                 raise ValueError("feedback_applied_state_required")

@@ -549,6 +549,7 @@ class BoundedReasoningLoop:
             kind="recommendation",
             payload={
                 "advisory_id": recommendation.advisory_id,
+                "recommendation_material_digest": recommendation.canonical_digest(),
                 "recommended_action": recommendation.recommended_action,
                 "evidence_refs": list(recommendation.evidence_refs),
                 "executable": False,

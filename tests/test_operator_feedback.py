@@ -112,3 +112,72 @@ def test_non_accepting_reviews_remain_reports(disposition):
     log.append(replace(record, disposition=disposition), now=NOW)
     assert log.records()[0].disposition == disposition
     assert outcome.recommendation.executable is False
+
+
+@pytest.mark.parametrize("changes", [
+    {"recommended_action": "ISOLATE"}, {"evidence_refs": ("ev:ssh:2",)},
+    {"summary": "Replaced summary"}, {"rationale": "Replaced rationale"},
+    {"limitations": ("Replaced limitation",)}, {"executable": True},
+])
+def test_recommendation_material_cannot_be_replaced_under_same_advisory(changes):
+    frame, outcome, _ = setup()
+    with pytest.raises(ValueError, match="binding"):
+        OperatorDispositionLog(frame=frame, outcome=replace(outcome,
+            recommendation=replace(outcome.recommendation, **changes)))
+
+
+def test_review_append_order_cannot_go_backwards():
+    frame, outcome, record = setup()
+    log = OperatorDispositionLog(frame=frame, outcome=outcome)
+    log.append(replace(record, reviewed_at=LATER), now=LATER)
+    with pytest.raises(ValueError, match="chronology"):
+        log.append(replace(record, record_ref="sha256:" + "b" * 64), now=LATER)
+    assert len(log.records()) == 1
+
+
+def test_late_outcome_is_new_record_and_cannot_rewind_same_action():
+    frame, outcome, record = setup()
+    log = OperatorDispositionLog(frame=frame, outcome=outcome)
+    pending = replace(record, action_ref=REF, outcome="pending", outcome_at=LATER)
+    log.append(pending, now=LATER)
+    older = replace(pending, record_ref="sha256:" + "b" * 64,
+                    outcome="failed", outcome_at=NOW)
+    with pytest.raises(ValueError, match="outcome_time"):
+        log.append(older, now=LATER)
+    completed = replace(older, reviewed_at=LATER, outcome_at=LATER,
+                        outcome="succeeded", applied_state="OBSERVE")
+    log.append(completed, now=LATER)
+    assert log.records() == (pending, completed)
+
+
+@pytest.mark.parametrize("mutation", [
+    "seq_gap", "seq_bool", "duplicate_frame", "duplicate_recommendation", "duplicate_complete",
+    "missing_complete", "reorder", "frame_payload", "recommendation_payload", "complete_payload",
+    "recommendation_state", "complete_state",
+])
+def test_completed_trace_shape_must_match_loop(mutation):
+    frame, outcome, _ = setup()
+    events = list(outcome.trace)
+    if mutation == "seq_gap":
+        events[1] = replace(events[1], seq=999)
+    elif mutation == "seq_bool":
+        events[0] = replace(events[0], seq=True)
+    elif mutation.startswith("duplicate_"):
+        index = {"duplicate_frame": 0, "duplicate_recommendation": -2, "duplicate_complete": -1}[mutation]
+        events.insert(1, events[index])
+        events = [replace(e, seq=i) for i, e in enumerate(events, 1)]
+    elif mutation == "missing_complete":
+        events.pop()
+    elif mutation == "reorder":
+        events[-2], events[-1] = events[-1], events[-2]
+        events = [replace(e, seq=i) for i, e in enumerate(events, 1)]
+    elif mutation.endswith("_payload"):
+        index = {"frame_payload": 0, "recommendation_payload": -2, "complete_payload": -1}[mutation]
+        payload = dict(events[index].payload)
+        payload["unexpected"] = "unbound"
+        events[index] = replace(events[index], payload=payload)
+    elif mutation.endswith("_state"):
+        index = -2 if mutation == "recommendation_state" else -1
+        events[index] = replace(events[index], state="validation_rejected")
+    with pytest.raises(ValueError, match="binding"):
+        OperatorDispositionLog(frame=frame, outcome=replace(outcome, trace=tuple(events)))
