@@ -148,7 +148,8 @@ still enters the broker's bounded sanitized local audit history.
 `dropped`, `pending`, `capacity`, `worker_running`, `worker_reserved`,
 `startup_uncertain`, `start_attempts`, and `start_failures` counters, plus
 per-cycle `local_evicted`. `worker_running` means the delivery loop has entered;
-`worker_reserved` also includes a thread whose startup is unconfirmed. Sink
+`worker_reserved` also includes a thread whose startup is unconfirmed or whose
+delivery loop returned but whose termination has not yet been observed. Sink
 exceptions increment `failed`; failed and dropped deliveries are not retried.
 `queued` acknowledges admission only, not durable persistence. `close()` cancels
 the reasoning cycle without waiting for or discarding queued audit delivery.
@@ -166,3 +167,9 @@ this intentionally trades recovery for a hard bound on outstanding startup
 attempts. No `ident`/`is_alive` observation is treated as proof that a delayed
 bootstrap cannot run. Once the worker enters, it clears uncertainty and drains
 the retained queue normally.
+
+A worker that drains its queue retains its reservation until a later enqueue
+observes both delivery-loop completion and thread termination. Enqueue never
+waits for teardown. Records admitted during teardown remain bounded and may
+wait until another submission observes termination and starts a successor;
+even a full-queue submission performs this recovery before reporting its drop.

@@ -2,6 +2,8 @@ import concurrent.futures
 import threading
 import time
 
+import pytest
+
 from azazel_mio.broker import CapabilityBroker, CapabilitySpec
 from azazel_mio.contracts import MioCapabilityRequest
 
@@ -176,7 +178,8 @@ def test_audit_start_then_interrupt_retains_single_worker_and_admission(monkeypa
     assert len(set(calls)) == 1
 
 
-def test_delayed_unobservable_bootstrap_keeps_one_start_reservation(monkeypatch):
+@pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_delayed_unobservable_bootstrap_keeps_one_start_reservation(monkeypatch, failure):
     import _thread
     import pytest
 
@@ -197,15 +200,18 @@ def test_delayed_unobservable_bootstrap_keeps_one_start_reservation(monkeypatch)
         _thread.start_new_thread(original_start, (worker,))
         assert bootstrap_entered.wait(1)
         assert worker.ident is None and not worker.is_alive()
-        raise KeyboardInterrupt()
+        raise failure()
 
     broker = CapabilityBroker(audit_sink=lambda record: delivered.append(record), audit_capacity=2)
     try:
         with monkeypatch.context() as patch:
             patch.setattr(threading.Thread, '_bootstrap', gated_bootstrap)
             patch.setattr(threading.Thread, 'start', interrupted_start)
-            with pytest.raises(KeyboardInterrupt):
-                broker.submit(request())
+            if issubclass(failure, Exception):
+                assert 'audit_sink_startup_uncertain' in broker.submit(request()).limitations
+            else:
+                with pytest.raises(failure):
+                    broker.submit(request())
             for number in range(2, 30):
                 result = broker.submit(request(number))
                 assert ('audit_sink_startup_uncertain' if number == 2 else 'audit_sink_full') in result.limitations
@@ -220,3 +226,72 @@ def test_delayed_unobservable_bootstrap_keeps_one_start_reservation(monkeypatch)
     wait_until(lambda: broker.audit_delivery_stats()['delivered'] == 2)
     assert len(delivered) == 2
     assert broker.audit_delivery_stats()['startup_uncertain'] == 0
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError, KeyboardInterrupt, SystemExit])
+def test_completed_target_keeps_reservation_until_thread_termination(monkeypatch, failure):
+    original_start = threading.Thread.start
+    original_run = threading.Thread.run
+    target_returned = threading.Event()
+    release_teardown = threading.Event()
+    workers = []
+    records = []
+    active = 0
+    maximum_active = 0
+
+    def sink(record):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        records.append(record)
+        active -= 1
+
+    def delayed_teardown(worker):
+        workers.append(worker)
+        original_run(worker)
+        if len(workers) == 1:
+            target_returned.set()
+            assert release_teardown.wait(2)
+
+    def start_then_raise(worker):
+        original_start(worker)
+        if failure is not None:
+            raise failure()
+
+    broker = CapabilityBroker(audit_sink=sink, audit_capacity=2)
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, 'run', delayed_teardown)
+        patch.setattr(threading.Thread, 'start', start_then_raise)
+        try:
+            if failure is not None and not issubclass(failure, Exception):
+                with pytest.raises(failure):
+                    broker.submit(request())
+            else:
+                broker.submit(request())
+            assert target_returned.wait(1)
+            assert workers[0].is_alive()
+            for number in range(2, 20):
+                start = time.monotonic()
+                result = broker.submit(request(number))
+                assert time.monotonic() - start < .15
+                assert ('audit_sink_queued' if number < 4 else 'audit_sink_full') in result.limitations
+            stats = broker.audit_delivery_stats()
+            assert stats['worker_running'] == 0
+            assert stats['worker_reserved'] == stats['start_attempts'] == 1
+            assert stats['pending'] == 2
+            assert stats['accepted'] == 3
+            assert stats['dropped'] == 16
+            assert len(workers) == len(records) == 1
+        finally:
+            release_teardown.set()
+        workers[0].join(1)
+        assert not workers[0].is_alive()
+        # A full queue must not prevent reaping the terminated owner and
+        # launching its successor to deliver the already accepted records.
+        patch.setattr(threading.Thread, 'start', original_start)
+        broker.submit(request(20))
+        wait_until(lambda: broker.audit_delivery_stats()['delivered'] == 3)
+        assert len(workers) == 2
+        assert maximum_active == 1
+        assert len(records) == 3
+        assert len({record['request_id'] for record in records}) == 3
