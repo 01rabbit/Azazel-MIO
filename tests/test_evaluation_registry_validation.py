@@ -19,6 +19,10 @@ BASE = {
 }
 
 
+def digest_at(index):
+    return 'sha256:' + format(index, '064x')
+
+
 def record(digest=DIGEST_A, created=CREATED, expires=EXPIRES, snapshots=()):
     return {'artifact_digest': digest, 'created_at': created, 'expires_at': expires, 'snapshots': list(snapshots)}
 
@@ -140,6 +144,25 @@ class EvaluationRegistryFromDictValidationTests(unittest.TestCase):
         for payload, code in cases:
             with self.subTest(code=code):
                 self.assertRejects(payload, code)
+
+    def test_records_at_exact_maximum_are_accepted(self):
+        digests = [digest_at(index) for index in range(128)]
+        state = EvaluationRegistry.from_dict(raw(records=[record(digest=value) for value in digests]))
+        self.assertEqual(len(state.records), 128)
+        self.assertEqual([item.artifact_digest for item in state.records], digests)
+
+    def test_history_at_exact_maximum_is_accepted(self):
+        digests = [digest_at(index) for index in range(128)]
+        state = EvaluationRegistry.from_dict(raw(
+            records=[record(digest=value) for value in digests],
+            history=digests,
+        ))
+        self.assertEqual(state.history, tuple(digests))
+
+    def test_revoked_snapshots_at_exact_maximum_are_accepted(self):
+        codes = [f'snapshot-{index:04d}' for index in range(2048)]
+        state = EvaluationRegistry.from_dict(raw(revoked_snapshots=codes))
+        self.assertEqual(state.revoked_snapshots, tuple(codes))
 
 
 class EvaluationRegistryRevokeArgumentTests(unittest.TestCase):
