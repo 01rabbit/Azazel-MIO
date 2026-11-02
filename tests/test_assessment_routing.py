@@ -1,6 +1,7 @@
 import copy
 import dataclasses
 import unittest
+from collections.abc import Mapping
 
 from azazel_mio.assessment import READ_ONLY_CHECKS, Observation, assess
 from azazel_mio.assessment_routing import (
@@ -253,9 +254,9 @@ class EvidenceBoundTests(unittest.TestCase):
         r = copy.deepcopy(_valid(_obs("suspicious_process")))
         r["rule_hits"] = [
             {"signal": "suspicious_process", "weight": 30,
-             "evidence_ids": [f"a-{i}" for i in range(first)]},
+             "evidence_ids": [f"a-{i:05d}" for i in range(first)]},
             {"signal": "unusual_outbound", "weight": 20,
-             "evidence_ids": [f"b-{i}" for i in range(second)]},
+             "evidence_ids": [f"b-{i:05d}" for i in range(second)]},
         ]
         r["priority_index"] = 50
         r["next_read_only_checks"] = [
@@ -313,7 +314,8 @@ class RecommendationConstructorTests(unittest.TestCase):
         FastReviewRecommendation(PATH_HUMAN_REVIEW, False,
                                  (REASON_INSUFFICIENT_EVIDENCE,))
         FastReviewRecommendation(PATH_READ_ONLY_CHECKS, True,
-                                 (REASON_REVIEW_WITH_CHECKS,),
+                                 (REASON_REVIEW_WITH_CHECKS,
+                                  REASON_UNSUPPORTED_PRESENT),
                                  (self.CHECK_A, self.CHECK_B))
 
     def test_reason_codes_must_be_known_unique_tuple(self):
@@ -367,6 +369,234 @@ class RecommendationConstructorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             FastReviewRecommendation(PATH_READ_ONLY_CHECKS, False,
                                      (REASON_REVIEW_WITH_CHECKS,), ())
+
+
+class _RaisingMapping(Mapping):
+    """Custom Mapping whose behavior is hostile: it raises on access."""
+
+    def __init__(self, backing, fail_on=None, fail_keys=False):
+        self._backing = backing
+        self._fail_on = fail_on
+        self._fail_keys = fail_keys
+
+    def __getitem__(self, key):
+        if key == self._fail_on:
+            raise RuntimeError("hostile __getitem__")
+        return self._backing[key]
+
+    def __iter__(self):
+        return iter(self._backing)
+
+    def __len__(self):
+        return len(self._backing)
+
+    def keys(self):
+        if self._fail_keys:
+            raise RuntimeError("hostile keys()")
+        return self._backing.keys()
+
+
+class FailClosedCustomMappingTests(unittest.TestCase):
+    """Regression: exceptions from custom Mapping objects fail closed."""
+
+    def setUp(self):
+        self.good = copy.deepcopy(_valid(_obs("suspicious_process")))
+
+    def _assert_human_review_invalid_shape(self, rec):
+        self.assertEqual(rec.path, PATH_HUMAN_REVIEW)
+        self.assertFalse(rec.deeper_review_recommended)
+        self.assertEqual(rec.read_only_checks, ())
+        self.assertEqual(rec.reason_codes, (REASON_INVALID_SHAPE,))
+
+    def test_top_level_mapping_raising_on_keys_fails_closed(self):
+        rec = recommend_fast_review(
+            _RaisingMapping(self.good, fail_keys=True))
+        self._assert_human_review_invalid_shape(rec)
+
+    def test_top_level_mapping_raising_on_getitem_fails_closed(self):
+        for key in _EXPECTED_KEYS_FOR_TEST:
+            with self.subTest(key=key):
+                rec = recommend_fast_review(
+                    _RaisingMapping(self.good, fail_on=key))
+                self._assert_human_review_invalid_shape(rec)
+
+    def test_hit_mapping_raising_fails_closed(self):
+        for key in ("signal", "weight", "evidence_ids"):
+            with self.subTest(key=key):
+                r = copy.deepcopy(self.good)
+                r["rule_hits"][0] = _RaisingMapping(
+                    r["rule_hits"][0], fail_on=key)
+                self._assert_human_review_invalid_shape(
+                    recommend_fast_review(r))
+        r = copy.deepcopy(self.good)
+        r["rule_hits"][0] = _RaisingMapping(r["rule_hits"][0], fail_keys=True)
+        self._assert_human_review_invalid_shape(recommend_fast_review(r))
+
+    def test_non_exception_hostile_values_do_not_escape(self):
+        # Inner exceptions surface only as the fixed shape code, never raw.
+        r = copy.deepcopy(self.good)
+        r["rule_hits"][0] = _RaisingMapping(r["rule_hits"][0], fail_keys=True)
+        rec = recommend_fast_review(r)
+        self.assertNotIn("hostile", repr(rec))
+
+    def test_custom_mapping_with_valid_content_still_routes(self):
+        rec = recommend_fast_review(_RaisingMapping(self.good))
+        self.assertEqual(rec.path, PATH_READ_ONLY_CHECKS)
+        self.assertEqual(rec.reason_codes, (REASON_REVIEW_WITH_CHECKS,))
+
+
+_EXPECTED_KEYS_FOR_TEST = (
+    "case_id", "rule_version", "status", "priority_index",
+    "priority_index_is_probability", "rule_hits", "unsupported_observations",
+    "limitations", "next_read_only_checks", "authorized_actions",
+)
+
+
+class EvidenceOrderingTests(unittest.TestCase):
+    """Regression: evidence_ids per hit are sorted and unique, as assess() emits."""
+
+    def _with_refs(self, refs):
+        r = copy.deepcopy(_valid(_obs("suspicious_process")))
+        r["rule_hits"][0]["evidence_ids"] = refs
+        return r
+
+    def test_unsorted_evidence_rejected(self):
+        rec = recommend_fast_review(self._with_refs(["ev-2", "ev-1"]))
+        self.assertEqual(rec.path, PATH_HUMAN_REVIEW)
+        self.assertEqual(rec.reason_codes, (REASON_INVALID_EVIDENCE,))
+
+    def test_duplicate_evidence_rejected(self):
+        rec = recommend_fast_review(self._with_refs(["ev-1", "ev-1"]))
+        self.assertEqual(rec.reason_codes, (REASON_INVALID_EVIDENCE,))
+
+    def test_sorted_unique_evidence_accepted(self):
+        rec = recommend_fast_review(self._with_refs(["ev-1", "ev-2", "ev-3"]))
+        self.assertEqual(rec.path, PATH_READ_ONLY_CHECKS)
+
+    def test_assess_output_is_always_sorted_unique(self):
+        r = _valid(_obs("suspicious_process", "ev-9"),
+                   _obs("suspicious_process", "ev-1"),
+                   _obs("suspicious_process", "ev-9"))
+        refs = r["rule_hits"][0]["evidence_ids"]
+        self.assertEqual(refs, ["ev-1", "ev-9"])
+        self.assertEqual(recommend_fast_review(r).path, PATH_READ_ONLY_CHECKS)
+
+
+class CombinedEvidenceCapTests(unittest.TestCase):
+    """Regression: supported evidence IDs plus unsupported observations <= 10000."""
+
+    def _tampered(self, evidence_count, unsupported):
+        r = copy.deepcopy(_valid(_obs("suspicious_process")))
+        r["rule_hits"][0]["evidence_ids"] = [
+            f"ev-{i:05d}" for i in range(evidence_count)]
+        r["unsupported_observations"] = unsupported
+        return r
+
+    def test_evidence_plus_unsupported_over_bound_rejected(self):
+        rec = recommend_fast_review(self._tampered(9999, 2))  # 10001 total
+        self.assertEqual(rec.path, PATH_HUMAN_REVIEW)
+        self.assertEqual(rec.reason_codes, (REASON_INVALID_COUNT,))
+
+    def test_evidence_plus_unsupported_at_bound_accepted(self):
+        rec = recommend_fast_review(self._tampered(9999, 1))  # exactly 10000
+        self.assertEqual(rec.path, PATH_READ_ONLY_CHECKS)
+        self.assertTrue(rec.deeper_review_recommended)
+        self.assertEqual(rec.reason_codes,
+                         (REASON_REVIEW_WITH_CHECKS, REASON_UNSUPPORTED_PRESENT))
+
+    def test_unsupported_only_at_bound_still_accepted(self):
+        r = copy.deepcopy(_valid())
+        r["unsupported_observations"] = 10000
+        rec = recommend_fast_review(r)
+        self.assertEqual(rec.path, PATH_HUMAN_REVIEW)
+        self.assertEqual(rec.reason_codes,
+                         (REASON_INSUFFICIENT_EVIDENCE, REASON_UNSUPPORTED_PRESENT))
+
+
+class LimitationsContractTests(unittest.TestCase):
+    """limitations is validated strictly against the upstream constant and never echoed."""
+
+    def base(self):
+        return copy.deepcopy(_valid(_obs("suspicious_process")))
+
+    def test_routing_constant_matches_live_assess_output(self):
+        from azazel_mio import assessment_routing as routing
+        self.assertEqual(list(routing._UPSTREAM_LIMITATIONS),
+                         _valid()["limitations"])
+
+    def test_tampered_limitations_fail_closed(self):
+        bad_values = (
+            [],
+            ["Advisory priority only; not a verdict of maliciousness."],
+            list(_valid()["limitations"]) + ["extra"],
+            list(reversed(_valid()["limitations"])),
+            tuple(_valid()["limitations"]),
+            MARKER,
+            None,
+            [MARKER, MARKER, MARKER],
+        )
+        for bad in bad_values:
+            with self.subTest(bad=repr(bad)[:40]):
+                r = self.base()
+                r["limitations"] = bad
+                rec = recommend_fast_review(r)
+                self.assertEqual(rec.path, PATH_HUMAN_REVIEW)
+                self.assertEqual(rec.reason_codes, (REASON_INVALID_SHAPE,))
+                self.assertNotIn(MARKER, repr(rec))
+
+    def test_limitations_text_never_echoed_into_recommendation(self):
+        rec = recommend_fast_review(self.base())
+        for text in _valid()["limitations"]:
+            self.assertNotIn(text, repr(rec))
+
+
+class RouteCombinationConstructorTests(unittest.TestCase):
+    """Regression: reason codes, path and deeper-review flag must match a valid route."""
+
+    CHECK = READ_ONLY_CHECKS["suspicious_process"]
+
+    def assertRejected(self, path, deeper, reasons, checks=()):
+        with self.subTest(path=path, deeper=deeper, reasons=reasons):
+            with self.assertRaises(ValueError):
+                FastReviewRecommendation(path, deeper, reasons, checks)
+
+    def test_deeper_flag_must_match_unsupported_reason(self):
+        self.assertRejected(PATH_HUMAN_REVIEW, True, (REASON_INSUFFICIENT_EVIDENCE,))
+        self.assertRejected(PATH_HUMAN_REVIEW, False,
+                            (REASON_INSUFFICIENT_EVIDENCE, REASON_UNSUPPORTED_PRESENT))
+        self.assertRejected(PATH_READ_ONLY_CHECKS, True,
+                            (REASON_REVIEW_WITH_CHECKS,), (self.CHECK,))
+        self.assertRejected(PATH_READ_ONLY_CHECKS, False,
+                            (REASON_REVIEW_WITH_CHECKS, REASON_UNSUPPORTED_PRESENT),
+                            (self.CHECK,))
+
+    def test_primary_reason_must_match_path(self):
+        self.assertRejected(PATH_HUMAN_REVIEW, False, (REASON_REVIEW_WITH_CHECKS,))
+        self.assertRejected(PATH_READ_ONLY_CHECKS, False,
+                            (REASON_INSUFFICIENT_EVIDENCE,), (self.CHECK,))
+
+    def test_reason_order_is_fixed(self):
+        self.assertRejected(PATH_HUMAN_REVIEW, True,
+                            (REASON_UNSUPPORTED_PRESENT, REASON_INSUFFICIENT_EVIDENCE))
+        self.assertRejected(PATH_READ_ONLY_CHECKS, True,
+                            (REASON_UNSUPPORTED_PRESENT, REASON_REVIEW_WITH_CHECKS),
+                            (self.CHECK,))
+
+    def test_fail_closed_codes_only_on_single_reason_human_review(self):
+        self.assertRejected(PATH_READ_ONLY_CHECKS, False, (REASON_INVALID_SHAPE,),
+                            (self.CHECK,))
+        self.assertRejected(PATH_HUMAN_REVIEW, True, (REASON_INVALID_COUNT,))
+        self.assertRejected(PATH_HUMAN_REVIEW, False,
+                            (REASON_INVALID_CHECKS, REASON_INVALID_EVIDENCE))
+        self.assertRejected(PATH_HUMAN_REVIEW, False,
+                            (REASON_INSUFFICIENT_EVIDENCE, REASON_INVALID_SHAPE))
+
+    def test_valid_routes_still_construct(self):
+        FastReviewRecommendation(PATH_HUMAN_REVIEW, True,
+                                 (REASON_INSUFFICIENT_EVIDENCE, REASON_UNSUPPORTED_PRESENT))
+        FastReviewRecommendation(PATH_HUMAN_REVIEW, False, (REASON_INVALID_EVIDENCE,))
+        FastReviewRecommendation(PATH_READ_ONLY_CHECKS, False,
+                                 (REASON_REVIEW_WITH_CHECKS,), (self.CHECK,))
 
 
 if __name__ == "__main__":

@@ -33,11 +33,37 @@ _EXPECTED_KEYS = frozenset({
     "limitations", "next_read_only_checks", "authorized_actions",
 })
 _HIT_KEYS = frozenset({"signal", "weight", "evidence_ids"})
+# Verbatim copy of the constant "limitations" list emitted by assess() in
+# assessment.py. The field is validated against it strictly, and it is never
+# copied into the recommendation. A routing test pins this against assess().
+_UPSTREAM_LIMITATIONS = (
+    "Advisory priority only; not a verdict of maliciousness.",
+    "Signals require independent validation by a trusted parser or reviewer.",
+    "No calibration, incident outcome, or enforcement authority is implied.",
+)
+_FAIL_CLOSED_REASONS = frozenset({
+    REASON_INVALID_SHAPE, REASON_INVALID_STATUS, REASON_INVALID_COUNT,
+    REASON_INVALID_CHECKS, REASON_INVALID_EVIDENCE,
+})
 _KNOWN_REASONS = frozenset({
     REASON_REVIEW_WITH_CHECKS, REASON_UNSUPPORTED_PRESENT,
-    REASON_INSUFFICIENT_EVIDENCE, REASON_INVALID_SHAPE, REASON_INVALID_STATUS,
-    REASON_INVALID_COUNT, REASON_INVALID_CHECKS, REASON_INVALID_EVIDENCE,
-})
+    REASON_INSUFFICIENT_EVIDENCE,
+}) | _FAIL_CLOSED_REASONS
+# The only (path, deeper_review, reason_codes) triples a recommendation may
+# carry. Fail-closed rejections are single-reason human_review with no deeper
+# review flag; every other route pairs its primary reason with an optional
+# unsupported-observations reason, in that fixed order.
+_ALLOWED_ROUTES = frozenset(
+    {(PATH_HUMAN_REVIEW, False, (code,)) for code in _FAIL_CLOSED_REASONS}
+    | {
+        (PATH_HUMAN_REVIEW, False, (REASON_INSUFFICIENT_EVIDENCE,)),
+        (PATH_HUMAN_REVIEW, True,
+         (REASON_INSUFFICIENT_EVIDENCE, REASON_UNSUPPORTED_PRESENT)),
+        (PATH_READ_ONLY_CHECKS, False, (REASON_REVIEW_WITH_CHECKS,)),
+        (PATH_READ_ONLY_CHECKS, True,
+         (REASON_REVIEW_WITH_CHECKS, REASON_UNSUPPORTED_PRESENT)),
+    }
+)
 # Canonical check order mirrors assess(): checks are emitted sorted by signal.
 _CANONICAL_CHECKS = tuple(READ_ONLY_CHECKS[s] for s in sorted(READ_ONLY_CHECKS))
 _CHECK_INDEX = {text: index for index, text in enumerate(_CANONICAL_CHECKS)}
@@ -71,6 +97,8 @@ class FastReviewRecommendation:
             raise ValueError("unknown reason code")
         if len(set(reasons)) != len(reasons):
             raise ValueError("duplicate reason code")
+        if (self.path, self.deeper_review_recommended, reasons) not in _ALLOWED_ROUTES:
+            raise ValueError("invalid reason/path/deeper-review combination")
 
         checks = self.read_only_checks
         if type(checks) is not tuple or len(checks) > len(_CANONICAL_CHECKS):
@@ -104,47 +132,69 @@ def _canonical_text(value: object) -> bool:
             and value == value.strip() and value.isprintable())
 
 
-def _validate_hit(hit: object) -> str:
-    if not isinstance(hit, Mapping) or set(hit.keys()) != _HIT_KEYS:
+def _snapshot(value: object, keys: frozenset) -> dict:
+    """Read every expected key exactly once from a (possibly custom) Mapping.
+
+    Custom Mapping implementations may raise or return different data on each
+    access; reading once and working from the plain dict keeps the checks and
+    the values they validate in agreement.
+    """
+    if not isinstance(value, Mapping) or frozenset(value.keys()) != keys:
         raise _Reject(REASON_INVALID_SHAPE)
-    signal = hit["signal"]
+    return {key: value[key] for key in keys}
+
+
+def _limitations_match_upstream(value: object) -> bool:
+    return (type(value) is list and len(value) == len(_UPSTREAM_LIMITATIONS)
+            and all(type(item) is str and item == expected
+                    for item, expected in zip(value, _UPSTREAM_LIMITATIONS)))
+
+
+def _validate_hit(hit: object) -> tuple:
+    raw = _snapshot(hit, _HIT_KEYS)
+    signal = raw["signal"]
     if type(signal) is not str or signal not in SIGNAL_WEIGHTS:
         raise _Reject(REASON_INVALID_SHAPE)
-    if not _is_int(hit["weight"]) or hit["weight"] != SIGNAL_WEIGHTS[signal]:
+    if not _is_int(raw["weight"]) or raw["weight"] != SIGNAL_WEIGHTS[signal]:
         raise _Reject(REASON_INVALID_SHAPE)
-    refs = hit["evidence_ids"]
+    refs = raw["evidence_ids"]
     if type(refs) is not list or not refs or len(refs) > _MAX_OBSERVATIONS:
         raise _Reject(REASON_INVALID_COUNT)
+    refs = list(refs)
     if not all(_canonical_text(ref) for ref in refs):
         raise _Reject(REASON_INVALID_EVIDENCE)
-    return signal
+    # assess() emits sorted(set(...)); strictly increasing means sorted and unique.
+    if not all(earlier < later for earlier, later in zip(refs, refs[1:])):
+        raise _Reject(REASON_INVALID_EVIDENCE)
+    return signal, len(refs)
 
 
 def _recommend(result: object) -> FastReviewRecommendation:
-    if not isinstance(result, Mapping) or set(result.keys()) != _EXPECTED_KEYS:
+    raw = _snapshot(result, _EXPECTED_KEYS)
+    if not _canonical_text(raw["case_id"]):
         raise _Reject(REASON_INVALID_SHAPE)
-    if not _canonical_text(result["case_id"]):
-        raise _Reject(REASON_INVALID_SHAPE)
-    status = result["status"]
+    status = raw["status"]
     if type(status) is not str or status not in _STATUSES:
         raise _Reject(REASON_INVALID_STATUS)
-    if result["rule_version"] != RULE_VERSION:
+    if raw["rule_version"] != RULE_VERSION:
         raise _Reject(REASON_INVALID_SHAPE)
-    if result["priority_index_is_probability"] is not False:
+    if raw["priority_index_is_probability"] is not False:
         raise _Reject(REASON_INVALID_SHAPE)
-    actions = result["authorized_actions"]
+    actions = raw["authorized_actions"]
     if type(actions) is not list or actions:
         raise _Reject(REASON_INVALID_SHAPE)
+    if not _limitations_match_upstream(raw["limitations"]):
+        raise _Reject(REASON_INVALID_SHAPE)
 
-    priority = result["priority_index"]
-    unsupported = result["unsupported_observations"]
+    priority = raw["priority_index"]
+    unsupported = raw["unsupported_observations"]
     if not _is_int(priority) or not 0 <= priority <= _MAX_PRIORITY:
         raise _Reject(REASON_INVALID_COUNT)
     if not _is_int(unsupported) or not 0 <= unsupported <= _MAX_OBSERVATIONS:
         raise _Reject(REASON_INVALID_COUNT)
 
-    hits = result["rule_hits"]
-    checks = result["next_read_only_checks"]
+    hits = raw["rule_hits"]
+    checks = raw["next_read_only_checks"]
     if type(hits) is not list or len(hits) > len(SIGNAL_WEIGHTS):
         raise _Reject(REASON_INVALID_COUNT)
     if type(checks) is not list or len(checks) > len(READ_ONLY_CHECKS):
@@ -153,10 +203,13 @@ def _recommend(result: object) -> FastReviewRecommendation:
     signals = []
     total_evidence = 0
     for hit in hits:
-        signals.append(_validate_hit(hit))
-        total_evidence += len(hit["evidence_ids"])
-        if total_evidence > _MAX_OBSERVATIONS:
-            raise _Reject(REASON_INVALID_COUNT)
+        signal, count = _validate_hit(hit)
+        signals.append(signal)
+        total_evidence += count
+    # Supported evidence IDs and unsupported observations together are bounded
+    # by the same limit assess() applies to its input observations.
+    if total_evidence + unsupported > _MAX_OBSERVATIONS:
+        raise _Reject(REASON_INVALID_COUNT)
     if signals != sorted(set(signals)):
         raise _Reject(REASON_INVALID_SHAPE)
 
@@ -190,10 +243,13 @@ def recommend_fast_review(result: Mapping) -> FastReviewRecommendation:
     """Map an assess() result to a bounded, advisory routing recommendation.
 
     Any malformed, untrusted, or unsupported input fails closed to human_review
-    with a stable reason code and no checks.
+    with a stable reason code and no checks. This includes exceptions raised by
+    custom Mapping implementations, which are reported only as a fixed code.
     """
     try:
         return _recommend(result)
     except _Reject as rejected:
-        return FastReviewRecommendation(
-            PATH_HUMAN_REVIEW, False, (rejected.code,))
+        code = rejected.code
+    except Exception:  # fail closed on any hostile or broken input object
+        code = REASON_INVALID_SHAPE
+    return FastReviewRecommendation(PATH_HUMAN_REVIEW, False, (code,))
