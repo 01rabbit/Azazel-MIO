@@ -271,15 +271,62 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
         self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], eid)
 
-    def test_failed_import_currently_leaves_one_unreferenced_object(self):
-        # Known gap (current behavior): the object is written before the DB transaction and is not
-        # removed when the transaction rolls back. It is content-addressed and not listed by any
-        # evidence row. Expected to change when the cleanup gap is fixed.
+    def test_failed_first_import_leaves_no_evidence_events_or_object(self):
         source = self.stage(EVENTS)
         self.install_event_failure()
         with self.assertRaises(sqlite3.IntegrityError):
             import_file(self.db, self.root, self.case, source, "jsonl")
+        self.assert_nothing_persisted()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_unlink_failure_during_cleanup_keeps_integrity_error_and_rolls_back(self):
+        # Cleanup failure may leave an orphan object file (no evidence row references it);
+        # the original IntegrityError must still propagate and the transaction must end.
+        source = self.stage(EVENTS)
+        self.install_event_failure()
+        with patch.object(cli.os, "unlink", side_effect=OSError("forced unlink failure")) as unlink_mock:
+            with self.assertRaises(sqlite3.IntegrityError):
+                import_file(self.db, self.root, self.case, source, "jsonl")
+        unlink_mock.assert_called_once()
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
         self.assertEqual(len(self.objects()), 1)
+
+    def test_failed_second_import_preserves_object_referenced_by_earlier_evidence(self):
+        first = self.import_fixture("events.jsonl")
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        self.install_event_failure()
+        source = self.stage(EVENTS)
+        with self.assertRaises(sqlite3.IntegrityError):
+            import_file(self.db, self.root, self.case, source, "jsonl")
+        self.assertEqual(self.objects(), [digest])
+        self.assertEqual(self.count("evidence"), 1)
+        self.assertEqual(self.count("events"), 5)
+        self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
+        self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], first)
+
+    def test_failure_after_successful_commit_keeps_committed_object_and_evidence(self):
+        class CommitThenRaise:
+            """Delegates to the real connection; commit succeeds, then raises."""
+
+            def __init__(self, conn):
+                self._conn = conn
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def commit(self):
+                self._conn.commit()
+                raise RuntimeError("injected post-commit failure")
+
+        source = self.stage(EVENTS)
+        with self.assertRaisesRegex(RuntimeError, "injected post-commit failure"):
+            import_file(CommitThenRaise(self.db), self.root, self.case, source, "jsonl")
+        self.assertEqual(self.count("evidence"), 1)
+        self.assertEqual(self.count("events"), 5)
+        self.assertEqual(len(self.objects()), 1)
+        self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
 
 
 if __name__ == "__main__":

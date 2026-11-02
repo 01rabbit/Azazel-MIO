@@ -414,33 +414,56 @@ def import_file(db, root, case, filename, fmt):
     directory = root / "objects"
     ensure_private_directory(directory, "object directory")
     destination = directory / digest
-    metadata = existing_single_link_file(destination, "stored object")
-    if metadata is not None:
-        if metadata.st_size > MAX_BYTES:
-            raise ValueError("stored object corrupted or too large")
-        with destination.open("rb") as handle:
-            stored = handle.read(MAX_BYTES + 1)
-        if (len(stored) > MAX_BYTES
-                or hashlib.sha256(stored).hexdigest() != digest):
-            raise ValueError("stored object corrupted")
-    else:
-        fd, tmp = tempfile.mkstemp(dir=directory)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(tmp, 0o400)
-            os.replace(tmp, destination)
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-    with db:
+    # Take the SQLite write lock before publishing the object. Any other writer that could
+    # reference this digest must wait until this import commits or rolls back, so cleanup
+    # below never unlinks an object another transaction can see.
+    db.execute("BEGIN IMMEDIATE")
+    created = False
+    try:
+        metadata = existing_single_link_file(destination, "stored object")
+        if metadata is not None:
+            if metadata.st_size > MAX_BYTES:
+                raise ValueError("stored object corrupted or too large")
+            with destination.open("rb") as handle:
+                stored = handle.read(MAX_BYTES + 1)
+            if (len(stored) > MAX_BYTES
+                    or hashlib.sha256(stored).hexdigest() != digest):
+                raise ValueError("stored object corrupted")
+        else:
+            fd, tmp = tempfile.mkstemp(dir=directory)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.chmod(tmp, 0o400)
+                os.replace(tmp, destination)
+                created = True
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
         cur = db.execute("INSERT INTO evidence(case_id,filename,digest,format,imported) VALUES(?,?,?,?,?)",
                          (case, source.name, digest, fmt, utc_now()))
         eid = cur.lastrowid
         db.executemany("INSERT INTO events(evidence_id,record_number,timestamp,original_timestamp,summary) VALUES(?,?,?,?,?)",
                        [(eid, *record) for record in records])
+        db.commit()
+        # The object is now referenced by committed evidence; a later exception must not unlink it.
+        created = False
+    except BaseException:
+        # Ordinary exceptions and KeyboardInterrupt both land here. Unlink only an object this
+        # call published AND whose transaction is still active; if a commit already completed,
+        # the object is referenced by committed evidence and must be kept.
+        # Cleanup must never mask the original error or skip rollback. If the unlink fails, the
+        # published object may remain as an orphan (no evidence row references it).
+        try:
+            if created and db.in_transaction and os.path.lexists(destination):
+                os.unlink(destination)
+        except OSError:
+            pass
+        finally:
+            db.rollback()
+        raise
     return eid
 
 def timeline(db, case):
