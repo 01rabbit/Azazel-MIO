@@ -5,6 +5,8 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import html
+import json
 import re
 from typing import Any, Mapping, Sequence
 
@@ -76,6 +78,8 @@ class KnowledgeLiteAdvisory:
     `current` freshness is captured as `current_at_lookup`; callers must
     recheck it against their clock before reuse because Knowledge Lite has no
     per-claim expiry. `expires_at` is optional and is never inferred.
+    `citation` identifies the claim; optional `source_citation` is separate,
+    untrusted dataset display text. An empty summary stays empty.
     """
     technique_id: str
     name: str
@@ -89,6 +93,17 @@ class KnowledgeLiteAdvisory:
     revocation_status: str
     trust_check: str = "verified"
     expires_at: str | None = None
+    source_citation: str | None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeContextResponseAdvisory:
+    """One Knowledge /v1/context response for bounded local projection.
+
+    This wire input is never prompt material. Construction does not
+    authenticate the producer or confer trust.
+    """
+    context_response: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -235,6 +250,19 @@ _KNOWLEDGE_LITE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
 _KNOWLEDGE_LITE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
+def _source_citation_ok(value: Any) -> bool:
+    """Accept bounded, already-cleaned source display text without rewriting it."""
+    if type(value) is not str or len(value) > 160 or any(not c.isprintable() for c in value):
+        return False
+    # Match the Knowledge citation plain-text policy, retaining dataset underscores.
+    plain = html.unescape(value)
+    plain = re.sub(r"<[^>]*>", " ", plain)
+    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", plain)
+    plain = re.sub(r"https?://\S+|www\.\S+", " ", plain)
+    plain = plain.translate(str.maketrans("", "", "`*#"))
+    return " ".join(plain.split()) == value
+
+
 def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None:
     if type(value) is not KnowledgeLiteAdvisory:
         return None
@@ -254,10 +282,12 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
     if (type(value.name) is not str or not 0 < len(value.name) <= 160 or
             any(ord(c) < 32 for c in value.name)):
         return None
-    if (type(value.summary) is not str or not 0 < len(value.summary) <= 1200 or
+    if (type(value.summary) is not str or len(value.summary) > 1200 or
             any(ord(c) < 32 and c not in "\n\t" for c in value.summary)):
         return None
     if type(value.citation) is not str or not _KNOWLEDGE_LITE_ID.fullmatch(value.citation):
+        return None
+    if value.source_citation is not None and not _source_citation_ok(value.source_citation):
         return None
     try:
         as_of = _time(value.as_of)
@@ -272,7 +302,7 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
             return None
         if expiry <= now or expiry <= as_of:
             return None
-    return {
+    projection = {
         "kind": "knowledge_lite_advisory", "source_kind": "knowledge_lite",
         "claim_status": "reported_unverified", "technique_id": value.technique_id,
         "name": value.name, "summary": value.summary, "claim_id": value.claim_id,
@@ -283,6 +313,184 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
         "trust_check": value.trust_check, "revocation_status": value.revocation_status,
         "trust": "unverified_advisory_only" if value.revocation_status == "clear"
                  else "unverified_advisory_revocation_unknown",
+    }
+    if value.source_citation is not None:
+        projection["source_citation"] = value.source_citation
+    return projection
+
+
+_CONTEXT_RESPONSE_REQUIRED = frozenset({
+    "threat_context", "threat_score", "confidence", "reason",
+    "confidence_reason", "recommendation", "source_freshness", "advisory_id",
+    "multi_ioc_scope",
+})
+_CONTEXT_RESPONSE_OPTIONAL = frozenset({
+    "advisory_notice", "engage_refs", "rule_refs", "reported_defensive_state",
+    "engagement_advisory", "engagement_repeatability_score",
+})
+_SOURCE_GROUP_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
+_ATTACK_TECHNIQUE_RE = re.compile(r"T\d{4}(?:\.\d{3})?\Z")
+_ATTACK_VERSION_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){0,2}\Z")
+
+
+def _bounded_context_response(value: Any) -> dict[str, Any] | None:
+    """Validate the current Knowledge ContextResponse shape and project it.
+
+    Only bounded source group labels, public ATT&CK identifiers, freshness and
+    an exact canonical reported-state enum can leave this boundary. No source
+    prose, IOC, actor, event, recommendation, score or provenance ID is kept.
+    """
+    if type(value) is not KnowledgeContextResponseAdvisory:
+        return None
+    raw = value.context_response
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        wire = json.dumps(raw, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        if len(wire.encode("ascii")) > 16_384:
+            return None
+        data = json.loads(wire)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if (type(data) is not dict or not _CONTEXT_RESPONSE_REQUIRED <= data.keys()
+            or not data.keys() <= _CONTEXT_RESPONSE_REQUIRED | _CONTEXT_RESPONSE_OPTIONAL):
+        return None
+    if (type(data["threat_context"]) is not dict
+            or type(data["source_freshness"]) is not dict
+            or type(data["reason"]) is not list
+            or any(type(x) is not dict for x in data["reason"])
+            or type(data["confidence_reason"]) is not list
+            or any(type(x) is not dict for x in data["confidence_reason"])
+            or type(data["recommendation"]) is not dict
+            or type(data["multi_ioc_scope"]) is not dict
+            or type(data["advisory_id"]) is not str
+            or not data["advisory_id"] or len(data["advisory_id"]) > 64):
+        return None
+    if any(type(data[name]) not in (int, float) or not 0 <= data[name] <= 100
+           for name in ("threat_score", "confidence")):
+        return None
+    if "advisory_notice" in data and type(data["advisory_notice"]) is not str:
+        return None
+    for name in ("engage_refs", "rule_refs"):
+        if name in data and (type(data[name]) is not list
+                             or any(type(entry) is not dict for entry in data[name])):
+            return None
+    for entry in data.get("engage_refs", []):
+        if (set(entry) != {"technique", "activity_id", "name", "approach"}
+                or any(type(entry[key]) is not str for key in entry)):
+            return None
+    for entry in data.get("rule_refs", []):
+        if (not {"technique", "rule_type", "rule_id"} <= entry.keys()
+                or not entry.keys() <= {"technique", "rule_type", "rule_id", "title", "source_url"}
+                or any(type(entry[key]) is not str for key in ("technique", "rule_type", "rule_id"))
+                or any(entry.get(key) is not None and type(entry[key]) is not str
+                       for key in ("title", "source_url"))):
+            return None
+    if "engagement_advisory" in data and data["engagement_advisory"] is not None \
+            and type(data["engagement_advisory"]) is not dict:
+        return None
+    if "engagement_repeatability_score" in data and data["engagement_repeatability_score"] is not None \
+            and type(data["engagement_repeatability_score"]) is not int:
+        return None
+    nodes = 0
+    stack = [(data, 0)]
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > 512 or depth > 8:
+            return None
+        if type(item) is dict:
+            if len(item) > 64 or any(type(k) is not str or len(k) > 128 for k in item):
+                return None
+            stack.extend((child, depth + 1) for child in item.values())
+        elif type(item) is list:
+            if len(item) > 64:
+                return None
+            stack.extend((child, depth + 1) for child in item)
+        elif type(item) is str and len(item) > 2048:
+            return None
+        elif item is not None and type(item) not in (str, int, float, bool):
+            return None
+    threat = data["threat_context"]
+    # Knowledge emits config feed groups (fallback: feed_id), never IOC values.
+    # Reject the whole receipt rather than silently keeping a partial source set.
+    matches = threat.get("ioc_matches", [])
+    if type(matches) is not list or len(matches) > 32:
+        return None
+    source_groups: set[str] = set()
+    source_count = 0
+    for match in matches:
+        if type(match) is not dict:
+            return None
+        sources = match.get("sources", [])
+        if type(sources) is not list or len(sources) > 16:
+            return None
+        source_count += len(sources)
+        if source_count > 64:
+            return None
+        for source in sources:
+            if type(source) is not str or not _SOURCE_GROUP_RE.fullmatch(source):
+                return None
+            source_groups.add(source)
+        if len(source_groups) > 16:
+            return None
+    freshness = data["source_freshness"]
+    mappings = threat.get("attack_mapping", [])
+    if type(mappings) is not list or len(mappings) > 32:
+        return None
+    techniques = []
+    for entry in mappings:
+        if type(entry) is not dict or type(entry.get("technique")) is not str:
+            return None
+        technique = entry["technique"]
+        if not _ATTACK_TECHNIQUE_RE.fullmatch(technique):
+            return None
+        if technique not in techniques:
+            techniques.append(technique)
+    if len(freshness) > 8:
+        return None
+    projected_freshness: dict[str, Any] = {}
+    if "oldest_feed_days" in freshness:
+        days = freshness["oldest_feed_days"]
+        if days is not None and (type(days) not in (int, float) or not 0 <= days <= 36500):
+            return None
+        projected_freshness["oldest_feed_days"] = days
+    if "attack_version" in freshness:
+        version = freshness["attack_version"]
+        if version is not None and (type(version) is not str or not _ATTACK_VERSION_RE.fullmatch(version)):
+            return None
+        projected_freshness["attack_version"] = version
+    if set(freshness) - {"oldest_feed_days", "attack_version"}:
+        return None
+    reported_state = None
+    state = data.get("reported_defensive_state")
+    if state is not None:
+        required_state = {"reported_state", "state_vocabulary", "producer_product", "producer_node",
+                          "trace_id", "decision_ref", "observed_at", "observation_ref"}
+        optional_state = {"authority_class", "is_canonical", "canonical_state"}
+        if (type(state) is not dict or not required_state <= state.keys()
+                or not state.keys() <= required_state | optional_state
+                or any(type(state[key]) is not str for key in required_state)
+                or state.get("authority_class", "producer_reported_state") != "producer_reported_state"
+                or type(state.get("is_canonical", False)) is not bool):
+            return None
+        canonical = state.get("canonical_state")
+        if canonical is not None and type(canonical) is not str:
+            return None
+        if state.get("is_canonical") is True and type(canonical) is str and canonical in {
+                "OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}:
+            reported_state = canonical
+    if not techniques and not source_groups and not projected_freshness and reported_state is None:
+        return None
+    return {
+        "kind": "knowledge_context_response_advisory",
+        "source_kind": "knowledge_context_response",
+        "claim_status": "reported_unverified",
+        "attack_techniques": techniques,
+        "source_groups": sorted(source_groups),
+        "source_freshness": projected_freshness,
+        "reported_canonical_state": reported_state,
+        "trust": "unverified_advisory_only",
     }
 
 
@@ -332,6 +540,7 @@ class AssistantCore:
     def explain(self, frame: MioSituationFrame, *, knowledge=(), references=(),
                 reported_knowledge=(), now: str,
                 knowledge_lite_advisories=(), knowledge_attempted: bool = True,
+                knowledge_context_response=None,
                 cancel_check=None, stale_check=None) -> Assistance:
         if type(knowledge_attempted) is not bool:
             raise TypeError("knowledge_attempted_must_be_bool")
@@ -343,6 +552,7 @@ class AssistantCore:
         static_references: list[dict[str, Any]] = []
         reported_contexts: list[dict[str, Any]] = []
         lite_advisories: list[dict[str, Any]] = []
+        context_response_advisory = None
         rejected = False
         knowledge_expired = False
         if type(knowledge) not in (tuple, list) or len(knowledge) > 4:
@@ -383,6 +593,10 @@ class AssistantCore:
                     rejected = True
                 else:
                     lite_advisories.append(projected)
+        if knowledge_context_response is not None:
+            context_response_advisory = _bounded_context_response(knowledge_context_response)
+            if context_response_advisory is None:
+                rejected = True
         refs = tuple(dict.fromkeys(ref for ctx in contexts + static_references for ref in ctx["evidence_refs"]
                                    if model_id_ok(ref, "evidence_ref")))[:32]
         reported_refs = tuple(dict.fromkeys(
@@ -490,6 +704,8 @@ class AssistantCore:
             knowledge_outcome = ContextDependencyOutcome.EXPIRED
         elif contexts or reported_contexts or static_references:
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        elif context_response_advisory and knowledge_outcome is ContextDependencyOutcome.ABSENT:
+            knowledge_outcome = ContextDependencyOutcome.AVAILABLE
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             if rejected and not lite_advisories:
                 knowledge_outcome = ContextDependencyOutcome.REJECTED
@@ -498,6 +714,7 @@ class AssistantCore:
         if (knowledge_attempted is False and not rejected
                 and not frame.knowledge_refs
                 and not contexts and not static_references and not reported_contexts and not lite_advisories
+                and context_response_advisory is None
                 and not knowledge and not references and not reported_knowledge and not knowledge_lite_advisories
                 and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             knowledge_outcome = ContextDependencyOutcome.NOT_QUERIED
@@ -560,6 +777,8 @@ class AssistantCore:
             "hypotheses": hypotheses, "unknowns": unknowns[:24],
             "next_checks": [] if interrupted else checks,
             "knowledge": [] if interrupted else contexts + static_references + reported_contexts + lite_advisories,
+            **({"knowledge_context_response_advisory": None if interrupted else context_response_advisory}
+               if context_response_advisory is not None else {}),
             "handoff": handoff,
             "reasoning_trace": ([] if outcome.state is ReasoningState.VALIDATION_REJECTED
                                 else _public_reasoning_trace(outcome.trace)),

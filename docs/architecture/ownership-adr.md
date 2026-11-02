@@ -3,7 +3,7 @@
 **Status:** Project-owner direction recorded; cross-product adoption and contract acceptance pending.
 **Decision date:** 2026-10-31; direction/evidence refresh 2026-11-02
 
-The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. MIO `main` remains `6302e665c3ac6cf7004407965299d81dc9ddfc8a`; the implementation reviewed here is PR #15 `26a5046dd493a3587f0b03dbc574211ff781d1d1`.
+The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. MIO `main` is `c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524`, including merged PRs #15, #17, #18 and #16. The [inventory](ai-inventory.md) records their final heads and merge commits; merged library capability does not establish product adoption.
 
 ## Context and decision
 
@@ -22,7 +22,7 @@ Edge remains the deterministic decision and enforcement authority. M.I.O. may ex
 
 ## Candidate routes and migration boundaries
 
-The [AI inventory](ai-inventory.md) records exact candidate heads and remaining product callsites; the [migration matrix](../migration.md#compatibility-and-rollout-matrix) records supported claims and unproven combinations. Shared semantics belong in MIO under the project direction; moving those semantics does not move Edge's immediate deterministic decisions/enforcement, Nexus lifecycle/admission/operator entry, Knowledge provenance, or Fabric wire contracts.
+The [AI inventory](ai-inventory.md) records exact merged MIO heads and product candidate heads and remaining product callsites; the [migration matrix](../migration.md#compatibility-and-rollout-matrix) records supported claims and unproven combinations. Shared semantics belong in MIO under the project direction; moving those semantics does not move Edge's immediate deterministic decisions/enforcement, Nexus lifecycle/admission/operator entry, Knowledge provenance, or Fabric wire contracts.
 
 Edge still contains legacy product model paths. Its optional PR #525 auxiliary path calls the shared core without a model; its separate model/Knowledge work and refreshed local stack are not evidence that all product assistance has migrated. Nexus #398 supplies shared fast assistance, while its local inference/retrieval orchestration remains product code. A common separate-time Knowledge-to-LLM reasoning path has not been established at these heads. Deterministic Mission Pack references are not that path.
 
