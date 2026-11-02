@@ -64,6 +64,45 @@ class EvaluationRegistryFromDictValidationTests(unittest.TestCase):
     def test_record_with_reversed_interval_is_rejected(self):
         self.assertRejects(raw(records=[record(created=EXPIRES, expires=CREATED)]), 'invalid_registry_interval')
 
+    def test_registry_timestamps_require_timezone_aware_strings(self):
+        for field, value in (
+            ('created', '2026-10-31T00:00:00'),
+            ('created', 5),
+            ('expires', '2026-10-31T00:00:00'),
+            ('expires', 5),
+        ):
+            with self.subTest(field=field, value=value):
+                interval = {'created': CREATED, 'expires': EXPIRES}
+                interval[field] = value
+                self.assertRejects(
+                    raw(records=[record(**interval)]), 'invalid_learning_time'
+                )
+
+    def test_offset_timestamps_compare_by_instant(self):
+        # These different offsets represent the same UTC instant.
+        self.assertRejects(
+            raw(records=[record(
+                created='2026-10-31T00:00:00+09:00',
+                expires='2026-10-30T15:00:00+00:00',
+            )]),
+            'invalid_registry_interval',
+        )
+        # The local timestamp sorts after the UTC timestamp as text, but is
+        # one hour earlier as an instant and therefore forms a valid interval.
+        accepted = EvaluationRegistry.from_dict(raw(records=[record(
+            created='2026-10-31T00:00:00+09:00',
+            expires='2026-10-30T16:00:00+00:00',
+        )]))
+        self.assertEqual(len(accepted.records), 1)
+
+    def test_record_snapshots_must_be_bounded_codes(self):
+        invalid = record()
+        # Bypass record(), which normalizes its snapshots argument with list().
+        invalid['snapshots'] = 'snapshot1'
+        self.assertRejects(
+            raw(records=[invalid]), 'invalid_learning_codes'
+        )
+
     def test_duplicate_artifact_digest_is_rejected(self):
         self.assertRejects(raw(records=[record(), record()]), 'duplicate_registry_record')
 
@@ -81,6 +120,26 @@ class EvaluationRegistryFromDictValidationTests(unittest.TestCase):
 
     def test_malformed_record_digest_is_rejected(self):
         self.assertRejects(raw(records=[record(digest='sha256:XYZ')]), 'invalid_registry_digests')
+
+    def test_non_empty_registry_roundtrips(self):
+        state = EvaluationRegistry.from_dict(raw(
+            records=[record(snapshots=('snapshot-1',))],
+            selected=DIGEST_A,
+            history=[DIGEST_A],
+            revoked_artifacts=[DIGEST_B],
+            revoked_snapshots=['snapshot-2'],
+        ))
+        self.assertEqual(EvaluationRegistry.from_dict(state.to_dict()), state)
+
+    def test_registry_size_caps_are_enforced(self):
+        cases = (
+            (raw(records=[record()] * 129), 'invalid_registry_records'),
+            (raw(history=[DIGEST_A] * 129), 'invalid_registry_digests'),
+            (raw(revoked_snapshots=['snapshot-1'] * 2049), 'invalid_learning_codes'),
+        )
+        for payload, code in cases:
+            with self.subTest(code=code):
+                self.assertRejects(payload, code)
 
 
 class EvaluationRegistryRevokeArgumentTests(unittest.TestCase):
