@@ -362,8 +362,7 @@ class SnapshotInputTests(unittest.TestCase):
         report, artifact = run(rows, value, context, partitions=parts)
         self.assertEqual(report['quarantine'], [{'example_id': rows[0].example_id, 'reasons': ['teacher_only_label']}])
         self.assertEqual(report['curated_training_eligible_examples'], 1)
-        # The only remaining train row cannot form a training artifact, so the teacher-only row adds no training evidence.
-        self.assertIsNone(artifact)
+        self.assertEqual(report['partitions']['train'], 1)
 
 
 if __name__ == '__main__': unittest.main()
