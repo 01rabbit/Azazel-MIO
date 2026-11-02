@@ -1,15 +1,18 @@
+import io
 import json
 import hashlib
 import os
-from pathlib import Path
+import shutil
 import sqlite3
 import stat
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from azazel_mio import cli as ir_cli
 from azazel_mio.cli import (
     EXIT_INVALID_EVIDENCE,
     MAX_BYTES,
@@ -25,6 +28,14 @@ from azazel_mio.cli import (
     timeline,
     verify,
 )
+from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_fast
+from azazel_mio.ir_adapter import KERNEL_SOURCE_REVISION
+
+INPUT_SCHEMA = "mio.ir.fast-assessment-inputs.v1"
+EXPLANATION = (
+    "Candidate-only advisory priority index from caller-asserted normalized signals; "
+    "factors are the kernel terms. Not a fact, probability or authorization."
+)
 
 
 class IRWorkflowTests(unittest.TestCase):
@@ -32,6 +43,8 @@ class IRWorkflowTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.inputs = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.inputs, True)
         self.db = connect(self.root)
         self.addCleanup(self.db.close)
         self.case = self.db.execute("INSERT INTO cases(name,created) VALUES('test','now')").lastrowid
@@ -45,7 +58,9 @@ class IRWorkflowTests(unittest.TestCase):
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
         stored = self.root / "objects" / digest
         self.assertEqual(stat.S_IMODE(stored.lstat().st_mode), 0o400)
+        self.assertEqual(verify(self.db, self.root, self.case)[0]["case_id"], self.case)
         self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], eid)
+        self.assertEqual(timeline(self.db, self.case)[0]["case_id"], self.case)
         self.assertEqual(timeline(self.db, self.case)[0]["timestamp_utc"], "2026-10-01T01:00:00+00:00")
         self.assertEqual(report(self.db, self.root, self.case)["timeline"][0]["record"], 1)
 
@@ -600,6 +615,229 @@ class IRWorkflowTests(unittest.TestCase):
         self.db.commit()
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         self.assertEqual(timeline(self.db, other), [])
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {"MIO_IR_HOME": str(self.root)}), patch(
+            "sys.argv", ["mio-ir", *argv]
+        ), redirect_stdout(out), redirect_stderr(err):
+            code = main()
+        return code, out.getvalue(), err.getvalue()
+
+    def import_records(self):
+        source = self.inputs / "events.jsonl"
+        source.write_text(
+            '{"timestamp":"2026-10-01T10:00:00+09:00","summary":"Synthetic PowerShell execution"}\n'
+            '{"timestamp":"2026-10-01T10:02:00+09:00","summary":"Synthetic DNS query"}\n',
+            encoding="utf-8",
+        )
+        code, out, err = self.run_cli(
+            "evidence", "import", "--case", str(self.case), "--file", str(source), "--format", "jsonl"
+        )
+        self.assertEqual((code, err), (0, ""))
+        evidence_id = json.loads(out)["evidence_id"]
+        code, out, err = self.run_cli("timeline", "build", "--case", str(self.case))
+        self.assertEqual((code, err), (0, ""))
+        rows = json.loads(out)
+        self.assertEqual({row["evidence_id"] for row in rows}, {evidence_id})
+        return rows
+
+    def candidate_document(self, rows, **overrides):
+        first = rows[0]
+        document = {
+            "schema_version": INPUT_SCHEMA,
+            "case_id": self.case,
+            "candidates": [
+                {
+                    "event_id": first["event_id"],
+                    "evidence_id": first["evidence_id"],
+                    "record_number": first["record"],
+                    "normalizer_version": "synthetic-normalizer-1",
+                    "inputs": {
+                        "severity": 2,
+                        "classes": ["c2"],
+                        "token_only": False,
+                        "ports": [{"kind": "web", "port": 443}],
+                        "action": "drop",
+                        "deception_sid": False,
+                        "benign_classless": False,
+                    },
+                }
+            ],
+        }
+        document.update(overrides)
+        return document
+
+    def write_input(self, document, name="normalized-input.json"):
+        path = self.inputs / name
+        path.write_text(document if isinstance(document, str) else json.dumps(document), encoding="utf-8")
+        return path
+
+    def assess(self, path, case=None):
+        return self.run_cli(
+            "assessment", "candidate", "--case", str(self.case if case is None else case), "--file", str(path)
+        )
+
+    def assert_rejected(self, result):
+        code, out, err = result
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("error:", err)
+
+    def snapshot(self):
+        return [self.db.execute(f"SELECT * FROM {table} ORDER BY id").fetchall() for table in ("cases", "evidence", "events")]
+
+    def test_cli_candidate_assessment_end_to_end(self):
+        rows = self.import_records()
+        path = self.write_input(self.candidate_document(rows))
+        before = self.snapshot()
+
+        code, out, err = self.assess(path)
+
+        self.assertEqual((code, err), (0, ""))
+        result = json.loads(out)
+        self.assertEqual(
+            set(result),
+            {"schema", "adapter_version", "kernel_source_revision", "case_id", "status", "candidates", "limitations"},
+        )
+        self.assertEqual(result["kernel_source_revision"], KERNEL_SOURCE_REVISION)
+        self.assertEqual(result["status"], "candidates")
+        self.assertEqual(result["case_id"], self.case)
+        (entry,) = result["candidates"]
+        self.assertEqual(
+            set(entry),
+            {"event_id", "record_number", "evidence_refs", "normalizer_version", "provenance",
+             "status", "score", "factors", "conflict_evidence_ids", "explanation"},
+        )
+        self.assertEqual(entry["event_id"], rows[0]["event_id"])
+        self.assertEqual(entry["record_number"], rows[0]["record"])
+        self.assertEqual(entry["evidence_refs"], [rows[0]["evidence_id"]])
+        self.assertEqual(entry["status"], "scored")
+        self.assertEqual(entry["score"], 93)
+        self.assertEqual(entry["factors"], [
+            "severity=2", "sid_present", "threat_class=c2(48)", "web_port=443", "action=drop(contained)",
+        ])
+        expected = assess_fast(FastAssessmentInput(
+            severity=2, classes=("c2",), ports=(PortSignal("web", 443),), action="drop"))
+        self.assertEqual((entry["score"], entry["factors"]), (expected.score, list(expected.factors)))
+        self.assertEqual(entry["provenance"], "caller_asserted_unverified")
+        self.assertEqual(entry["conflict_evidence_ids"], [])
+        self.assertEqual(entry["explanation"], EXPLANATION)
+        self.assertTrue(any(item.startswith("no_authority:") for item in result["limitations"]))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.assess(path), (0, out, ""))
+
+    def test_cli_candidate_abstains_on_empty_candidates(self):
+        self.import_records()
+        path = self.write_input({"schema_version": INPUT_SCHEMA, "case_id": self.case, "candidates": []})
+
+        code, out, err = self.assess(path)
+
+        self.assertEqual((code, err), (0, ""))
+        result = json.loads(out)
+        self.assertEqual(result["status"], "abstained_no_normalized_input")
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["kernel_source_revision"], KERNEL_SOURCE_REVISION)
+
+    def test_cli_candidate_connection_is_query_only_after_bootstrap(self):
+        rows = self.import_records()
+        path = self.write_input(self.candidate_document(rows))
+        before = self.snapshot()
+        real = ir_cli.assess_candidates
+        write_errors = []
+
+        def probe(db, root, case, file):
+            # A write through the same connection must fail once the command runs.
+            try:
+                db.execute("INSERT INTO cases(name,created) VALUES('probe','now')")
+            except sqlite3.OperationalError as exc:
+                write_errors.append(str(exc))
+            return real(db, root, case, file)
+
+        with patch.object(ir_cli, "assess_candidates", probe):
+            code, out, err = self.assess(path)
+
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(len(write_errors), 1)
+        self.assertIn("readonly", write_errors[0])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_cli_candidate_rejects_malformed_and_wrong_references(self):
+        rows = self.import_records()
+        mutations = {
+            "raw summary text": lambda d: d["candidates"][0].update(summary="raw evidence text"),
+            "unknown top-level key": lambda d: d.update(extra=1),
+            "wrong schema version": lambda d: d.update(schema_version="mio.ir.fast-assessment-inputs.v0"),
+            "file case mismatch": lambda d: d.update(case_id=self.case + 1),
+            "string severity": lambda d: d["candidates"][0]["inputs"].update(severity="2"),
+            "unknown signal key": lambda d: d["candidates"][0]["inputs"].update(label="c2"),
+            "bool event id": lambda d: d["candidates"][0].update(event_id=True),
+            "unknown event": lambda d: d["candidates"][0].update(event_id=999999),
+            "wrong evidence": lambda d: d["candidates"][0].update(evidence_id=999999),
+            "wrong record": lambda d: d["candidates"][0].update(record_number=99),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label):
+                document = self.candidate_document(rows)
+                mutate(document)
+                self.assert_rejected(self.assess(self.write_input(document)))
+
+    def test_cli_candidate_rejects_malformed_json(self):
+        self.import_records()
+        base = '"schema_version":"%s","case_id":%d' % (INPUT_SCHEMA, self.case)
+        texts = {
+            "not json": "{not json",
+            "duplicate key": '{%s,"case_id":%d,"candidates":[]}' % (base, self.case),
+            "non-finite number": '{%s,"candidates":[{"event_id":NaN}]}' % base,
+        }
+        for label, text in texts.items():
+            with self.subTest(label):
+                self.assert_rejected(self.assess(self.write_input(text)))
+
+    def test_cli_candidate_rejects_nested_conflict_array_as_error(self):
+        rows = self.import_records()
+        document = self.candidate_document(rows)
+        document["candidates"][0]["conflict_evidence_ids"] = [[rows[0]["evidence_id"]]]
+        result = self.assess(self.write_input(json.dumps(document)))
+
+        code, out, err = result
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("error: conflict evidence is not verified"), err)
+        self.assertNotIn("Traceback", err)
+
+    def test_cli_candidate_rejects_unverified_evidence(self):
+        rows = self.import_records()
+        digest = self.db.execute("SELECT digest FROM evidence WHERE case_id=?", (self.case,)).fetchone()[0]
+        path = self.write_input(self.candidate_document(rows))
+        target = self.root / "objects" / digest
+        target.chmod(0o600)
+        target.write_text("tampered")
+
+        self.assert_rejected(self.assess(path))
+
+    def test_cli_candidate_rejects_cross_case_and_unknown_case(self):
+        rows = self.import_records()
+        other = json.loads(self.run_cli("case", "create", "--name", "other")[1])["case_id"]
+        path = self.write_input(self.candidate_document(rows))
+        # Document names this case, but the selected case is the other one.
+        self.assert_rejected(self.assess(path, case=other))
+        # Document names the other case but references this case's event and evidence.
+        path = self.write_input(self.candidate_document(rows, case_id=other))
+        self.assert_rejected(self.assess(path, case=other))
+        self.assert_rejected(self.assess(path, case=999))
+
+    def test_cli_candidate_input_must_be_regular_and_bounded(self):
+        rows = self.import_records()
+        real = self.write_input(self.candidate_document(rows))
+        link = self.inputs / "link.json"
+        link.symlink_to(real)
+        self.assert_rejected(self.assess(link))
+        fifo = self.inputs / "fifo.json"
+        os.mkfifo(fifo)
+        self.assert_rejected(self.assess(fifo))
+        oversized = self.write_input("{" + " " * (512 * 1024) + "}", name="oversized.json")
+        self.assert_rejected(self.assess(oversized))
+        self.assert_rejected(self.assess(self.inputs / "missing.json"))
 
 
 if __name__ == "__main__":

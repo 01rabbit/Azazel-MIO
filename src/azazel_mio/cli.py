@@ -15,6 +15,8 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
+from .ir_adapter import assess_ir_candidates, parse_candidate_document
+
 MAX_BYTES = 16 * 1024 * 1024
 MAX_RECORDS = 10000
 MAX_JSON_NESTING = 256
@@ -126,6 +128,7 @@ def migrate_schema(db):
         if db.in_transaction:
             db.execute("ROLLBACK")
         raise
+MAX_INPUT_BYTES = 512 * 1024
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -242,7 +245,7 @@ def verify(db, root, case):
                              and hashlib.sha256(raw).hexdigest() == digest)
                 except OSError:
                     valid = False
-        results.append({"evidence_id": eid, "sha256": digest, "valid": valid})
+        results.append({"case_id": case, "evidence_id": eid, "sha256": digest, "valid": valid})
     return results
 
 def parse_records(raw, fmt):
@@ -439,7 +442,7 @@ def import_file(db, root, case, filename, fmt):
 
 def timeline(db, case):
     check_case(db, case)
-    return [{"event_id": row[0], "evidence_id": row[1], "record": row[2],
+    return [{"case_id": case, "event_id": row[0], "evidence_id": row[1], "record": row[2],
              "timestamp_utc": row[3], "original_timestamp": row[4], "summary": row[5]}
             for row in db.execute("""
               SELECT events.id,evidence.id,events.record_number,events.timestamp,events.original_timestamp,events.summary
@@ -453,6 +456,40 @@ def report(db, root, case):
     return {"case_id": case, "case_name": name, "generated_at": utc_now(),
             "evidence": verify(db, root, case), "timeline": timeline(db, case),
             "limitations": ["No inference or maliciousness attribution", "JSON/JSONL explicit timestamp/summary mapping only"]}
+
+def _reject_duplicate_keys(pairs):
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("duplicate key in normalized input")
+    return dict(pairs)
+
+def _reject_constant(token):
+    raise ValueError("non-finite number in normalized input")
+
+def read_candidate_document(path):
+    # O_NONBLOCK stops a FIFO from blocking open; fstat below then rejects it.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValueError("cannot open input: " + exc.strerror) from exc
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("input must be a regular non-symlink file")
+        if info.st_size > MAX_INPUT_BYTES:
+            raise ValueError("input too large")
+        raw = handle.read(MAX_INPUT_BYTES + 1)
+    if len(raw) > MAX_INPUT_BYTES:
+        raise ValueError("input too large")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys,
+                      parse_constant=_reject_constant)
+
+def assess_candidates(db, root, case, path):
+    # Read-only: the store is queried, never written. The timeline and verify
+    # rows both come from this one selected case, and each row carries case_id.
+    check_case(db, case)
+    candidates = parse_candidate_document(read_candidate_document(path), case)
+    return assess_ir_candidates(case, timeline(db, case), verify(db, root, case), candidates)
 
 def main():
     parser = argparse.ArgumentParser(prog="mio-ir")
@@ -469,6 +506,10 @@ def main():
     time = sub.add_parser("timeline")
     ts = time.add_subparsers(dest="action", required=True)
     build = ts.add_parser("build"); build.add_argument("--case", type=int, required=True)
+    asm = sub.add_parser("assessment")
+    asms = asm.add_subparsers(dest="action", required=True)
+    cand = asms.add_parser("candidate"); cand.add_argument("--case", type=int, required=True)
+    cand.add_argument("--file", required=True)
     rep = sub.add_parser("report")
     rs = rep.add_subparsers(dest="action", required=True)
     gen = rs.add_parser("generate"); gen.add_argument("--case", type=int, required=True)
@@ -487,6 +528,11 @@ def main():
                 output = {"evidence_id": import_file(db, root, args.case, args.file, args.format)} if args.action == "import" else verify(db, root, args.case)
             elif args.group == "timeline":
                 output = timeline(db, args.case)
+            elif args.group == "assessment":
+                # connect() has finished the idempotent bootstrap; from here on the
+                # connection is query-only, so no write can reach the case store.
+                db.execute("PRAGMA query_only=ON")
+                output = assess_candidates(db, root, args.case, args.file)
             else:
                 output = report(db, root, args.case)
                 report_has_invalid_evidence = any(
