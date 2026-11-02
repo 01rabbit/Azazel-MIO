@@ -8,6 +8,7 @@ inside a private temporary directory. There is deliberately no bypass flag.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -16,6 +17,7 @@ import resource
 import selectors
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -34,6 +36,7 @@ DIAG_LIMIT = 400
 MAX_COMMAND_OUTPUT_BYTES = 64 * 1024
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 GUEST_ARCHES = frozenset({"aarch64", "arm64"})
+VM_DETECTOR_PATHS = (Path("/usr/bin/systemd-detect-virt"), Path("/bin/systemd-detect-virt"))
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_REFUSED = 3
@@ -107,6 +110,14 @@ def check_vmware(virt_type: str) -> str:
     return virt_type
 
 
+def resolve_vm_detector() -> str | None:
+    """Use the Debian system utility, not a same-named PATH entry."""
+    for candidate in VM_DETECTOR_PATHS:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 def console_script_interpreter(exe: str, path: str) -> str:
     try:
         with open(exe, "rb") as script:
@@ -138,11 +149,12 @@ def run_captured(command: list[str], env: dict[str, str], timeout: float,
                  label: str) -> subprocess.CompletedProcess[str]:
     """Capture bounded output without a shell and enforce a single deadline."""
     proc: subprocess.Popen[bytes] | None = None
+    terminate_group = False
     selector = selectors.DefaultSelector()
     buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     try:
         proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, shell=False)
+                                stderr=subprocess.PIPE, shell=False, start_new_session=True)
         assert proc.stdout is not None and proc.stderr is not None
         for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
             os.set_blocking(stream.fileno(), False)
@@ -151,6 +163,7 @@ def run_captured(command: list[str], env: dict[str, str], timeout: float,
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                terminate_group = True
                 raise subprocess.TimeoutExpired(command, timeout)
             for key, _ in selector.select(remaining):
                 try:
@@ -163,6 +176,7 @@ def run_captured(command: list[str], env: dict[str, str], timeout: float,
                     continue
                 target = buffers[key.data]
                 if len(target) + len(chunk) > MAX_COMMAND_OUTPUT_BYTES:
+                    terminate_group = True
                     raise AcceptanceError("output", label + " exceeded output limit")
                 target.extend(chunk)
         returncode = proc.wait(timeout=max(0.01, deadline - time.monotonic()))
@@ -172,8 +186,10 @@ def run_captured(command: list[str], env: dict[str, str], timeout: float,
             bytes(buffers["stderr"]).decode("utf-8", errors="replace"),
         )
     except subprocess.TimeoutExpired as exc:
+        terminate_group = True
         raise AcceptanceError(label, label + " timed out") from exc
     except OSError as exc:
+        terminate_group = True
         raise AcceptanceError(label, label + " could not start: " + bounded(str(exc))) from exc
     finally:
         selector.close()
@@ -181,16 +197,19 @@ def run_captured(command: list[str], env: dict[str, str], timeout: float,
             for stream in (proc.stdout, proc.stderr):
                 if stream is not None and not stream.closed:
                     stream.close()
-            if proc.poll() is None:
-                proc.kill()
+            if terminate_group or proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 proc.wait()
 
 
-def installed_version(exe: str, path: str) -> str:
+def installed_version(exe: str, path: str, home: str) -> str:
     interpreter = console_script_interpreter(exe, path)
     code = "import importlib.metadata as m; print(m.version('" + PACKAGE + "'))"
-    env = {"PATH": path, "LC_ALL": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
-    proc = run_captured([interpreter, "-c", code], env, VERSION_CHECK_TIMEOUT_SECONDS,
+    env = {"PATH": path, "HOME": home, "LC_ALL": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
+    proc = run_captured([interpreter, "-P", "-c", code], env, VERSION_CHECK_TIMEOUT_SECONDS,
                         "package version check")
     if proc.returncode != 0:
         raise AcceptanceError("command-version", PACKAGE + " metadata unavailable for mio-ir interpreter")
@@ -281,10 +300,20 @@ def read_small(path: Path) -> str:
 
 
 def peak_rss_kb() -> dict[str, int]:
-    """Return separate runner/child RSS high-water marks; Linux reports KiB."""
+    """Return runner and all-child RSS high-water marks; Linux reports KiB."""
     own = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     children = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-    return {"runner": own, "children": children, "max": max(own, children)}
+    return {"runner": own, "children_all_steps": children, "max": max(own, children)}
+
+
+def resolved_home() -> str:
+    configured = os.environ.get("HOME")
+    if configured:
+        return configured
+    try:
+        return str(Path.home())
+    except RuntimeError:
+        return "/nonexistent"
 
 
 class Acceptance:
@@ -293,6 +322,13 @@ class Acceptance:
         self.env = env
         self.steps: list[dict[str, Any]] = []
         self.deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
+
+    def read_report(self, step: str, path: Path) -> str:
+        started = time.monotonic()
+        try:
+            return read_small(path)
+        finally:
+            self.steps.append({"step": step + ".read", "duration_ms": elapsed_ms(started)})
 
     def invoke(self, step: str, args: list[str], accept: tuple[int, ...] = (0,)) -> Any:
         started = time.monotonic()
@@ -313,6 +349,7 @@ class Acceptance:
         out.mkdir()
         source = work / "synthetic.jsonl"
         source.write_text("\n".join(json.dumps(r) for r in SYNTHETIC_RECORDS) + "\n", encoding="utf-8")
+        expected_digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
         created = self.invoke("case.create", ["case", "create", "--name", "acceptance-synthetic"])
         case_id = created.get("case_id") if isinstance(created, dict) else None
@@ -334,9 +371,11 @@ class Acceptance:
                 verified[0].get("evidence_id") == imported["evidence_id"],
                 "unexpected evidence verification result")
         digest = verified[0].get("sha256")
+        require("evidence.verify", digest == expected_digest, "evidence digest does not match synthetic source")
 
         timeline = self.invoke("timeline.build", ["timeline", "build", "--case", case_arg])
-        require("timeline.build", isinstance(timeline, list) and len(timeline) == len(SYNTHETIC_RECORDS),
+        require("timeline.build", isinstance(timeline, list) and len(timeline) == len(SYNTHETIC_RECORDS)
+                and all(isinstance(event, dict) for event in timeline),
                 "timeline event count mismatch")
         expected_summaries = ["synthetic alert B", "synthetic alert A", "synthetic record without timestamp"]
         expected_timestamps = ["2026-01-01T00:00:01+00:00", "2026-01-01T00:00:02+00:00", None]
@@ -348,20 +387,28 @@ class Acceptance:
         json_out = out / "report.json"
         self.invoke("report.json", ["report", "generate", "--case", case_arg,
                                     "--format", "json", "--output", str(json_out)])
-        report = parse_json_stdout("report.json", read_small(json_out))
+        report = parse_json_stdout("report.json", self.read_report("report.json", json_out))
         require("report.json", isinstance(report, dict) and report.get("timeline") == timeline
                 and all_valid(report.get("evidence")), "JSON report mismatch")
 
         md_out = out / "report.md"
         self.invoke("report.markdown", ["report", "generate", "--case", case_arg,
                                         "--format", "markdown", "--output", str(md_out)])
-        require("report.markdown", read_small(md_out).startswith("# IR Case"), "markdown report malformed")
+        markdown = self.read_report("report.markdown", md_out)
+        require("report.markdown", markdown.startswith("# IR Case") and
+                "synthetic alert A" in markdown and "synthetic alert B" in markdown and
+                "Evidence verification:" in markdown, "markdown report malformed")
 
-        tamper_object(Path(self.env["MIO_IR_HOME"]), digest, work)
+        tamper_started = time.monotonic()
+        try:
+            tamper_object(Path(self.env["MIO_IR_HOME"]), digest, work)
+        finally:
+            self.steps.append({"step": "tamper.object", "duration_ms": elapsed_ms(tamper_started)})
         tampered = self.invoke("evidence.verify.tampered", ["evidence", "verify", "--case", case_arg],
                                accept=(VERIFY_INVALID_EXIT,))
         require("evidence.verify.tampered", isinstance(tampered, list) and len(tampered) == 1 and
-                tampered[0].get("evidence_id") == imported["evidence_id"] and
+                isinstance(tampered[0], dict) and tampered[0].get("evidence_id") == imported["evidence_id"] and
+                tampered[0].get("sha256") == expected_digest and
                 tampered[0].get("valid") is False,
             "integrity refusal not observed after tamper")
 
@@ -382,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
     runner: Acceptance | None = None
     try:
         guest = check_guest(system, platform.machine(), read_os_release())
-        virt_tool = shutil.which("systemd-detect-virt")
+        virt_tool = resolve_vm_detector()
         if virt_tool is None:
             raise GuestRefused("guest-check", "refused: systemd-detect-virt is required to verify VMware")
         virt_env = {"PATH": os.environ.get("PATH", ""), "LC_ALL": "C"}
@@ -394,13 +441,15 @@ def main(argv: list[str] | None = None) -> int:
         exe = shutil.which(COMMAND)
         if exe is None:
             raise AcceptanceError("command", COMMAND + " not found on PATH")
-        version = installed_version(exe, os.environ.get("PATH", ""))
+        child_home = resolved_home()
+        version = installed_version(exe, os.environ.get("PATH", ""), child_home)
         with tempfile.TemporaryDirectory(prefix="mio-ir-accept-") as tmp:
             home = Path(tmp) / "home"
             home.mkdir(mode=0o700)
             env = {
                 "PATH": os.environ.get("PATH", ""),
-                "HOME": str(home),
+                # Preserve user-site package resolution; all CLI case data is isolated by MIO_IR_HOME.
+                "HOME": child_home,
                 "LC_ALL": "C.UTF-8",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "MIO_IR_HOME": str(home / "mio-ir-data"),

@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -63,6 +64,16 @@ def test_check_vmware_refuses_other_hosts(virt_type):
         runner.check_vmware(virt_type)
 
 
+def test_vm_detector_uses_only_fixed_system_paths(tmp_path, monkeypatch):
+    tool = tmp_path / "systemd-detect-virt"
+    tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.setattr(runner, "VM_DETECTOR_PATHS", (tool,))
+    assert runner.resolve_vm_detector() == str(tool)
+    tool.chmod(0o644)
+    assert runner.resolve_vm_detector() is None
+
+
 def test_main_refuses_non_guest_without_running_commands(capsys):
     with mock.patch.object(runner.platform, "system", return_value="Darwin"), \
             mock.patch.object(runner.platform, "machine", return_value="arm64"), \
@@ -103,9 +114,19 @@ def test_installed_version_uses_entrypoint_interpreter(tmp_path):
     exe.write_text("#!/venv/bin/python3\n", encoding="utf-8")
     done = subprocess.CompletedProcess([], 0, "0.1.0\n", "")
     with mock.patch.object(runner, "run_captured", return_value=done) as run:
-        assert runner.installed_version(str(exe), "/venv/bin") == "0.1.0"
+        assert runner.installed_version(str(exe), "/venv/bin", "/user-home") == "0.1.0"
     assert run.call_args.args[0][0] == "/venv/bin/python3"
-    assert run.call_args.args[0][1] == "-c"
+    assert run.call_args.args[0][1:3] == ["-P", "-c"]
+    assert run.call_args.args[1]["HOME"] == "/user-home"
+
+
+def test_installed_version_rejects_metadata_failure(tmp_path):
+    exe = tmp_path / "mio-ir"
+    exe.write_text("#!/venv/bin/python3\n", encoding="utf-8")
+    done = subprocess.CompletedProcess([], 1, "", "missing package")
+    with mock.patch.object(runner, "run_captured", return_value=done):
+        with pytest.raises(runner.AcceptanceError, match="metadata unavailable"):
+            runner.installed_version(str(exe), "/venv/bin", "/user-home")
 
 
 def test_run_captured_uses_argv_without_shell_and_returns_json():
@@ -119,13 +140,25 @@ def test_run_captured_uses_argv_without_shell_and_returns_json():
 
 def test_run_captured_enforces_timeout():
     with pytest.raises(runner.AcceptanceError, match="timed out"):
-        runner.run_mio(sys.executable, ["-c", "import time; time.sleep(2)"], {}, timeout=0.05)
+        runner.run_mio(sys.executable, ["-c", "import time; time.sleep(2)"], {}, timeout=0.5)
 
 
 def test_run_captured_bounds_stdout_and_stderr():
     with mock.patch.object(runner, "MAX_COMMAND_OUTPUT_BYTES", 64):
         with pytest.raises(runner.AcceptanceError, match="output limit"):
             runner.run_mio(sys.executable, ["-c", "print('x' * 1000)"], {}, timeout=2)
+        with pytest.raises(runner.AcceptanceError, match="output limit"):
+            runner.run_mio(sys.executable, ["-c", "import sys; print('x' * 1000, file=sys.stderr)"], {}, timeout=2)
+
+
+def test_acceptance_deadline_fails_before_invoking_another_command():
+    accept = runner.Acceptance("mio-ir", {})
+    accept.deadline = runner.time.monotonic() - 1
+    with mock.patch.object(runner, "run_mio") as run:
+        with pytest.raises(runner.AcceptanceError) as exc:
+            accept.invoke("case.create", ["case", "create"])
+    assert exc.value.step == "case.create"
+    run.assert_not_called()
 
 
 def test_parse_json_stdout_accepts_json():
@@ -204,7 +237,8 @@ def test_tamper_object_refuses_home_symlink_escape(tmp_path):
     assert (outside / "objects" / digest).read_bytes() == b"preserve"
 
 
-def _mock_cli(*, bad_create=None, fake_digest=None, tamper_detected=True):
+def _mock_cli(*, bad_create=None, fake_digest=None, tamper_detected=True,
+              tamper_exit_code=None, timeline_override=None, report_override=None):
     state = {"source": None, "digest": None}
     def run(_exe, args, env, timeout=runner.TIMEOUT_SECONDS):
         del timeout
@@ -230,19 +264,27 @@ def _mock_cli(*, bad_create=None, fake_digest=None, tamper_detected=True):
             if args[2:] == ["--case", "1"] and path.read_bytes() != state["source"]:
                 valid = not tamper_detected
             code = 0 if valid else runner.VERIFY_INVALID_EXIT
+            if args[2:] == ["--case", "1"] and tamper_exit_code is not None and path.read_bytes() != state["source"]:
+                code = tamper_exit_code
             payload = [{"evidence_id": 1, "sha256": digest, "valid": valid}]
             return subprocess.CompletedProcess(args, code, json.dumps(payload), "")
         if args[:2] == ["timeline", "build"]:
-            return subprocess.CompletedProcess(args, 0, json.dumps(TIMELINE), "")
+            payload = TIMELINE if timeline_override is None else timeline_override
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
         if args[:2] == ["report", "generate"]:
             output = Path(args[args.index("--output") + 1])
             fmt = args[args.index("--format") + 1]
             if fmt == "json":
-                data = {"case_id": 1, "timeline": TIMELINE,
-                        "evidence": [{"evidence_id": 1, "sha256": state["digest"], "valid": True}]}
+                data = report_override if report_override is not None else {
+                    "case_id": 1, "timeline": TIMELINE,
+                    "evidence": [{"evidence_id": 1, "sha256": state["digest"], "valid": True}],
+                }
                 output.write_text(json.dumps(data), encoding="utf-8")
             else:
-                output.write_text("# IR Case 1\n", encoding="utf-8")
+                output.write_text(
+                    "# IR Case 1\n- synthetic alert A\n- synthetic alert B\nEvidence verification: []\n",
+                    encoding="utf-8",
+                )
             return subprocess.CompletedProcess(args, 0, json.dumps({"output": str(output)}), "")
         raise AssertionError("unexpected command: " + repr(args))
     return run
@@ -259,7 +301,8 @@ def test_acceptance_run_checks_full_success_sequence_and_tamper(tmp_path):
     assert summary == {"case_id": 1, "evidence_id": 1, "timeline_events": 3, "tamper_detected": True}
     assert [step["step"] for step in accept.steps] == [
         "case.create", "case.list", "evidence.import", "evidence.verify", "timeline.build",
-        "report.json", "report.markdown", "evidence.verify.tampered",
+        "report.json", "report.json.read", "report.markdown", "report.markdown.read",
+        "tamper.object", "evidence.verify.tampered",
     ]
 
 
@@ -293,7 +336,7 @@ def test_acceptance_rejects_untested_tamper_failure(tmp_path):
     home = work / "home"
     home.mkdir()
     accept = runner.Acceptance("mio-ir", {"MIO_IR_HOME": str(home)})
-    fake = _mock_cli(tamper_detected=False)
+    fake = _mock_cli(tamper_detected=False, tamper_exit_code=runner.VERIFY_INVALID_EXIT)
     with mock.patch.object(runner, "run_mio", side_effect=fake):
         with pytest.raises(runner.AcceptanceError) as exc:
             accept.run(work)
@@ -309,9 +352,36 @@ def test_acceptance_rejects_digest_escape_from_cli_output(tmp_path):
     sentinel.write_text("preserve", encoding="utf-8")
     accept = runner.Acceptance("mio-ir", {"MIO_IR_HOME": str(home)})
     with mock.patch.object(runner, "run_mio", side_effect=_mock_cli(fake_digest="../sentinel")):
-        with pytest.raises(runner.AcceptanceError, match="SHA-256"):
+        with pytest.raises(runner.AcceptanceError, match="does not match") as exc:
             accept.run(work)
+    assert exc.value.step == "evidence.verify"
     assert sentinel.read_text(encoding="utf-8") == "preserve"
+
+
+def test_acceptance_rejects_wrong_well_formed_digest(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    home = work / "home"
+    home.mkdir()
+    accept = runner.Acceptance("mio-ir", {"MIO_IR_HOME": str(home)})
+    with mock.patch.object(runner, "run_mio", side_effect=_mock_cli(fake_digest="0" * 64)):
+        with pytest.raises(runner.AcceptanceError, match="does not match") as exc:
+            accept.run(work)
+    assert exc.value.step == "evidence.verify"
+
+
+@pytest.mark.parametrize("timeline,report", [([1, 2, 3], None), (None, {"timeline": [], "evidence": []})])
+def test_acceptance_rejects_malformed_timeline_and_report(tmp_path, timeline, report):
+    work = tmp_path / "work"
+    work.mkdir()
+    home = work / "home"
+    home.mkdir()
+    accept = runner.Acceptance("mio-ir", {"MIO_IR_HOME": str(home)})
+    with mock.patch.object(runner, "run_mio", side_effect=_mock_cli(
+            timeline_override=timeline, report_override=report)):
+        with pytest.raises(runner.AcceptanceError) as exc:
+            accept.run(work)
+    assert exc.value.step == ("timeline.build" if timeline is not None else "report.json")
 
 
 def test_main_success_reports_vmware_version_home_and_steps(monkeypatch, capsys):
@@ -319,17 +389,19 @@ def test_main_success_reports_vmware_version_home_and_steps(monkeypatch, capsys)
     monkeypatch.setattr(runner.platform, "system", lambda: "Linux")
     monkeypatch.setattr(runner.platform, "machine", lambda: "aarch64")
     monkeypatch.setattr(runner, "read_os_release", lambda: DEBIAN)
+    monkeypatch.setattr(runner, "resolve_vm_detector", lambda: "/usr/bin/systemd-detect-virt")
     monkeypatch.setattr(runner.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(runner, "run_captured", lambda *_args, **_kwargs:
                         subprocess.CompletedProcess([], 0, "vmware\n", ""))
     monkeypatch.setattr(runner, "installed_version", lambda *_args: "0.1.0")
-    monkeypatch.setattr(runner, "peak_rss_kb", lambda: {"runner": 100, "children": 200, "max": 200})
+    monkeypatch.setattr(runner, "peak_rss_kb", lambda: {
+        "runner": 100, "children_all_steps": 200, "max": 200,
+    })
 
     def fake_acceptance_run(self, work):
         home = Path(self.env["HOME"])
-        observed["home_mode"] = home.stat().st_mode & 0o777
-        observed["home_inside_work"] = home.is_relative_to(work)
-        observed["mio_home_inside_home"] = Path(self.env["MIO_IR_HOME"]).is_relative_to(home)
+        observed["home_preserved"] = str(home) == os.environ.get("HOME", str(home))
+        observed["mio_home_inside_work"] = Path(self.env["MIO_IR_HOME"]).is_relative_to(work)
         self.steps.append({"step": "case.create", "duration_ms": 1.0})
         return {"case_id": 1, "evidence_id": 1, "timeline_events": 3, "tamper_detected": True}
 
@@ -339,14 +411,16 @@ def test_main_success_reports_vmware_version_home_and_steps(monkeypatch, capsys)
     assert payload["guest"]["virtualization"] == "vmware"
     assert payload["command"]["version"] == "0.1.0"
     assert payload["steps"] == [{"step": "case.create", "duration_ms": 1.0}]
-    assert payload["peak_rss_kb"] == {"runner": 100, "children": 200, "max": 200}
-    assert observed == {"home_mode": 0o700, "home_inside_work": True, "mio_home_inside_home": True}
+    assert payload["peak_rss_kb"] == {"runner": 100, "children_all_steps": 200, "max": 200}
+    assert observed == {"home_preserved": True, "mio_home_inside_work": True}
 
 
 def test_main_failure_reports_step_and_partial_timings(monkeypatch, capsys):
     monkeypatch.setattr(runner.platform, "system", lambda: "Linux")
     monkeypatch.setattr(runner.platform, "machine", lambda: "aarch64")
     monkeypatch.setattr(runner, "read_os_release", lambda: DEBIAN)
+    monkeypatch.setattr(runner, "resolve_vm_detector", lambda: "/usr/bin/systemd-detect-virt")
+    monkeypatch.setattr(runner, "resolve_vm_detector", lambda: "/usr/bin/systemd-detect-virt")
     monkeypatch.setattr(runner.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(runner, "run_captured", lambda *_args, **_kwargs:
                         subprocess.CompletedProcess([], 0, "vmware\n", ""))
@@ -361,3 +435,45 @@ def test_main_failure_reports_step_and_partial_timings(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["step"] == "case.create"
     assert payload["steps"] == [{"step": "case.create", "duration_ms": 5.0}]
+
+
+@pytest.mark.parametrize("detector,output", [(None, ""), ("/usr/bin/systemd-detect-virt", "kvm\n")])
+def test_main_refuses_missing_or_non_vmware_detector(monkeypatch, capsys, detector, output):
+    monkeypatch.setattr(runner.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(runner.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(runner, "read_os_release", lambda: DEBIAN)
+    monkeypatch.setattr(runner, "resolve_vm_detector", lambda: detector)
+    with mock.patch.object(runner, "run_captured", return_value=
+                           subprocess.CompletedProcess([], 0 if detector else 1, output, "")) as run:
+        with mock.patch.object(runner, "installed_version") as version:
+            assert runner.main([]) == runner.EXIT_REFUSED
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["step"] == "guest-check"
+    version.assert_not_called()
+    assert run.called is (detector is not None)
+
+
+def test_main_supplies_fallback_home_when_home_is_unset(monkeypatch, capsys):
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(runner.Path, "home", lambda: Path("/synthetic-home"))
+    monkeypatch.setattr(runner.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(runner.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(runner, "read_os_release", lambda: DEBIAN)
+    monkeypatch.setattr(runner, "resolve_vm_detector", lambda: "/usr/bin/systemd-detect-virt")
+    monkeypatch.setattr(runner, "run_captured", lambda *_args, **_kwargs:
+                        subprocess.CompletedProcess([], 0, "vmware\n", ""))
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/mio-ir")
+    monkeypatch.setattr(runner, "installed_version", lambda *_args: "0.1.0")
+    monkeypatch.setattr(runner, "peak_rss_kb", lambda: {"runner": 1, "children_all_steps": 1, "max": 1})
+    observed = {}
+
+    def fake_run(self, work):
+        observed["HOME"] = self.env["HOME"]
+        observed["MIO_IR_HOME_inside_temp"] = Path(self.env["MIO_IR_HOME"]).is_relative_to(work)
+        self.steps.append({"step": "done", "duration_ms": 1.0})
+        return {"case_id": 1, "evidence_id": 1, "timeline_events": 0, "tamper_detected": True}
+
+    monkeypatch.setattr(runner.Acceptance, "run", fake_run)
+    assert runner.main([]) == runner.EXIT_OK
+    capsys.readouterr()
+    assert observed == {"HOME": "/synthetic-home", "MIO_IR_HOME_inside_temp": True}
