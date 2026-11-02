@@ -222,6 +222,39 @@ class SnapshotInputTests(unittest.TestCase):
         self.assertEqual(report['results']['test']['baseline']['examples'], 0)
         self.assertIsNone(artifact)
 
+    def test_payload_mismatched_train_row_is_excluded_from_generated_artifact(self):
+        original, original_parts = dataset()
+        extra = example(7, 3)
+        original.insert(2, extra)
+        original_parts[extra.example_id] = 'train'
+        rows, value, context = consume(original, reviewed=True)
+        parts = {row.example_id: original_parts[old.example_id] for row, old in zip(rows, original)}
+
+        report, artifact = run(rows, value, context, partitions=parts)
+        self.assertEqual(report['quarantine'], [])
+        self.assertEqual(report['curated_training_eligible_examples'], 3)
+        self.assertIsNotNone(artifact)
+        self.assertIn(digest(rows[2].to_dict()), artifact.training_digests)
+
+        changed = replace(rows[2], reviewer=replace(rows[2].reviewer, reviewer='other-reviewer'))
+        self.assertEqual(parts[changed.example_id], 'train')
+        self.assertEqual(_frame_digest(changed.frame), value.record_bindings[2].frame_digest)
+        self.assertNotEqual(learning_payload_digest(changed), value.record_bindings[2].learning_payload_digest)
+        # Keep the original producer binding and consumption receipt after mutation.
+        report, artifact = run([*rows[:2], changed, *rows[3:]], value, context, partitions=parts)
+        self.assertTrue(report['knowledge_curated_snapshot_projection_consistent'])
+        self.assertEqual(report['snapshot_input_provenance'][0]['rejection_reasons'], [])
+        self.assertEqual(report['quarantine'], [{'example_id': changed.example_id,
+                                               'reasons': ['snapshot_learning_payload_mismatch']}])
+        self.assertEqual(report['curated_training_eligible_examples'], 2)
+        self.assertEqual(report['partitions']['train'], 2)
+        self.assertEqual({row.reviewer.label for row in rows[:2]},
+                         {'auth-ambiguity-v1', 'scan-ambiguity-v1'})
+        self.assertIsNotNone(artifact)
+        self.assertEqual(artifact.training_digests, tuple(sorted(digest(row.to_dict()) for row in rows[:2])))
+        self.assertNotIn(digest(changed.to_dict()), artifact.training_digests)
+        self.assertNotIn(digest(rows[2].to_dict()), artifact.training_digests)
+
     def test_example_rights_must_match_source_even_with_rebound_payload(self):
         rows, value, context = consume([example(1, 1)], reviewed=True, rights='evaluation_only')
         changed = replace(rows[0], snapshot=replace(rows[0].snapshot, rights='training_and_evaluation'))
