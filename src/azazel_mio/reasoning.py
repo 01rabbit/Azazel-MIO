@@ -79,6 +79,52 @@ class ReasoningBudget:
     max_frame_age_seconds: int = 300
 
 
+# Public diagnostics are closed labels, never error text or suffix identifiers.
+_VALIDATION_STAGES = frozenset({"playbook", "generate_hypotheses", "identify_evidence_gaps",
+                               "update_hypotheses", "recommend"})
+_REJECTION_CODES = {
+    "output_shape": ("hypotheses_not_list", "hypothesis_update_not_mapping",
+                     "updated_hypotheses_not_list", "recommendation_not_mapping"),
+    "alternative_slots": ("unknown_hypothesis_alternative_id", "insufficient_competing_hypotheses",
+                          "duplicate_hypothesis_alternative_id", "missing_benign_or_unresolved_alternative_slot",
+                          "hypothesis_alternative_id_changed", "duplicate_live_hypothesis_alternative_slot"),
+    "model_identifier": ("invalid_model_id",),
+    "evidence_grounding": ("unknown_evidence_ref", "unknown_hypothesis_ref",
+                           "conflicting_hypothesis_evidence_ref", "unknown_recommendation_ref"),
+    "raw_payload": ("raw_payload_unreadable", "raw_payload_unsupported_key", "raw_payload_too_large",
+                    "raw_payload_too_many_nodes", "raw_payload_too_deep", "raw_payload_cycle",
+                    "raw_payload_unsupported_container", "raw_payload_unsupported_value", "forbidden_directive_key"),
+    "hypothesis_structure": ("no_hypotheses", "too_many_hypotheses", "empty_hypothesis_id",
+                             "duplicate_hypothesis_id", "empty_statement"),
+    "evidence_gap": ("empty_gap_id", "duplicate_gap_id", "empty_gap_question", "empty_gap_capability",
+                     "capability_not_allowed_by_playbook", "unknown_gap_hypothesis"),
+    "hypothesis_lifecycle": ("initial_hypothesis_must_start_proposed", "new_hypothesis_must_start_proposed",
+                            "invalid_hypothesis_transition", "terminal_hypothesis_modified",
+                            "strengthened_without_supporting_evidence", "weakened_without_refuting_evidence_or_gap",
+                            "lifecycle_ref_outside_context", "falsified_without_falsification_condition",
+                            "falsified_without_contradicting_evidence"),
+    "recommendation_structure": ("recommendation_must_not_be_executable", "empty_recommendation_summary",
+                                 "empty_recommendation_rationale", "empty_recommended_action",
+                                 "unknown_recommended_action", "empty_recommendation_evidence_refs"),
+    "unsupported_claim": ("unsupported_claim", "unsupported_recommendation_claim"),
+}
+_REJECTION_CLASS_BY_CODE = {code: label for label, codes in _REJECTION_CODES.items() for code in codes}
+
+
+def _validation_diagnostic(stage: str, errors: Sequence[str]) -> dict[str, str]:
+    # Match only a fixed internal code before the first colon. Never copy any
+    # suffix, including model-authored IDs, paths, claim text, or error details.
+    rejection_class = "unknown"
+    for error in errors:
+        if type(error) is str:
+            label = _REJECTION_CLASS_BY_CODE.get(error.partition(":")[0])
+            if label is not None:
+                rejection_class = label
+                break
+    return {"stage": stage if type(stage) is str and stage in _VALIDATION_STAGES else "unknown",
+            "rejection_class": rejection_class}
+
+
 @dataclass(frozen=True)
 class ReasoningOutcome:
     state: ReasoningState
@@ -92,6 +138,7 @@ class ReasoningOutcome:
     hypothesis_audit: tuple[HypothesisAuditEntry, ...] = ()
     # Deterministic frame-only summary when no validated recommendation exists.
     handoff: NoModelHandoff | None = None
+    validation_diagnostic: Mapping[str, str] | None = None
 
 
 # Terminal states that get a deterministic no-model handoff. Cancelled and
@@ -162,9 +209,11 @@ class BoundedReasoningLoop:
         broker_calls = 0
         audit: list[HypothesisAuditEntry] = []
         validated: list[MioHypothesis] = []
+        validation_stage = "playbook"
 
         def finish(state, hypotheses_out, gaps_out, recommendation_out):
-            return self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated)
+            return self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated,
+                                validation_stage=validation_stage)
 
         class PromptCompileFailure(Exception):
             pass
@@ -215,6 +264,7 @@ class BoundedReasoningLoop:
         except PromptCompileFailure:
             return finish(ReasoningState.ERROR_FALLBACK, (), (), None)
 
+        validation_stage = "generate_hypotheses"
         enter_model_adapter("generate_hypotheses")
         try:
             raw_h = self.model("generate_hypotheses", prompt)
@@ -293,6 +343,7 @@ class BoundedReasoningLoop:
             prompt = compile_task("identify_evidence_gaps", hypotheses=hypotheses)
         except PromptCompileFailure:
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
+        validation_stage = "identify_evidence_gaps"
         enter_model_adapter("identify_evidence_gaps")
         try:
             raw_g = self.model("identify_evidence_gaps", prompt)
@@ -416,6 +467,7 @@ class BoundedReasoningLoop:
                                       broker_results=broker_summaries)
             except PromptCompileFailure:
                 return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+            validation_stage = "update_hypotheses"
             enter_model_adapter("update_hypotheses")
             try:
                 raw_u = self.model("update_hypotheses", prompt)
@@ -501,6 +553,7 @@ class BoundedReasoningLoop:
             prompt = compile_task("recommend", hypotheses=hypotheses, broker_results=broker_summaries)
         except PromptCompileFailure:
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+        validation_stage = "recommend"
         enter_model_adapter("recommend")
         try:
             raw_r = self.model("recommend", prompt)
@@ -575,6 +628,7 @@ class BoundedReasoningLoop:
         playbook: ReasoningPlaybook,
         audit: list[HypothesisAuditEntry],
         validated: Sequence[MioHypothesis],
+        validation_stage: str = "unknown",
     ) -> ReasoningOutcome:
         if state is ReasoningState.STALE_SUPERSEDED:
             # In-flight hypotheses of a dead cycle are retained, marked superseded.
@@ -585,4 +639,6 @@ class BoundedReasoningLoop:
         if state in HANDOFF_STATES:
             handoff = build_no_model_handoff(frame, reason=state.value, playbook=playbook, hypotheses=validated)
         trace.record(state=state.value, kind="terminal", payload={"errors": list(errors)[:8]})
-        return ReasoningOutcome(state, tuple(hypotheses), tuple(gaps), recommendation, tuple(errors), trace.events(), tuple(audit), handoff)
+        return ReasoningOutcome(state, tuple(hypotheses), tuple(gaps), recommendation, tuple(errors), trace.events(), tuple(audit), handoff,
+                                _validation_diagnostic(validation_stage, errors)
+                                if state is ReasoningState.VALIDATION_REJECTED else None)

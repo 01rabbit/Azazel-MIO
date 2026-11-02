@@ -1466,3 +1466,64 @@ def test_context_response_source_only_receipt_remains_unverified(sources, accept
         assert receipt['trust'] == 'unverified_advisory_only'
     assert out['knowledge'] == []
     assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+
+
+@pytest.mark.parametrize(('errors', 'expected'), [
+    (('unknown_hypothesis_alternative_id',), 'alternative_slots'),
+    (('unknown_hypothesis_ref:h7:ev:private:1',), 'evidence_grounding'),
+    (('invalid_model_id:evidence_ref',), 'model_identifier'),
+    (('raw_payload_too_deep',), 'raw_payload'),
+    (('initial_hypothesis_must_start_proposed:h1:strengthened',), 'hypothesis_lifecycle'),
+    (('unsupported_claim:h1:private_verdict',), 'unsupported_claim'),
+    (('empty_recommendation_summary',), 'recommendation_structure'),
+    (('unknown_gap_hypothesis:g1:h1',), 'evidence_gap'),
+    (('recommendation_not_mapping',), 'output_shape'),
+    (('empty_statement:h1',), 'hypothesis_structure'),
+    (('unknown_hypothesis_ref_lookalike:SECRET',), 'unknown'),
+    (('ARBITRARY_SECRET',), 'unknown'),
+    ((), 'unknown'),
+])
+def test_validation_diagnostic_closed_code_mapping(errors, expected):
+    from azazel_mio.reasoning import _validation_diagnostic
+    assert _validation_diagnostic('generate_hypotheses', errors) == {
+        'stage': 'generate_hypotheses', 'rejection_class': expected}
+    assert _validation_diagnostic('ARBITRARY_SECRET', errors)['stage'] == 'unknown'
+
+
+@pytest.mark.parametrize(('code', 'expected'), [
+    ('unknown_hypothesis_ref', 'evidence_grounding'),
+    ('unrecognized_internal_validation_code', 'unknown'),
+])
+def test_validation_diagnostic_public_projection_does_not_disclose_raw_errors(monkeypatch, code, expected):
+    from azazel_mio.grounding import GroundingResult, GroundingValidator
+    secret = 'RAW_ERROR_MODEL_USER_ID_SECRET_728195'
+    monkeypatch.setattr(GroundingValidator, 'validate_hypotheses',
+                        lambda *args: GroundingResult(False, (f'{code}:{secret}',)))
+
+    def model(task, prompt):
+        assert task == 'generate_hypotheses'
+        return {'hypotheses': [
+            {'hypothesis_id': f'h{i}', 'status': 'proposed', 'statement': secret,
+             'hypothesis_alternative_id': slot}
+            for i, slot in enumerate(('hostile_activity', 'benign_activity'), start=1)]}
+
+    out = AssistantCore(model=model).explain(frame(), now=NOW).to_dict()
+    assert out['state'] == 'validation_rejected'
+    assert out['validation_diagnostic'] == {
+        'stage': 'generate_hypotheses', 'rejection_class': expected}
+    assert out['generation_method'] == 'static_reference'
+    assert out['handoff']['reason'] == 'validation_rejected'
+    assert out['reasoning_trace'] == []
+    assert secret not in json.dumps(out)
+    assert 'errors' not in out
+
+
+def test_validation_diagnostic_absent_without_validation_rejection():
+    assert 'validation_diagnostic' not in AssistantCore().explain(frame(), now=NOW).to_dict()
+
+
+@pytest.mark.parametrize('stage', ['playbook', 'generate_hypotheses', 'identify_evidence_gaps',
+                                   'update_hypotheses', 'recommend'])
+def test_validation_diagnostic_stage_allowlist(stage):
+    from azazel_mio.reasoning import _validation_diagnostic
+    assert _validation_diagnostic(stage, ()) == {'stage': stage, 'rejection_class': 'unknown'}
