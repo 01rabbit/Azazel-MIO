@@ -154,7 +154,7 @@ class OperatorDispositionLog:
                 raise ValueError("invalid_feedback_outcome_time")
             if record.outcome == "succeeded" and record.applied_state is None:
                 raise ValueError("feedback_applied_state_required")
-            if record.outcome in {"pending", "not_applied"} and record.applied_state is not None:
+            if record.outcome in {"pending", "failed", "not_applied"} and record.applied_state is not None:
                 raise ValueError("feedback_applied_state_conflict")
         self._records.append(record)
 

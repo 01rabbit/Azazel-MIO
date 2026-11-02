@@ -27,8 +27,10 @@ not establish the existence, identity, or authenticity of its target.
 `pending`, `succeeded`, `failed`, or `not_applied`; each requires an action
 reference and observation time. Observation time must follow review time and
 not exceed the adapter's clock. `succeeded` requires a defensive applied state;
-`pending` and `not_applied` forbid one. These are operator-reported facts, not
-proof of execution or causation. A correction or later outcome is a new record
+`pending`, `failed`, and `not_applied` forbid one. `failed` reports an attempted
+action that failed without asserting a resulting applied state; `not_applied`
+reports that the action was not applied, without asserting an attempt. These
+are operator-reported facts, not proof of execution or causation. A correction or later outcome is a new record
 with a new record reference; prior entries are retained. Review timestamps must
 be nondecreasing in append order (equal timestamps are allowed). Outcome times
 must also be nondecreasing for the same action reference. A later result can be

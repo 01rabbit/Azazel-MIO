@@ -76,6 +76,20 @@ def test_invalid_report_is_rejected_without_append(changes):
     assert log.records() == ()
 
 
+def test_failed_attempt_forbids_applied_state_and_preserves_action_chronology():
+    frame, outcome, record = setup()
+    log = OperatorDispositionLog(frame=frame, outcome=outcome)
+    failed = replace(record, action_ref=REF, outcome="failed", outcome_at=LATER)
+    with pytest.raises(ValueError, match="^feedback_applied_state_conflict$"):
+        log.append(replace(failed, applied_state="ISOLATE"), now=LATER)
+    assert log.records() == ()
+    log.append(failed, now=LATER)
+    older = replace(failed, record_ref="sha256:" + "b" * 64, outcome_at=NOW)
+    with pytest.raises(ValueError, match="^invalid_feedback_outcome_time$"):
+        log.append(older, now=LATER)
+    assert log.records() == (failed,)
+
+
 def test_frame_material_and_trace_cannot_be_rebound():
     frame, outcome, _ = setup()
     with pytest.raises(ValueError, match="binding"):
