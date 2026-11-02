@@ -1,10 +1,10 @@
 # AI inventory and source-to-target map
 
-**Evidence cut: 2026-11-02.** Project-owner direction makes MIO the common AI assistance source of truth; see the [ownership ADR](ownership-adr.md). This is a source inventory, not cross-product owner consent, merged adoption, deployment, or a production contract. PR status was read from GitHub at this cut. The evidence base is MIO main `814469a4c24670ded4de1186f5e57a26a656977b`; this follow-up documentation candidate is local and not merged. Local refreshed candidates are not public PR heads.
+**Evidence cut: 2026-11-02.** Project-owner direction makes MIO the common AI assistance source of truth; see the [ownership ADR](ownership-adr.md). This is a source inventory, not cross-product owner consent, merged adoption, deployment, or a production contract. PR status and heads were read from GitHub at this cut. The evidence base is MIO main `88f26c59b91c97b8fedbc690f95766bc28928e97`. Local refreshed candidates are not public PR heads.
 
 ## Exact public source anchors
 
-MIO #15, #16, #17, #18, #19, #20, #21 and #22 are **MERGED** into the evidence base (#22 as squash commit `814469a4c24670ded4de1186f5e57a26a656977b`). MIO #11 and Edge #525–#531 remain **OPEN / Draft**. Merged common-core code does not establish consumer adoption. Head identifiers are immutable source anchors; PR/check status can change.
+MIO #15–#22, #25 and #26 are **MERGED** into current main `88f26c59b91c97b8fedbc690f95766bc28928e97`. MIO #11 and #24 and public Edge #525–#533 are **OPEN / Draft** at the heads below. Merged common-core code does not establish consumer adoption. Head identifiers are immutable source anchors; PR/check status can change.
 
 | Repository / PR | Exact head | Scope and limit |
 | --- | --- | --- |
@@ -14,18 +14,23 @@ MIO #15, #16, #17, #18, #19, #20, #21 and #22 are **MERGED** into the evidence b
 | [MIO #18](https://github.com/01rabbit/Azazel-MIO/pull/18) | `899362d35c4ed4f29c28039cfeb7bc6f6098e6af` | Request-scoped ContextResponse advisory projection and bounded source-group labels. Merged as `054fb17b9153b380c0930946bcc3ef7c2a63f535`; these stacked PRs are not four independent integrations. |
 | [MIO #20](https://github.com/01rabbit/Azazel-MIO/pull/20) | `868bb6f82f015d324fac007b88aac64be8a8f3d1` | Merged as `fecac668e59525f6426e46d4cf7b699fcba3ff50`: tests-only learning-input integrity coverage; no runtime API addition. |
 | [MIO #21](https://github.com/01rabbit/Azazel-MIO/pull/21) | `a8b1bee1775f483a7b2d7d33538896c9446a9b0c` | Merged as `9fedb01bc9936531407a5181aa8fa5553ec19d55`: bounded model-output validation diagnostics; included in current main. |
-| [Edge #525](https://github.com/01rabbit/Azazel-Edge/pull/525) | `0534ed048235a92c5677c6d815321149fa6c96d5` | Draft/unmerged optional shared auxiliary and separate model lanes; committed `requirements/runtime.txt` pins MIO `9fedb01bc9936531407a5181aa8fa5553ec19d55` (#21 merge). [Current-head CI](https://github.com/01rabbit/Azazel-Edge/actions/runs/41377335195) has exactly two Python test failures in module-installer coverage (both auxiliary/model modules are missing from installer coverage); passing other checks does not make CI green. Refreshed Edge stack candidates remain local only. |
-| [MIO #19](https://github.com/01rabbit/Azazel-MIO/pull/19) | `914c9296324a2fc594610daa02d825890e69e4cd` | Ownership/inventory documentation; merged as the evidence base `1aaddd76b40cc049f662e990a49e994b7be8636b`. This follow-up candidate is not that merge. |
-| [MIO #11](https://github.com/01rabbit/Azazel-MIO/pull/11) | `1e2546ac5aeca09a3927cdeb2b630ea83cf2479c` | Open/draft offline IR foundation; not merged adoption. |
-| [MIO #22](https://github.com/01rabbit/Azazel-MIO/pull/22) | `0aaec8be21621b0f93908ea47c20f47eea60f32f` | Bounded deterministic advisory baseline. Merged as squash commit `814469a4c24670ded4de1186f5e57a26a656977b`; included in current main and the evidence base. |
+| [MIO #25](https://github.com/01rabbit/Azazel-MIO/pull/25) | `4062f9856c9c07a7290d70c83d0eb7984995e270` | Merged as `0a9c960cd07ca7e64e405d8226ac93091c4c01e2`: deterministic fast assessment. |
+| [MIO #26](https://github.com/01rabbit/Azazel-MIO/pull/26) | `cd9109f5292043a158c7365cb6da4e20eeff3191` | Merged as `88f26c59b91c97b8fedbc690f95766bc28928e97`: Edge scorer parity goldens; no Edge product adapter adoption. |
+| [MIO #11](https://github.com/01rabbit/Azazel-MIO/pull/11) | `a5b74ec256e21a8314ff378ab95f4d31dfb397a3` | Open/draft offline IR foundation; not merged adoption. |
+| [MIO #24](https://github.com/01rabbit/Azazel-MIO/pull/24) | `0367f931bcfaeddbc600133a8db3f86250452c07` | Open/draft offline IR adapter only; no Edge or Nexus product runtime adoption. |
+| [Edge #525](https://github.com/01rabbit/Azazel-Edge/pull/525) | `0534ed048235a92c5677c6d815321149fa6c96d5` | Open/draft optional shared auxiliary and separate model lanes. Exact-head CI run [41377335195](https://github.com/01rabbit/Azazel-Edge/actions/runs/41377335195) is a failure for this head; no passing CI claim. |
+| [MIO #19](https://github.com/01rabbit/Azazel-MIO/pull/19) | `914c9296324a2fc594610daa02d825890e69e4cd` | Ownership/inventory documentation; merged as `1aaddd76b40cc049f662e990a49e994b7be8636b`. |
+| [MIO #22](https://github.com/01rabbit/Azazel-MIO/pull/22) | `0aaec8be21621b0f93908ea47c20f47eea60f32f` | Bounded deterministic advisory baseline. Merged as squash commit `814469a4c24670ded4de1186f5e57a26a656977b`; included in current main. |
 | [Edge #526](https://github.com/01rabbit/Azazel-Edge/pull/526) | `6d7f7fcf0cc4296ace053090e9a6813852b649f1` | Open/draft shadow assessment comparison. |
 | [Edge #527](https://github.com/01rabbit/Azazel-Edge/pull/527) | `0b88d36cf69c411ad6ec63c6acef79202e05a924` | Open/draft operator assessment comparison. |
 | [Edge #528](https://github.com/01rabbit/Azazel-Edge/pull/528) | `df61bd9847acc49d41d96d48e42046b858fb93da` | Open/draft suppression of unavailable comparisons. |
 | [Edge #529](https://github.com/01rabbit/Azazel-Edge/pull/529) | `f0e625648c2a8a74b303849f1caa828ef9e7b25c` | Open/draft bounded slow Knowledge receipt. |
 | [Edge #530](https://github.com/01rabbit/Azazel-Edge/pull/530) | `37b2df5801ec188647e29ad1dfbe591fae11425e` | Open/draft operator-panel Knowledge receipt. |
-| [Edge #531](https://github.com/01rabbit/Azazel-Edge/pull/531) | `d00a0ec3ec99c207df7ab64d736254b6ccf42b84` | Open/draft; base is Edge #525 at `0534ed048235a92c5677c6d815321149fa6c96d5`. Adds an optional separate Knowledge analysis lane with a bounded read-only operator receipt; Edge decision/enforcement remains unchanged. [Exact-head workflow_dispatch CI run 41406149829](https://github.com/01rabbit/Azazel-Edge/actions/runs/41406149829) failed only the two known module-installer coverage tests (4959 passed, 81 skipped, 219 subtests, 2 failed); passing other checks does not make CI green. These stacked candidates (Edge #525–#531) do not establish merged integration. |
+| [Edge #531](https://github.com/01rabbit/Azazel-Edge/pull/531) | `d00a0ec3ec99c207df7ab64d736254b6ccf42b84` | Open/draft optional separate Knowledge analysis lane with a bounded read-only operator receipt; Edge decision/enforcement remains unchanged. Exact-head workflow-dispatch run [41406149829](https://github.com/01rabbit/Azazel-Edge/actions/runs/41406149829) is a failure for this head; no passing CI claim. |
+| [Edge #532](https://github.com/01rabbit/Azazel-Edge/pull/532) | `ef36c82cd5f9be2f1dd5dc816c143c9932d02eb3` | Open/draft Knowledge lane candidate; does not establish merged integration. |
+| [Edge #533](https://github.com/01rabbit/Azazel-Edge/pull/533) | `8ac896b55f44b59473e009f735f53e909ce2e8ee` | Open/draft candidate; does not establish merged integration. |
 
-The private consumer integration remains stacked/draft. Full-node, Lite and model end-to-end proof is not complete; private implementation identifiers are omitted from this public inventory.
+Nexus implementation details are maintained privately and are not part of this public evidence. Full-node, Lite and model end-to-end proof is not complete.
 
 ## Actual product callsites and target ownership
 
