@@ -31,6 +31,64 @@ def markdown_escape(value):
     sanitized = "".join(" " if char in MARKDOWN_UNSAFE else char for char in value)
     return "".join("\\" + char if char in MARKDOWN_ESCAPES else char
                    for char in sanitized)
+SCHEMA_VERSION = 1
+SCHEMA_V1 = (
+    "CREATE TABLE cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL)",
+    "CREATE TABLE evidence(id INTEGER PRIMARY KEY, case_id INTEGER NOT NULL REFERENCES cases(id), "
+    "filename TEXT NOT NULL, digest TEXT NOT NULL, format TEXT NOT NULL, imported TEXT NOT NULL)",
+    "CREATE TABLE events(id INTEGER PRIMARY KEY, evidence_id INTEGER NOT NULL REFERENCES evidence(id), "
+    "record_number INTEGER NOT NULL, timestamp TEXT, original_timestamp TEXT, summary TEXT NOT NULL)",
+)
+# (name, declared type, notnull, pk) per column, and (table, from, to) per foreign key.
+# These describe the exact legacy (user_version 0) and v1 layouts; anything else is malformed.
+_EXPECTED_COLUMNS = {
+    "cases": (("id", "INTEGER", 0, 1), ("name", "TEXT", 1, 0), ("created", "TEXT", 1, 0)),
+    "evidence": (("id", "INTEGER", 0, 1), ("case_id", "INTEGER", 1, 0), ("filename", "TEXT", 1, 0),
+                 ("digest", "TEXT", 1, 0), ("format", "TEXT", 1, 0), ("imported", "TEXT", 1, 0)),
+    "events": (("id", "INTEGER", 0, 1), ("evidence_id", "INTEGER", 1, 0), ("record_number", "INTEGER", 1, 0),
+               ("timestamp", "TEXT", 0, 0), ("original_timestamp", "TEXT", 0, 0), ("summary", "TEXT", 1, 0)),
+}
+_EXPECTED_FOREIGN_KEYS = {
+    "cases": (),
+    "evidence": (("cases", "case_id", "id"),),
+    "events": (("evidence", "evidence_id", "id"),),
+}
+
+def _validate_schema(db):
+    objects = db.execute("SELECT type,name FROM sqlite_master ORDER BY type,name").fetchall()
+    if objects != [("table", name) for name in sorted(_EXPECTED_COLUMNS)]:
+        raise ValueError("malformed storage schema")
+    for table, columns in _EXPECTED_COLUMNS.items():
+        info = tuple((r[1], r[2], r[3], r[5]) for r in db.execute(f"PRAGMA table_info({table})"))
+        fks = tuple((r[2], r[3], r[4]) for r in db.execute(f"PRAGMA foreign_key_list({table})"))
+        if info != columns or fks != _EXPECTED_FOREIGN_KEYS[table]:
+            raise ValueError("malformed storage schema")
+
+def migrate_schema(db):
+    """Create or adopt the schema atomically. Refuses unknown versions and malformed schemas without writing."""
+    if db.in_transaction:
+        raise RuntimeError("migrate_schema requires a connection outside a transaction")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, SCHEMA_VERSION):
+            raise ValueError("unsupported storage schema version")
+        objects = db.execute("SELECT type,name FROM sqlite_master").fetchall()
+        if version == 0 and not objects:
+            for statement in SCHEMA_V1:
+                db.execute(statement)
+            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        else:
+            # Legacy v0 with the exact original tables is adopted by stamping the version only.
+            # Any other shape, including a v1 marker on a broken schema, is rejected untouched.
+            _validate_schema(db)
+            if version == 0:
+                db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        db.execute("COMMIT")
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -94,17 +152,13 @@ def connect(root):
     db = sqlite3.connect(database)
     try:
         db.execute("PRAGMA foreign_keys=ON")
-        db.executescript("""
-        CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS evidence(id INTEGER PRIMARY KEY, case_id INTEGER NOT NULL REFERENCES cases(id),
-          filename TEXT NOT NULL, digest TEXT NOT NULL, format TEXT NOT NULL, imported TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, evidence_id INTEGER NOT NULL REFERENCES evidence(id),
-          record_number INTEGER NOT NULL, timestamp TEXT, original_timestamp TEXT, summary TEXT NOT NULL);
-        """)
-        return db
+        db.isolation_level = None  # explicit transaction control for schema migration
+        migrate_schema(db)
+        db.isolation_level = ""
     except BaseException:
         db.close()
         raise
+    return db
 
 def output_is_inside_storage(root, path):
     root = root.resolve()
