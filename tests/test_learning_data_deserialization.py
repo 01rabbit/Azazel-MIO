@@ -150,6 +150,44 @@ class FromDictDeserialization(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, r'^invalid_learning_refs$'):
                     LearningExample.from_dict(with_direct('direct_evidence_refs', value))
 
+    def test_feature_origins_non_list_values_are_rejected(self):
+        cases = {
+            'string': 'frame.mission',
+            'dict': {'frame.mission': 1},
+            'null': None,
+            'integer': 7,
+            'bool': True,
+        }
+        for name, value in cases.items():
+            with self.subTest(case=name):
+                wire = valid_example().to_dict()
+                wire['feature_origins'] = value
+                with self.assertRaisesRegex(ValueError, r'^invalid_learning_feature_origins$'):
+                    LearningExample.from_dict(wire)
+
+    def test_feature_origins_non_string_items_are_rejected(self):
+        cases = {
+            'integer item': list(ORIGINS[:3]) + [7],
+            'null item': [None] + list(ORIGINS[1:]),
+            'nested list item': [list(ORIGINS[:1])] + list(ORIGINS[1:]),
+        }
+        for name, value in cases.items():
+            with self.subTest(case=name):
+                wire = valid_example().to_dict()
+                wire['feature_origins'] = value
+                with self.assertRaisesRegex(ValueError, r'^invalid_learning_feature_origins$'):
+                    LearningExample.from_dict(wire)
+
+    def test_feature_origins_valid_list_roundtrips_and_unexpected_strings_are_kept(self):
+        wire = valid_example().to_dict()
+        self.assertEqual(wire['feature_origins'], list(ORIGINS))
+        restored = LearningExample.from_dict(copy.deepcopy(wire))
+        self.assertEqual(restored.feature_origins, ORIGINS)
+        # Valid-but-unexpected origin strings parse; quarantine rejects them later.
+        wire['feature_origins'] = ['frame.mission', 'frame.unexpected_origin']
+        restored = LearningExample.from_dict(copy.deepcopy(wire))
+        self.assertEqual(restored.feature_origins, ('frame.mission', 'frame.unexpected_origin'))
+
     def test_direct_fact_codes_boundary_16_accepted_17_rejected(self):
         codes16 = [f'DIRECT_FACT_{i}' for i in range(16)]
         restored = LearningExample.from_dict(with_direct('direct_fact_codes', codes16))
