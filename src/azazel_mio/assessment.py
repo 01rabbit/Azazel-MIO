@@ -4,7 +4,12 @@ This baseline is NOT a maliciousness classifier or calibrated probability.
 Signals are asserted by a trusted parser/reviewer, never inferred from raw text.
 """
 from dataclasses import dataclass
+from itertools import islice
 from typing import Iterable
+
+_MAX_OBSERVATIONS = 10000
+_MAX_ID_LENGTH = 256
+_MAX_SIGNAL_LENGTH = 128
 
 RULE_VERSION = "ir-baseline-0.1"
 SIGNAL_WEIGHTS = {
@@ -26,20 +31,33 @@ class Observation:
     evidence_id: str
     signal: str
 
+def _canonical_text(value: object, limit: int) -> bool:
+    return (isinstance(value, str) and 0 < len(value) <= limit
+            and value == value.strip() and value.isprintable())
+
+
 def assess(case_id: str, observations: Iterable[Observation]) -> dict:
     """Produce bounded, traceable advisory priority; never authorize action."""
-    if not isinstance(case_id, str) or not case_id.strip():
-        raise ValueError("case_id required")
-    items = list(observations)
-    if len(items) > 10000:
+    if not _canonical_text(case_id, _MAX_ID_LENGTH):
+        raise ValueError("invalid case_id")
+    try:
+        iterator = iter(observations)
+    except TypeError:
+        raise ValueError("observations must be iterable") from None
+    items = list(islice(iterator, _MAX_OBSERVATIONS + 1))
+    if len(items) > _MAX_OBSERVATIONS:
         raise ValueError("too many observations")
     hits = {}
     unsupported = 0
     for obs in items:
-        if not isinstance(obs, Observation) or obs.case_id != case_id:
+        if (not isinstance(obs, Observation)
+                or not _canonical_text(obs.case_id, _MAX_ID_LENGTH)
+                or obs.case_id != case_id):
             raise ValueError("invalid or cross-case observation")
-        if not obs.evidence_id.strip():
-            raise ValueError("missing evidence reference")
+        if not _canonical_text(obs.evidence_id, _MAX_ID_LENGTH):
+            raise ValueError("invalid evidence reference")
+        if not _canonical_text(obs.signal, _MAX_SIGNAL_LENGTH):
+            raise ValueError("invalid signal")
         if obs.signal not in SIGNAL_WEIGHTS:
             unsupported += 1
             continue
