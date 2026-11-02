@@ -3,7 +3,7 @@
 **Status:** Project-owner direction recorded; cross-product adoption and contract acceptance pending.
 **Decision date:** 2026-10-31; direction/evidence refresh 2026-11-02
 
-The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. MIO `main` is `c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524`, including merged PRs #15, #17, #18 and #16. The [inventory](ai-inventory.md) records their final heads and merge commits; merged library capability does not establish product adoption.
+The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. MIO `main` is `fecac668e59525f6426e46d4cf7b699fcba3ff50`, including merged PRs #15, #17, #18, #16, #21 (bounded validation diagnostics) and #20 (tests-only learning-input integrity coverage). The [inventory](ai-inventory.md) records their final heads and merge commits; merged library capability does not establish product adoption.
 
 ## Context and decision
 
