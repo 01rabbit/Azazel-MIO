@@ -277,9 +277,18 @@ def main():
         snapshot_inputs=snapshot_inputs, snapshot_context=snapshot_context)
     # Exclusive creation makes artifacts immutable by this command. Registry
     # selection/revocation is a separate explicit operation and never happens here.
-    with args.report.open("x") as handle: handle.write(canonical(report) + "\n")
-    if artifact is not None and args.artifact is not None:
+    # Preflight only: reject report/artifact aliasing and any existing output (including dangling
+    # symlinks) before the first write. This is not atomic: concurrent creators or write failures
+    # after the first open can still leave partial output.
+    writes_artifact = artifact is not None and args.artifact is not None
+    if writes_artifact and args.report.resolve() == args.artifact.resolve(): raise FileExistsError(f"output_alias: {args.report}")
+    # Without this, a missing report directory would fail only after the artifact was already created.
+    if writes_artifact and not args.report.parent.is_dir(): raise FileNotFoundError(f"report_parent_missing: {args.report.parent}")
+    for target in ((args.report, args.artifact) if writes_artifact else (args.report,)):
+        if target.exists() or target.is_symlink(): raise FileExistsError(f"output_exists: {target}")
+    if writes_artifact:
         with args.artifact.open("x") as handle: handle.write(canonical(artifact.to_dict()) + "\n")
+    with args.report.open("x") as handle: handle.write(canonical(report) + "\n")
 
 
 if __name__ == "__main__": main()
