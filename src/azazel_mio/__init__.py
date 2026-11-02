@@ -1,3 +1,5 @@
+"""Reusable MIO advisory capabilities; no execution authority."""
+
 from .broker import (
     CapabilityBroker,
     CapabilityBrokerError,
