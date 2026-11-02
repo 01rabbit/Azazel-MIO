@@ -769,6 +769,8 @@ class AssistantCore:
             "frame_id": frame.frame_id,
             "generation_method": "model" if self.model is not None and outcome.hypotheses and outcome.state is not ReasoningState.VALIDATION_REJECTED else "static_reference",
             "state": outcome.state.value,
+            **({"validation_diagnostic": dict(outcome.validation_diagnostic)}
+               if getattr(outcome, "validation_diagnostic", None) is not None else {}),
             "dependency_outcome": {
                 "knowledge": knowledge_outcome.value,
                 "deception": deception_outcome.value,
