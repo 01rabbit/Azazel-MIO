@@ -1,6 +1,114 @@
 """Independent golden fixtures for the portable fast-assessment contract."""
 
+import pytest
+
 from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_fast
+
+
+@pytest.mark.parametrize(
+    ("inputs", "expected_score", "expected_factors"),
+    [
+        # Expected outputs were run through Edge TacticalScorer.score() from
+        # scorer.py at 47c880b2503d7f771bbdacba9b6205dafe03c4c7.
+        (
+            FastAssessmentInput(severity=9, classes=(), action="unknown"),
+            16,
+            ("severity=9",),
+        ),
+        (
+            FastAssessmentInput(
+                severity=1,
+                classes=("c2",),
+                token_only=True,
+                ports=(PortSignal("admin", 22),),
+                action="rejected",
+            ),
+            39,
+            (
+                "severity=1",
+                "sid_present",
+                "threat_class=c2(48)",
+                "admin_port=22",
+                "action=rejected(contained)",
+                "token_only_ceiling",
+            ),
+        ),
+        (
+            # Edge SID 9901251 is a deception SID; the floor does not alter
+            # this result because the score is already above 60.
+            FastAssessmentInput(
+                severity=2,
+                classes=("c2", "exfil"),
+                ports=(PortSignal("web", 443),),
+                action="drop",
+                deception_sid=True,
+            ),
+            93,
+            (
+                "severity=2",
+                "sid_present",
+                "threat_class=c2(48)",
+                "threat_class=exfil(46)",
+                "web_port=443",
+                "action=drop(contained)",
+            ),
+        ),
+        (
+            FastAssessmentInput(severity=2, benign_classless=True),
+            25,
+            ("severity=2", "benign_dampener"),
+        ),
+        (
+            FastAssessmentInput(
+                severity=2,
+                classes=("recon",),
+                ports=(PortSignal("decoy", 18080),),
+                deception_sid=True,
+            ),
+            75,
+            (
+                "severity=2",
+                "sid_present",
+                "threat_class=recon(30)",
+                "decoy_port=18080",
+            ),
+        ),
+        # Low-severity, low-weight real deception SID: this is the case that
+        # reaches the deception floor from the Edge-equivalent input shape.
+        # The arithmetic from TacticalScorer at 47c880b is shown here: base 18
+        # (sev 4) + 5 (SID) + 30 (recon) = 53 < 60, so the floor applies.
+        # Direct execution of this case against Edge source was independently
+        # confirmed outside this pytest run. The Edge-side feature mapping is
+        # from 47c880b; PR #528 head df61bd adds shadow-comparison bookkeeping,
+        # not a change to score/factor logic.
+        (
+            FastAssessmentInput(
+                severity=4,
+                classes=("recon",),
+                deception_sid=True,
+            ),
+            60,
+            (
+                "severity=4",
+                "sid_present",
+                "threat_class=recon(30)",
+                "deception_floor",
+            ),
+        ),
+    ],
+    ids=(
+        "unknown-severity-and-class",
+        "token-ceiling-at-39",
+        "ordered-multiple-classes-port-action",
+        "classless-benign-dampener",
+        "deception-above-floor",
+        "deception-floor-low-weight-class",
+    ),
+)
+def test_edge_scorer_source_goldens(inputs, expected_score, expected_factors):
+    result = assess_fast(inputs)
+    assert result.score == expected_score
+    assert result.factors == expected_factors
 
 
 def test_unrecognized_severity_and_class_fall_back_to_low_base():
