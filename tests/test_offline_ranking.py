@@ -54,6 +54,28 @@ class DataGates(unittest.TestCase):
         self.assertIn('teacher_only_label', quarantine_reasons(replace(value, reviewer=replace(row.reviewer, basis='teacher_only')), now=NOW))
         self.assertIn('review_missing', quarantine_reasons(replace(value, reviewer=None, outcome=None), now=NOW))
 
+    def test_time_group_is_utc_date_across_offset_boundaries(self):
+        row = example(1, 1)
+        # Positive offset: 00:30 at +02:00 is 22:30 UTC the previous day.
+        self.assertNotIn('time_group_mismatch', quarantine_reasons(
+            replace(row, decision_at='2026-10-02T00:30:00+02:00', time_group='2026-10-01'), now=NOW))
+        self.assertIn('time_group_mismatch', quarantine_reasons(
+            replace(row, decision_at='2026-10-02T00:30:00+02:00', time_group='2026-10-02'), now=NOW))
+        # Negative offset: 22:30 at -03:00 is 01:30 UTC the next day.
+        self.assertNotIn('time_group_mismatch', quarantine_reasons(
+            replace(row, decision_at='2026-10-01T22:30:00-03:00', time_group='2026-10-02'), now=NOW))
+        self.assertIn('time_group_mismatch', quarantine_reasons(
+            replace(row, decision_at='2026-10-01T22:30:00-03:00', time_group='2026-10-01'), now=NOW))
+
+    def test_equivalent_instants_share_one_time_group(self):
+        row = example(1, 1)
+        # All four spellings denote 2026-10-01T22:30:00Z.
+        for decision_at in ('2026-10-01T22:30:00Z', '2026-10-01T22:30:00+00:00',
+                            '2026-10-02T00:30:00+02:00', '2026-10-01T15:30:00-07:00'):
+            with self.subTest(decision_at=decision_at):
+                reasons = quarantine_reasons(replace(row, decision_at=decision_at, time_group='2026-10-01'), now=NOW)
+                self.assertNotIn('time_group_mismatch', reasons)
+
     def test_poison_conflict_expiry_revocation_and_unknown_rights_quarantine(self):
         row = example(1, 1)
         cases = [replace(row, snapshot=replace(row.snapshot, quality='poisoned')),
