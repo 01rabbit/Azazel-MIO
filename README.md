@@ -113,3 +113,10 @@ M.I.O.は、通信制御、デコイの起動・露出、権限変更を直接�
 現時点では、導入手順や公開パッケージはまだありません。初期変更では、役割・契約・移行計画と、最小の実働経路を優先します。
 
 IssueやPull Requestには、目的、対象製品、入力と出力、権限への影響、失敗時の動作、検証結果、未確認事項を記載してください。秘密情報、生の機密データ、内部識別情報、認証情報を例やログに含めないでください。
+
+## Common Python core
+
+`azazel-mio` is a stdlib-only, advisory-only Python 3.11+ package.
+Install from this checkout with `python -m pip install .`.
+See [internal API v1](docs/api-v1.md) and [source/license migration](docs/migration.md).
+Products own transport, governance, persistence and deterministic enforcement.

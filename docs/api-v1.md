@@ -1,0 +1,144 @@
+# M.I.O. internal API v1
+
+`azazel_mio.assistant.AssistantCore(model=None).explain(frame, *, knowledge=(), now: str, knowledge_attempted: bool = True, cancel_check=None, stale_check=None) -> Assistance`
+
+`frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
+`AssistantCore(model, coordinator=...)` may opt into product-neutral request lifecycle
+coordination. Coordinated responses add `cycle_disposition`: `current` means the
+cycle was accepted by the coordinator; any other value (`backpressure`,
+`in_flight_duplicate`, or a fixed stale/cancel/restart reason) means the result is
+not current. For every non-current disposition, observations, hypotheses,
+unknowns, checks, knowledge, handoff, and reasoning trace are empty, and dependency
+outcomes are `unavailable`. Consumers must not use the frame ID or state in such a
+response as a current assessment. Calls without a coordinator retain the original
+response shape and behavior.
+
+`Assistance.to_dict()` returns schema_version (`mio.assistance.v1`), trace_id,
+frame_id, generation_method (`static_reference` or `model`), state, observations,
+hypotheses, unknowns, next_checks, knowledge, handoff, reasoning_trace.
+The v1 response retains those fields and adds the optional
+`dependency_outcome` object. Its `knowledge` value uses the closed enum
+`available | absent | not_queried | timeout | expired | rejected | unavailable`; `deception`
+uses `available | absent | timeout | rejected | unavailable` (`expired` is
+only applicable to date-bounded Knowledge context).
+This additive field is orthogonal to `state` (which remains
+`dependency_unavailable` when the reasoning loop reports that state) and does
+not describe Edge authority or action. Existing v1 consumers may ignore the
+unknown field; consumers that validate object keys must accept this documented
+v1 extension. `next_checks` may add fixed, scenario-specific read-only checks
+when these typed outcomes are present. Dependency-specific checks use only
+closed status values and typed expiry validation; authentication checks are
+gated by the selected closed playbook ID. None use peer response prose.
+`knowledge_attempted` defaults to `True`, preserving existing behavior. A caller
+may pass the exact boolean `False` to report `not_queried` only when the frame
+has no Knowledge refs or adverse dependency status and no Knowledge context,
+reference, or advisory inputs were supplied. Invalid values raise `TypeError`.
+The result adds a fixed next-check stating that this fast assessment did not
+query Knowledge and directing the consumer to the separate validated Knowledge
+analysis lane. It contains no action recommendation and does not change the
+serialized `MioSituationFrame` schema.
+Existing BoundedReasoningLoop, ReasoningCoordinator, playbook and broker APIs keep
+their names. For `generate_hypotheses`, multi-prompt playbooks now require at least
+two hypotheses with distinct `hypothesis_alternative_id` values selected from
+trusted playbook slots. Every multi-prompt playbook has a benign or unresolved
+slot, and at least one such slot must be selected. The schema advertises
+`minItems: 2` and an enum of that playbook's slot IDs. `update_hypotheses` also
+requires the field and preserves the existing slot for stable hypothesis IDs.
+The selected slot ID is included in each hypothesis and in a trace event, marked
+`model_proposed_unverified`; the trace records the associated trusted role with
+the field `proposed_role` and same verification status. This checks slot diversity, not whether the prose
+actually fits a slot. The prose remains model-proposed and unverified; slot roles
+are not evidence, facts, or authority, and MIO does not claim semantic competition
+is validated. Adapters must return the new field and use IDs from the supplied enum. Invalid slot selections end in
+`validation_rejected` and the deterministic no-model handoff. Prompt template
+version is `1.5.0`. Custom playbooks must define one unique slot per prompt and at
+least one benign or unresolved role. There is no enforcement operation or
+executable recommendation.
+
+`VerifiedKnowledgeContext(source: str, generation: str, as_of: str, expires_at: str,
+facts: tuple[str, ...], inferences: tuple[str, ...], evidence_refs: tuple[str, ...] = ())`
+is an internal projection, not a wire contract. Products perform authentication,
+authorization, signature/schema/revocation/privacy checks before construction.
+MIO bounds and checks all fields again, rejects expired/future/malformed contexts,
+and preserves facts and inferences separately. A context grants no authority.
+`now` is mandatory, timezone-aware ISO 8601, supplied by the product clock.
+
+`KnowledgeLiteAdvisory(technique_id, name, summary, claim_id, bundle_digest,
+freshness, generation, as_of, citation, revocation_status, trust_check="verified",
+expires_at=None)` is accepted through `explain(...,
+knowledge_lite_advisories=(...), now=...)`. It is projected as
+`kind=knowledge_lite_advisory`, `source_kind=knowledge_lite`, and
+`claim_status=reported_unverified`. Its summary remains only a reported claim:
+it is not placed in observations or VerifiedKnowledgeContext facts/inferences.
+The projection preserves the claim, bundle, generation, timestamp, citation,
+freshness, trust check, and revocation status. Missing expiry stays `null`; MIO
+does not infer an expiry. A supplied expiry must be timezone-aware, later than
+`as_of`, and later than the caller's `now`.
+
+`freshness` is the closed enum `current | static`; `trust_check` must be
+`verified`; `revocation_status` is `clear | unknown | revoked`, with revoked
+claims rejected and unknown status retained under the weaker
+`unverified_advisory_revocation_unknown` trust label. A `current`
+claim is labelled `current_at_lookup`, not treated as timeless: callers must
+recheck the claim and revocation status before relying on it. The no-model path
+also emits a fixed read-only recheck suggestion. Knowledge Lite has no per-claim
+expiry, so consumers must not substitute the bundle freshness label for expiry.
+When a valid advisory is supplied with no other Knowledge outcome,
+`dependency_outcome.knowledge` changes from `absent` to `available`. It reports
+that Knowledge supplied a usable advisory projection, not that the claim was
+verified or promoted to a fact. Existing timeout, expiry, rejection, or
+unavailable outcomes retain precedence over an advisory.
+
+Products generate opaque trace/frame IDs from their accepted incident and current
+boot/material generation. Callers never take these IDs from operator/model text.
+Changed boot or material generation must use a new frame ID and supersede/cancel
+old work; coordinator retains its existing strict completion ticket checks.
+No result from a cancelled/stale frame is offered as a current explanation.
+
+The pure package imports no Edge/Nexus modules and opens no network, files or
+processes at import. Products own governance, HTTP, OS persistence and audit sinks.
+
+Generated ID grammar: `mio-<16 lowercase hex nonce>-<1..12 decimal counter>` for trace_id; append `:frame` for frame_id. The process nonce is generated by the product (never a host identifier); other pre-existing fixture ID forms remain accepted.
+
+Capability Broker construction is a setup boundary: with an injected audit
+sink it starts one daemon dispatcher before returning. Construction may wait
+for Python thread bootstrap; process-control exceptions from startup propagate
+after preserving the sole reservation. Ordinary startup exceptions are retained
+as observable `start_failures` and `startup_uncertain` state. No audit thread is
+started at import or when no sink is configured. `submit()` never starts,
+restarts, joins, or waits for the audit dispatcher, and startup never holds the
+queue lock. A delayed dispatcher bootstrap cannot extend submit latency.
+
+A broker and its `for_new_cycle()` descendants share that single dispatcher and
+a pending queue bounded by `audit_capacity` (clamped to 1–4096), plus at most one
+record executing in the sink. New cycles only register weak ownership; they do
+not start another thread. An idle dispatcher remains available while any broker
+in its family exists. After every family owner is garbage collected, the worker
+drains accepted records and exits after observing the empty owner set (checked
+at most every 0.1 seconds while idle). Weak ownership never retains a broker,
+and a live parent necessarily remains an owner while creating a descendant.
+A hung sink retains its sole worker until it returns. `close()` cancels the
+reasoning cycle without waiting for or discarding audit delivery; a closed
+broker can still audit typed refusals.
+
+Results include `audit_sink_queued`, `audit_sink_full`, or
+`audit_sink_startup_uncertain` (`audit_sink_record_failed` if fallback recording
+also fails). Saturation drops the newest sink admission without changing
+capability status, data, or provenance; sanitized local history remains bounded.
+`audit_delivery_stats()` reports shared `accepted`, `delivered`, `failed`,
+`dropped`, `pending`, `capacity`, `worker_running`, `worker_reserved`,
+`startup_uncertain`, `start_attempts`, and `start_failures`, plus per-cycle
+`local_evicted`. `worker_running` means the dispatcher is processing a record;
+an idle dispatcher still holds `worker_reserved`. Sink exceptions increment
+`failed`. Failed/dropped deliveries are not retried; queued is not a durability
+acknowledgement. Handler timeout bounds handler waiting; validation,
+sanitization and scheduling still add overhead.
+
+An ambiguous startup failure retains its exact reservation permanently until
+that worker runs. Further submissions may fill the bounded queue but cannot
+start another dispatcher. If no thread was actually launched, that family's
+audit delivery remains stalled permanently. No `ident`/`is_alive` observation
+is used to infer that a delayed bootstrap cannot run. There is no process-exit
+flush guarantee; products requiring durable audit persistence must monitor the
+counters and own persistence. Independently constructed families each own one
+reservation; applications should reuse a broker family across reasoning cycles.
