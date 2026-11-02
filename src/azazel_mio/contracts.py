@@ -737,6 +737,13 @@ class MioRecommendation:
     limitations: tuple[str, ...] = ()
     executable: bool = False
 
+    def canonical_digest(self) -> str:
+        """Bind all recommendation material, including non-authoritative prose."""
+        from dataclasses import asdict
+        material = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"),
+                              ensure_ascii=True, allow_nan=False).encode("ascii")
+        return "sha256:" + hashlib.sha256(material).hexdigest()
+
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any], *, advisory_id: str) -> "MioRecommendation":
         return cls(advisory_id=_bounded_text(advisory_id, 96), summary=_bounded_text(payload.get("summary"), 360), recommended_action=_bounded_text(payload.get("recommended_action"), 32).upper(), rationale=_bounded_text(payload.get("rationale"), 720), evidence_refs=_model_id_list(payload.get("evidence_refs"), limit=32, kind="evidence_ref"), limitations=_bounded_unique(payload.get("limitations"), limit=8), executable=False)
