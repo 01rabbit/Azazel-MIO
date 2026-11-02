@@ -34,11 +34,14 @@ from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_f
             ),
         ),
         (
+            # Edge SID 9901251 is a deception SID; the floor does not alter
+            # this result because the score is already above 60.
             FastAssessmentInput(
                 severity=2,
                 classes=("c2", "exfil"),
                 ports=(PortSignal("web", 443),),
                 action="drop",
+                deception_sid=True,
             ),
             93,
             (
@@ -72,10 +75,12 @@ from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_f
         ),
         # Low-severity, low-weight real deception SID: this is the case that
         # reaches the deception floor from the Edge-equivalent input shape.
-        # Hand-derived from TacticalScorer at 47c880b: base 18 (sev 4) + 5 (SID)
-        # + 30 (recon) = 53 < 60, so the floor applies. Edge-side feature
-        # mapping is from 47c880b; PR #528 head df61bd adds shadow-comparison
-        # bookkeeping, not a change to score/factor logic.
+        # The arithmetic from TacticalScorer at 47c880b is shown here: base 18
+        # (sev 4) + 5 (SID) + 30 (recon) = 53 < 60, so the floor applies.
+        # Direct execution of this case against Edge source was independently
+        # confirmed outside this pytest run. The Edge-side feature mapping is
+        # from 47c880b; PR #528 head df61bd adds shadow-comparison bookkeeping,
+        # not a change to score/factor logic.
         (
             FastAssessmentInput(
                 severity=4,
