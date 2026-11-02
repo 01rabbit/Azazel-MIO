@@ -65,11 +65,22 @@ and preserves facts and inferences separately. A context grants no authority.
 
 `KnowledgeLiteAdvisory(technique_id, name, summary, claim_id, bundle_digest,
 freshness, generation, as_of, citation, revocation_status, trust_check="verified",
-expires_at=None)` is accepted through `explain(...,
+expires_at=None, source_citation=None)` is accepted through `explain(...,
 knowledge_lite_advisories=(...), now=...)`. It is projected as
 `kind=knowledge_lite_advisory`, `source_kind=knowledge_lite`, and
 `claim_status=reported_unverified`. Its summary remains only a reported claim:
 it is not placed in observations or VerifiedKnowledgeContext facts/inferences.
+`summary` may be empty and is preserved exactly, with no fabricated fallback.
+`citation` remains the canonical identifier; adapters mapping a KnowledgeRef use
+its `claim_id` for this field, not its human-readable dataset citation.
+The optional trailing `source_citation` carries that source's dataset citation
+separately as untrusted display text. It accepts at most 160 printable characters,
+including the empty string, under Knowledge's already-cleaned plain-text policy
+(no HTML/Markdown formatting, HTTP URLs, or control characters). MIO rejects
+unclean text rather than rewriting source content. `None` omits the projected
+field, preserving the output shape for existing callers; explicit `""` includes
+`source_citation: ""`. Source citations establish no trust or authority and do
+not enable learning, fact promotion, or enforcement.
 The projection preserves the claim, bundle, generation, timestamp, citation,
 freshness, trust check, and revocation status. Missing expiry stays `null`; MIO
 does not infer an expiry. A supplied expiry must be timezone-aware, later than
@@ -88,6 +99,41 @@ When a valid advisory is supplied with no other Knowledge outcome,
 that Knowledge supplied a usable advisory projection, not that the claim was
 verified or promoted to a fact. Existing timeout, expiry, rejection, or
 unavailable outcomes retain precedence over an advisory.
+
+`KnowledgeContextResponseAdvisory(context_response: Mapping[str, Any])` accepts
+one bounded response matching the `ContextResponse` schema at Knowledge
+`09d234cde0ceb447a3ebc7e9704eef4758ac4a4d`. MIO checks required and optional
+top-level fields, JSON size/depth/node limits, and selected field types. It
+emits a separate `knowledge_context_response_advisory` receipt with
+`claim_status=reported_unverified`. The projection contains only public
+ATT&CK technique IDs from `threat_context.attack_mapping`, sorted unique
+`source_groups` from `threat_context.ioc_matches[*].sources`, typed
+`source_freshness` values (`oldest_feed_days`, `attack_version`), and a
+canonical defensive state from MIO's closed vocabulary. It drops source text,
+IOC values, actor/event data, advisory/provenance IDs, scores, recommendations
+and actions, references, and other metadata. This advisory is not prompt
+material, an observation, a verified fact, evidence, or authority. Invalid or
+oversize input is rejected and degrades the result. A valid response marks
+Knowledge available only when the frame has no stronger dependency outcome.
+
+Source groups are Knowledge-reported source labels, not truth attribution or
+proof of licensing, origin, or currentness. At the pinned Knowledge revision,
+`correlate/pipeline.py` takes `SourceRef.group` from configured feed groups
+(falling back to feed IDs) and emits sorted unique groups per IOC match;
+`config/feeds.yaml` includes `abusech`, `spamhaus`, and `edge_reported`.
+MIO accepts only ASCII labels matching `[a-z][a-z0-9_-]{0,31}`, at most
+32 IOC matches, 16 labels per match, 64 label occurrences in total, and
+16 distinct labels. Malformed or excessive source collections reject the
+whole receipt; no partial source set or truncation is emitted. Missing or empty
+match/source lists project to `source_groups=[]`; they supply no identity and
+do not by themselves make an otherwise empty projection useful. Source groups
+remain unverified receipt metadata and never enter prompts, observations,
+verified facts, or training. Existing JSON size/depth/node bounds still apply.
+
+This is an in-process input seam only. Production networking, authentication
+principal and token rotation, TLS, privacy/retention approval, and request
+deadline ownership remain product-adapter inputs and are not implemented.
+MIO does not infer response generation, expiry, or revocation.
 
 Products generate opaque trace/frame IDs from their accepted incident and current
 boot/material generation. Callers never take these IDs from operator/model text.

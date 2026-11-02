@@ -44,4 +44,5 @@ from .trace import ReasoningTrace, ReasoningTraceEvent
 
 from .lifecycle import ReasoningCoordinator
 from .assistant import (AssistantCore, Assistance, KnowledgeLiteAdvisory,
-    ReportedKnowledgeContext, StaticKnowledgeReference, VerifiedKnowledgeContext)
+    KnowledgeContextResponseAdvisory, ReportedKnowledgeContext,
+    StaticKnowledgeReference, VerifiedKnowledgeContext)
