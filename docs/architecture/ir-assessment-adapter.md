@@ -1,6 +1,6 @@
 # IR fast-assessment adapter and CLI candidate command (offline slice)
 
-**Status:** local candidate on branch `codex/ir-fast-assessment-adapter` from base `0dacea878bd6652b49658d06c9a05ce5be9639a1`, stacked on PR #11 (head `3148caf97ef492ad40e7b2186cd54522e1919e84`). Not merged, not admitted, and not wired to any product.
+**Status:** local fast-forward candidate for Draft PR #24, preserving source PR head `1b4b3ff12ea998b260b330e070b21fddee21e888` and based on refreshed PR #11 candidate `a5b74ec256e21a8314ff378ab95f4d31dfb397a3`. Not merged to the remote PR, not admitted, and not wired to any product.
 
 ## Purpose
 
@@ -144,10 +144,9 @@ Unknown signal values are not errors. Anything the kernel does not recognize rea
 
 ## Verification status
 
-Validation was run on the PR #11 stack using the existing macOS arm64 Python 3.12.14 / pytest 9.2.0 environment. No virtual environment or dependencies were created for these checks.
+Validation on this local candidate used the existing macOS arm64 Python 3.12.14 / pytest 9.2.0 environment; no virtual environment or dependencies were created. The full suite used the candidate source first on `PYTHONPATH` to avoid a stale editable install.
 
-- Focused adapter + CLI workflow: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:cacheprovider tests/test_ir_adapter.py tests/test_ir_workflow.py` — **102 passed, 14 subtests passed**.
-- Full MIO suite: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -ra -q -p no:cacheprovider` — **424 passed, 99 subtests passed**, no skips or deselections.
+- Full MIO suite: `PYTHONPATH="$PWD/src" /Users/mao/CodexWork/mio-20261102/mio-context-source-citation-venv/bin/python -m pytest -q` — **432 passed, 103 subtests passed**, exit 0.
 - `git diff --check` passed.
 
-The tests exercise malformed and deeply nested JSON rejection, verified evidence linkage, caller-asserted conflict abstention, query-only store access, empty-input abstention, stable kernel outputs and preservation of case/evidence references. These are local tests only; GitHub Actions and Debian ARM64 guest verification have not been established for this stacked Draft candidate. The exact tested head and full commands are recorded in the Draft PR description.
+The tests exercise malformed and deeply nested JSON rejection, verified evidence linkage, caller-asserted conflict abstention, query-only store access, empty-input abstention, stable kernel outputs and preservation of case/evidence references. These are local tests only; GitHub Actions and Debian ARM64 guest verification have not been established for this Draft candidate.
