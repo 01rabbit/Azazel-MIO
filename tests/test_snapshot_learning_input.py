@@ -5,7 +5,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from azazel_mio.learning_data import SnapshotLineage, digest
+from azazel_mio.learning_data import SnapshotLineage, TeacherCandidate, digest
 from azazel_mio.learning_offline import DatasetGateError, evaluate, fit
 from azazel_mio.snapshot_input import (ConsumedSnapshotInput, SnapshotInputContext,
     SnapshotRecordBinding, SnapshotSourceBinding, _frame_digest,
@@ -350,6 +350,19 @@ class SnapshotInputTests(unittest.TestCase):
         self.assertFalse(report['knowledge_snapshot_producer_authenticated'])
         self.assertFalse(report['curated_independent_outcome_labels_available'])
         self.assertEqual(report['curated_training_eligible_examples'], 0)
+        self.assertIsNone(artifact)
+
+    def test_teacher_only_candidate_is_quarantined_and_not_curated_training(self):
+        original, original_parts = dataset()
+        teacher = TeacherCandidate('model-v1', 'prompt-v1', 'knowledge-g1', 'auth-ambiguity-v1')
+        original[0] = replace(original[0], teacher=teacher,
+            reviewer=replace(original[0].reviewer, basis='teacher_only'))
+        rows, value, context = consume(original, reviewed=True)
+        parts = {row.example_id: original_parts[old.example_id] for row, old in zip(rows, original)}
+        report, artifact = run(rows, value, context, partitions=parts)
+        self.assertEqual(report['quarantine'], [{'example_id': rows[0].example_id, 'reasons': ['teacher_only_label']}])
+        self.assertEqual(report['curated_training_eligible_examples'], 1)
+        # The only remaining train row cannot form a training artifact, so the teacher-only row adds no training evidence.
         self.assertIsNone(artifact)
 
 
