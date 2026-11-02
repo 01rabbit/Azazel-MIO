@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -19,9 +20,19 @@ def root_path():
     return Path(os.environ.get("MIO_IR_HOME", str(Path.home() / ".local/share/azazel-mio"))).expanduser()
 
 def connect(root):
+    if root.is_symlink() or (root / "cases.sqlite3").is_symlink():
+        raise ValueError("unsafe storage path")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(root, 0o700)
-    db = sqlite3.connect(root / "cases.sqlite3")
+    database = root / "cases.sqlite3"
+    try:
+        metadata = database.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("unsafe storage database: expected a single-link regular file")
+    db = sqlite3.connect(database)
     db.execute("PRAGMA foreign_keys=ON")
     db.executescript("""
     CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
@@ -42,7 +53,8 @@ def verify(db, root, case):
     results = []
     for eid, digest in rows:
         path = root / "objects" / digest
-        valid = path.is_file() and not path.is_symlink() and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+        valid = (not (root / "objects").is_symlink() and path.is_file()
+                 and not path.is_symlink() and hashlib.sha256(path.read_bytes()).hexdigest() == digest)
         results.append({"evidence_id": eid, "sha256": digest, "valid": valid})
     return results
 
@@ -84,6 +96,8 @@ def import_file(db, root, case, filename, fmt):
     records = parse_records(raw, fmt)
     digest = hashlib.sha256(raw).hexdigest()
     directory = root / "objects"
+    if directory.is_symlink():
+        raise ValueError("unsafe object directory")
     directory.mkdir(mode=0o700, exist_ok=True)
     destination = directory / digest
     if destination.is_symlink():
@@ -164,7 +178,7 @@ def main():
             else:
                 output = report(db, root, args.case)
                 path = Path(args.output).resolve()
-                if path == (root / "cases.sqlite3").resolve() or (root / "objects").resolve() in path.parents:
+                if path == root.resolve() or root.resolve() in path.parents:
                     raise ValueError("output may not overwrite internal storage")
                 if args.format == "markdown":
                     content = "# IR Case " + str(args.case) + "\n\n" + "\n".join(
@@ -173,7 +187,16 @@ def main():
                         for x in output["timeline"]) + "\n\nEvidence verification: " + json.dumps(output["evidence"]) + "\n"
                 else:
                     content = json.dumps(output, indent=2, ensure_ascii=False)
-                path.write_text(content, encoding="utf-8")
+                # Replace the output entry atomically: an existing hard link must
+                # never truncate the database or evidence inode it aliases.
+                fd, tmp = tempfile.mkstemp(dir=path.parent)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        handle.write(content)
+                    os.replace(tmp, path)
+                finally:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
                 output = {"output": str(path)}
         print(json.dumps(output, ensure_ascii=False))
         if args.group == "evidence" and args.action == "verify" and not all(x["valid"] for x in output):
