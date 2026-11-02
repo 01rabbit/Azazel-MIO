@@ -42,6 +42,7 @@ import re
 import secrets
 import threading
 import time
+import weakref
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -395,14 +396,15 @@ class _SharedLimits:
 
 
 class _AuditDelivery:
-    """One lazy daemon worker and bounded pending records, shared across cycles."""
+    """One setup-time dispatcher and bounded queue shared across cycles."""
 
     def __init__(self, sink: Callable[[Mapping[str, Any]], None] | None, capacity: int):
         self.sink = sink
         self.capacity = capacity
         self.lock = threading.Lock()
+        self.ready = threading.Condition(self.lock)
+        self.owners: weakref.WeakSet[CapabilityBroker] = weakref.WeakSet()
         self.pending: deque[dict[str, Any]] = deque()
-        self.running = False
         self.worker: threading.Thread | None = None
         self.startup_uncertain = False
         self.worker_running = False
@@ -410,74 +412,73 @@ class _AuditDelivery:
         self.start_attempts = self.start_failures = 0
         self.accepted = self.delivered = self.failed = self.dropped = 0
 
+    def attach(self, owner: CapabilityBroker) -> None:
+        # Called only during broker setup. A live caller/owner prevents the
+        # dispatcher from exiting while a new cycle attaches. The worker holds
+        # no strong reference to any broker, so discarded families are reaped.
+        with self.ready:
+            self.owners.add(owner)
+            if self.sink is None or self.worker is not None:
+                return
+            worker = threading.Thread(target=self._run, name="mio-audit-sink", daemon=True)
+            self.worker = worker
+            self.startup_uncertain = True
+            self.start_attempts += 1
+        # CPython start waits for bootstrap: setup may block, submit never does.
+        # Never hold the delivery lock while waiting for startup.
+        try:
+            worker.start()
+        except BaseException as exc:
+            with self.ready:
+                self.start_failures += 1
+            if not isinstance(exc, Exception):
+                raise
+
     def enqueue(self, record: dict[str, Any]) -> str:
         if self.sink is None:
             return "disabled"
-        with self.lock:
-            # Target return is not thread termination: bootstrap/teardown may
-            # still be executing. Only reap a worker known to have entered and
-            # finished our target, once Thread confirms termination. This is a
-            # nonblocking observation; ambiguous startup is never reaped.
-            if self.worker_finished and self.worker is not None and not self.worker.is_alive():
-                self.worker = None
-                self.running = False
+        with self.ready:
             if len(self.pending) >= self.capacity:
                 self.dropped += 1
-                outcome = "full"
-            else:
-                self.pending.append(copy.deepcopy(record))
-                self.accepted += 1
-                outcome = "queued"
-            if not self.pending:
-                return outcome
-            if not self.running:
-                self.worker_finished = False
-                worker = threading.Thread(target=self._run, name="mio-audit-sink", daemon=True)
-                self.worker = worker
-                self.running = True  # Reserved even if startup cannot be observed.
-                self.startup_uncertain = True
-                self.start_attempts += 1
-                try:
-                    worker.start()
-                except BaseException as exc:
-                    # Neither ident nor is_alive can prove that an interrupted
-                    # bootstrap will not run later. Retain the sole reservation
-                    # and bounded queue until this exact worker enters _run.
-                    self.start_failures += 1
-                    if not isinstance(exc, Exception):
-                        raise
-                    return "full" if outcome == "full" else "startup_uncertain"
-            return "startup_uncertain" if outcome != "full" and self.startup_uncertain and self.start_failures else outcome
+                return "full"
+            self.pending.append(copy.deepcopy(record))
+            self.accepted += 1
+            self.ready.notify()
+            return "startup_uncertain" if self.startup_uncertain else "queued"
 
     def _run(self) -> None:
-        with self.lock:
+        with self.ready:
             self.startup_uncertain = False
-            self.worker_running = True
         while True:
-            with self.lock:
-                if not self.pending:
-                    self.worker_running = False
-                    self.worker_finished = True
-                    return
+            with self.ready:
+                self.worker_running = False
+                while not self.pending:
+                    if not self.owners:
+                        self.worker_finished = True
+                        return
+                    # Weak-owner removal requires no callback or broker lock.
+                    # Periodic observation retires an abandoned idle family.
+                    self.ready.wait(.1)
+                self.worker_running = True
                 record = self.pending.popleft()
             try:
                 assert self.sink is not None
                 self.sink(record)
             except BaseException:
-                with self.lock:
+                with self.ready:
                     self.failed += 1
             else:
-                with self.lock:
+                with self.ready:
                     self.delivered += 1
 
     def stats(self) -> dict[str, int]:
-        with self.lock:
+        with self.ready:
             return dict(capacity=self.capacity, pending=len(self.pending),
-                        worker_running=int(self.worker_running), worker_reserved=int(self.running),
+                        worker_running=int(self.worker_running), worker_reserved=int(self.worker is not None),
                         startup_uncertain=int(self.startup_uncertain),
                         start_attempts=self.start_attempts, start_failures=self.start_failures,
-                        accepted=self.accepted,
-                        delivered=self.delivered, failed=self.failed, dropped=self.dropped)
+                        accepted=self.accepted, delivered=self.delivered,
+                        failed=self.failed, dropped=self.dropped)
 
 
 class CapabilityBroker:
@@ -518,6 +519,7 @@ class CapabilityBroker:
         # Cycle end: set by close(); wakes every waiting submit at once.
         self._closed = False
         self._waiters: set[threading.Event] = set()
+        self._audit_delivery.attach(self)
 
     def close(self) -> None:
         """End this broker's reasoning cycle (e.g. the cycle was superseded).
@@ -562,6 +564,7 @@ class CapabilityBroker:
             audit_sink=None,
         )
         new._audit_delivery = self._audit_delivery
+        new._audit_delivery.attach(new)
         new._shared = self._shared
         new._lock = self._shared.lock
         with self._lock:
@@ -609,9 +612,9 @@ class CapabilityBroker:
         With an injected sink, limitations includes audit_sink_queued, full, or
         startup_uncertain. Delivery is best effort and observable via
         audit_delivery_stats(); queued is not a durability acknowledgement.
-        Ordinary failures become results; process-control BaseException propagates
-        after safe audit admission containment. Validation, sanitization and scheduling
-        add bounded-work overhead.
+        Audit dispatch is established during construction, which may wait for
+        thread startup. Submit only enqueues; validation, sanitization and
+        scheduling add bounded-work overhead.
         """
         started = time.monotonic()
         params_audit: dict[str, Any] = {}
