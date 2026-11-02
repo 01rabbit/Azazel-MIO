@@ -3,7 +3,7 @@
 **Status:** Project-owner direction recorded; cross-product adoption and contract acceptance pending.
 **Decision date:** 2026-10-31; direction/evidence refresh 2026-11-02
 
-The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. MIO `main` is `fecac668e59525f6426e46d4cf7b699fcba3ff50`, including merged PRs #15, #17, #18, #16, #21 (bounded validation diagnostics) and #20 (tests-only learning-input integrity coverage). The [inventory](ai-inventory.md) records their final heads and merge commits; merged library capability does not establish product adoption.
+The project owner's explicit goal is to make MIO the source of truth for common AI assistance. This records that direction, not consent from Edge, Nexus, Knowledge, Fabric, or Deception owners, and not a completed migration. Product-specific acceptance, rollout, and wire-contract decisions remain pending. The evidence base is MIO `main` `1aaddd76b40cc049f662e990a49e994b7be8636b`, including merged PRs #15, #17, #18, #16, #19 (ownership/inventory documentation), #21 (bounded validation diagnostics) and #20 (tests-only learning-input integrity coverage). The [inventory](ai-inventory.md) records their final heads and merge commits; merged library capability does not establish product adoption. MIO #11 and #22 remain open/draft. This follow-up documentation candidate is local and not merged.
 
 ## Context and decision
 
@@ -22,9 +22,9 @@ Edge remains the deterministic decision and enforcement authority. M.I.O. may ex
 
 ## Candidate routes and migration boundaries
 
-The [AI inventory](ai-inventory.md) records exact merged MIO heads and product candidate heads and remaining product callsites; the [migration matrix](../migration.md#compatibility-and-rollout-matrix) records supported claims and unproven combinations. Shared semantics belong in MIO under the project direction; moving those semantics does not move Edge's immediate deterministic decisions/enforcement, Nexus lifecycle/admission/operator entry, Knowledge provenance, or Fabric wire contracts.
+The [AI inventory](ai-inventory.md) records exact public merged MIO heads, public product candidate heads and remaining public product callsites; the [migration matrix](../migration.md#compatibility-and-rollout-matrix) records supported claims and unproven combinations. Shared semantics belong in MIO under the project direction; moving those semantics does not move Edge's immediate deterministic decisions/enforcement, Nexus lifecycle/admission/operator entry, Knowledge provenance, or Fabric wire contracts.
 
-Edge still contains legacy product model paths. Its optional PR #525 auxiliary path calls the shared core without a model; its separate model/Knowledge work and refreshed local stack are not evidence that all product assistance has migrated. Nexus #398 supplies shared fast assistance, while its local inference/retrieval orchestration remains product code. A common separate-time Knowledge-to-LLM reasoning path has not been established at these heads. Deterministic Mission Pack references are not that path.
+Edge still contains legacy product model paths. Its optional PR #525 auxiliary path calls the shared core without a model; its separate model/Knowledge work and refreshed local stack are not evidence that all product assistance has migrated. Edge #525–#530 remain open/draft; #525 current-head CI has two installer-coverage failures. The private consumer integration remains stacked/draft, and full-node, Lite and model end-to-end proof is not complete. A common separate-time Knowledge-to-LLM reasoning path has not been established.
 
 Keep the MIO internal Python API (`docs/api-v1.md`) separate from Fabric wire contracts. Product adapters translate at the boundary. Preserve frame v2 canonical bytes and replay behavior when changing Python ownership metadata; compatibility requires verification for each release combination. Extraction or import aliases alone do not prove a deployed consumer switch.
 
@@ -39,4 +39,4 @@ Keep the MIO internal Python API (`docs/api-v1.md`) separate from Fabric wire co
 
 ## Review required
 
-Product owners must confirm the Edge and Nexus adapter seams, Knowledge trust/generation and revocation contract, REST-to-Fabric mapping/version policy, and Deception approved-control flow before cross-product contracts and rollout are accepted. The project-owner direction above does not supply those approvals. Tracking references: MIO #1, #2, #12, #14; Edge #524; Nexus #395; Knowledge #111; Fabric #72. This ADR remains proposed and does not assert completed integration.
+Product owners must confirm the Edge and Nexus adapter seams, Knowledge trust/generation and revocation contract, REST-to-Fabric mapping/version policy, and Deception approved-control flow before cross-product contracts and rollout are accepted. The project-owner direction above does not supply those approvals. Tracking references: MIO #1, #2, #12, #14; Edge #524; Knowledge #111; Fabric #72. This ADR remains proposed and does not assert completed integration.
