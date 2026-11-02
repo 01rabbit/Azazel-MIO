@@ -70,7 +70,7 @@ Schema `mio.ir.fast-assessment-inputs.v1`. Every key shown is required unless ma
 | `inputs.token_only`, `inputs.deception_sid`, `inputs.benign_classless` | Booleans. |
 | `inputs.ports` | List of at most 16 objects, each with exactly `kind` (lower-case token) and `port` (integer 1 to 65535). |
 | `inputs.action` | Lower-case token. |
-| `conflict_evidence_ids` (optional) | List of at most 16 unique strict positive integers. Each must be verified evidence in the same case. |
+| `conflict_evidence_ids` (optional) | List of at most 16 unique strict positive integers. Each must be integrity-verified evidence in the same case. The conflict itself is caller-asserted and not verified by the adapter. |
 
 There is deliberately no field for raw evidence text, a summary, or a label. Any such key is an unknown key and is rejected. The adapter never infers a class, severity or port from text.
 
@@ -105,7 +105,7 @@ Classes and ports are caller-classified. The kernel ignores class names outside 
 
 - `kernel_source_revision` is a static string on every result, including the empty-abstention result. It names the pinned Edge source the kernel is derived from: `Azazel-Edge/py/azazel_edge/tactics_engine/scorer.py@47c880b2503d7f771bbdacba9b6205dafe03c4c7`. It identifies the algorithm source only; the scoring formula is unchanged by this field.
 - `status` is `candidates` when candidates were supplied and `abstained_no_normalized_input` for an empty list.
-- A candidate with `conflict_evidence_ids` has `status = "abstained_conflict"`, `score = null`, `factors = []`. The kernel is not called for it.
+- A candidate with `conflict_evidence_ids` has `status = "abstained_conflict"`, `score = null`, `factors = []`. The kernel is not called for it. This abstention reflects a caller-asserted conflict involving integrity-verified evidence; the conflict semantics themselves remain unverified. Its `explanation` says so.
 - Other candidates have `status = "scored"`. `score` is the kernel's integer. `factors` are the kernel's ordered terms.
 - Entries are sorted by `event_id`. The output has no probability field, no action or playbook field, and no case-level score.
 
@@ -119,7 +119,7 @@ Validation completes before the kernel is called. Any failure raises `ValueError
 - Each timeline row must carry `case_id`, `event_id`, `evidence_id` and `record`, all strict positive integers, and must belong to the selected case. A duplicate event is rejected.
 - Each verified row must belong to the selected case. A duplicate evidence id is rejected.
 - Each candidate's `(event_id, evidence_id, record_number)` must match the timeline row for that event. Its evidence must be `valid is True` in the same case. A duplicate `event_id` is rejected.
-- Each `conflict_evidence_ids` entry must be a strict positive integer naming verified evidence in the same case. Non-integers, booleans and nested arrays or objects fail with `ValueError` before any uniqueness check or kernel call, and the command exits `1` with no stdout.
+- Each `conflict_evidence_ids` entry must be a strict positive integer naming integrity-verified evidence in the same case. The adapter does not check whether that evidence actually contradicts the signals. Non-integers, booleans and nested arrays or objects fail with `ValueError` before any uniqueness check or kernel call, and the command exits `1` with no stdout.
 - Field values are bounded and typed as listed above. Booleans are not accepted as integers, and numeric strings are not accepted as ids.
 - Input bounds: at most 1000 timeline rows, 1000 verified rows and 256 candidates. A case whose timeline or evidence rows exceed 1000 fails closed with `timeline exceeds bound` or `verified_evidence exceeds bound`. The bound is unchanged by this change.
 
@@ -128,6 +128,7 @@ Unknown signal values are not errors. Anything the kernel does not recognize rea
 ## Trust and provenance
 
 - **Input trust:** every normalized signal is supplied by the caller and is marked `caller_asserted_unverified`. The command checks structure, types, bounds and linkage only. It does not verify that a signal is correct or that it matches the raw evidence.
+- **Conflict trust:** `conflict_evidence_ids` is caller-asserted. The command verifies only that each referenced evidence object is integrity-verified and belongs to the same case. It does not verify that the evidence contradicts the signals, so a conflict abstention is a caller's claim, not a checked finding.
 - **Evidence trust:** `verify` recomputes each evidence object's SHA-256 against the store. The command uses those results, so a candidate referencing tampered or missing evidence is rejected. A digest match shows only that the stored bytes are unchanged since import. It does not show that the evidence is authentic or complete.
 - **Output status:** the output is an advisory candidate. It is not a verified fact, not a calibrated probability, and not training ground truth. The score is an ordinal advisory priority index, and only the kernel's ordering and factors are meaningful.
 - **No promotion:** nothing in this change writes to the store or to any label, fact or training set. Candidates are not promoted to facts or training labels by this command or by any output of it.
@@ -143,4 +144,10 @@ Unknown signal values are not errors. Anything the kernel does not recognize rea
 
 ## Verification status
 
-The tests in `tests/test_ir_adapter.py` and `tests/test_ir_workflow.py` have been updated for this change, but **they have not been run**. The change was made by reading the code only. No test execution is claimed by this document. Once they are run, use the repository's standard pytest invocation.
+Validation was run on the PR #11 stack using the existing macOS arm64 Python 3.12.14 / pytest 9.2.0 environment. No virtual environment or dependencies were created for these checks.
+
+- Focused adapter + CLI workflow: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:cacheprovider tests/test_ir_adapter.py tests/test_ir_workflow.py` — **102 passed, 14 subtests passed**.
+- Full MIO suite: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -ra -q -p no:cacheprovider` — **424 passed, 99 subtests passed**, no skips or deselections.
+- `git diff --check` passed.
+
+The tests exercise malformed and deeply nested JSON rejection, verified evidence linkage, caller-asserted conflict abstention, query-only store access, empty-input abstention, stable kernel outputs and preservation of case/evidence references. These are local tests only; GitHub Actions and Debian ARM64 guest verification have not been established for this stacked Draft candidate. The exact tested head and full commands are recorded in the Draft PR description.

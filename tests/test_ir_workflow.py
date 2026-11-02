@@ -793,6 +793,14 @@ class IRWorkflowTests(unittest.TestCase):
         for label, text in texts.items():
             with self.subTest(label):
                 self.assert_rejected(self.assess(self.write_input(text)))
+        # Nesting beyond the default recursion limit must fail as a concise
+        # ValueError, not as an uncaught RecursionError traceback.
+        deep = "[" * 10000 + "]" * 10000
+        with self.subTest("deep nesting"):
+            result = self.assess(self.write_input(deep))
+            self.assert_rejected(result)
+            self.assertIn("error: input nesting too deep", result[2])
+            self.assertNotIn("Traceback", result[2])
 
     def test_cli_candidate_rejects_nested_conflict_array_as_error(self):
         rows = self.import_records()

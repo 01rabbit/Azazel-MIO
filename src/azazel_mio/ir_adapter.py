@@ -24,8 +24,9 @@ row. Callers must pass the timeline and verify rows of one selected case; the
 document into candidates. It performs no I/O.
 
 Malformed input or a mismatched reference raises ``ValueError`` before the
-kernel is called. A candidate with conflicting verified evidence is reported
-as ``abstained_conflict`` without a score.
+kernel is called. A candidate whose caller asserts a conflict with
+integrity-verified evidence is reported as ``abstained_conflict`` without a
+score. The conflict semantics are caller-asserted and not verified.
 
 The output is an advisory candidate, not a verified fact, a calibrated
 probability, training ground truth, or an authorized action. There is no
@@ -85,8 +86,10 @@ _NOTE_SCORED: Final[str] = (
 class IRFastAssessmentCandidate:
     """One event's caller-normalized signals linked to verified evidence.
 
-    ``conflict_evidence_ids`` names verified evidence in the same case that
-    contradicts the normalized signals. A non-empty tuple abstains the event.
+    ``conflict_evidence_ids`` names integrity-verified evidence in the same case
+    that the caller asserts contradicts the normalized signals. The adapter checks
+    only the digest and case linkage of that evidence, not the contradiction itself.
+    A non-empty tuple abstains the event.
     """
 
     event_id: int
@@ -320,7 +323,7 @@ def assess_ir_candidates(
                 score=None,
                 factors=[],
                 conflict_evidence_ids=sorted(candidate.conflict_evidence_ids),
-                explanation="Abstained: verified conflicting evidence is present; no score computed. Not a fact, probability or authorization.",
+                explanation="Abstained: caller-asserted conflict involving integrity-verified evidence; conflict semantics unverified. No score computed. Not a fact, probability or authorization.",
             )
         else:
             assessment = assess_fast(candidate.inputs)

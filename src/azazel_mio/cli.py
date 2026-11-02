@@ -481,8 +481,11 @@ def read_candidate_document(path):
         raw = handle.read(MAX_INPUT_BYTES + 1)
     if len(raw) > MAX_INPUT_BYTES:
         raise ValueError("input too large")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys,
-                      parse_constant=_reject_constant)
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys,
+                          parse_constant=_reject_constant)
+    except RecursionError as exc:
+        raise ValueError("input nesting too deep") from exc
 
 def assess_candidates(db, root, case, path):
     # Read-only: the store is queried, never written. The timeline and verify

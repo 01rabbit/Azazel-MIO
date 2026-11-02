@@ -134,6 +134,9 @@ def test_conflicting_candidate_abstains_and_skips_core(monkeypatch):
     assert entry["factors"] == []
     assert entry["conflict_evidence_ids"] == [103]
     assert entry["evidence_refs"] == [101]
+    assert "caller-asserted conflict" in entry["explanation"]
+    assert "conflict semantics unverified" in entry["explanation"]
+    assert "verified conflicting evidence is present" not in entry["explanation"]
     assert result["kernel_source_revision"] == ir_adapter.KERNEL_SOURCE_REVISION
 
 
