@@ -140,6 +140,8 @@ class EvaluationRegistryFromDictValidationTests(unittest.TestCase):
             (raw(records=[record()] * 129), 'invalid_registry_records'),
             (raw(history=[DIGEST_A] * 129), 'invalid_registry_digests'),
             (raw(revoked_snapshots=['snapshot-1'] * 2049), 'invalid_learning_codes'),
+            (raw(revoked_artifacts=[digest_at(index) for index in range(129)]), 'invalid_registry_digests'),
+            (raw(records=[record(snapshots=[f'snapshot-{index:04d}' for index in range(2049)])]), 'invalid_learning_codes'),
         )
         for payload, code in cases:
             with self.subTest(code=code):
@@ -163,6 +165,11 @@ class EvaluationRegistryFromDictValidationTests(unittest.TestCase):
         codes = [f'snapshot-{index:04d}' for index in range(2048)]
         state = EvaluationRegistry.from_dict(raw(revoked_snapshots=codes))
         self.assertEqual(state.revoked_snapshots, tuple(codes))
+
+    def test_record_snapshots_at_exact_maximum_are_accepted(self):
+        codes = [f'snapshot-{index:04d}' for index in range(2048)]
+        state = EvaluationRegistry.from_dict(raw(records=[record(snapshots=codes)]))
+        self.assertEqual(state.records[0].snapshots, tuple(codes))
 
     def test_revoked_artifacts_at_exact_maximum_are_accepted_and_roundtrip(self):
         digests = [digest_at(index) for index in range(128)]
