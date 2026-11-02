@@ -1,11 +1,13 @@
+import io
+import os
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from azazel_mio.cli import connect, timeline
+from azazel_mio.cli import connect, main, timeline
 
 LEGACY_DDL = """
 CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
@@ -93,6 +95,23 @@ class IRSchemaVersionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "malformed storage schema"):
             connect(self.root)
         self.assertEqual(snapshot(self.database), before)
+
+    def test_read_only_v1_database_read_command_needs_no_write_access(self):
+        with closing(connect(self.root)) as db:
+            db.execute("INSERT INTO cases(name,created) VALUES('readonly-ok','now')")
+            db.commit()
+        self.database.chmod(0o444)
+        self.addCleanup(self.database.chmod, 0o600)
+        if os.access(self.database, os.W_OK):
+            self.skipTest("write-permission bits are not enforced for this user (e.g. root)")
+        before = self.database.read_bytes()
+        out = io.StringIO()
+        with patch.dict(os.environ, {"MIO_IR_HOME": str(self.root)}), patch(
+            "sys.argv", ["mio-ir", "case", "list"]
+        ), redirect_stdout(out):
+            self.assertEqual(main(), 0)
+        self.assertIn("readonly-ok", out.getvalue())
+        self.assertEqual(self.database.read_bytes(), before)
 
     def test_migration_failure_rolls_back_without_partial_ddl(self):
         broken = (

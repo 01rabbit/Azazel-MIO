@@ -64,26 +64,49 @@ def _validate_schema(db):
         if info != columns or fks != _EXPECTED_FOREIGN_KEYS[table]:
             raise ValueError("malformed storage schema")
 
+def _adopt_or_create_locked(db, version):
+    """Runs inside BEGIN IMMEDIATE; version was re-read after the write lock was taken."""
+    if version == SCHEMA_VERSION:
+        # Another process migrated between our read and our write lock: validate only.
+        _validate_schema(db)
+        return
+    if version != 0:
+        raise ValueError("unsupported storage schema version")
+    objects = db.execute("SELECT type,name FROM sqlite_master").fetchall()
+    if not objects:
+        for statement in SCHEMA_V1:
+            db.execute(statement)
+    else:
+        # Legacy v0 with the exact original tables is adopted by stamping the version only.
+        # Any other shape is rejected before anything is written.
+        _validate_schema(db)
+    db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
 def migrate_schema(db):
-    """Create or adopt the schema atomically. Refuses unknown versions and malformed schemas without writing."""
+    """Create or adopt the schema atomically. Refuses unknown versions and malformed schemas without writing.
+
+    An already-v1 database is validated inside a read transaction only, so read-only
+    commands never take a write lock. The write lock is taken only for v0 creation/adoption.
+    """
     if db.in_transaction:
         raise RuntimeError("migrate_schema requires a connection outside a transaction")
-    db.execute("BEGIN IMMEDIATE")
+    db.execute("BEGIN")
     try:
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, SCHEMA_VERSION):
-            raise ValueError("unsupported storage schema version")
-        objects = db.execute("SELECT type,name FROM sqlite_master").fetchall()
-        if version == 0 and not objects:
-            for statement in SCHEMA_V1:
-                db.execute(statement)
-            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        else:
-            # Legacy v0 with the exact original tables is adopted by stamping the version only.
-            # Any other shape, including a v1 marker on a broken schema, is rejected untouched.
+        if version == SCHEMA_VERSION:
             _validate_schema(db)
-            if version == 0:
-                db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            db.execute("COMMIT")
+            return
+        if version != 0:
+            raise ValueError("unsupported storage schema version")
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+    db.execute("COMMIT")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        _adopt_or_create_locked(db, db.execute("PRAGMA user_version").fetchone()[0])
         db.execute("COMMIT")
     except BaseException:
         if db.in_transaction:
