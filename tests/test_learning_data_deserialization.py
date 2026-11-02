@@ -4,7 +4,7 @@ import unittest
 
 from azazel_mio import MioSituationFrame
 from azazel_mio.learning_data import (LearningExample, SnapshotLineage, ReviewerDisposition,
-    TeacherCandidate, ObservedOutcome, FEATURE_VERSION, LABEL_VERSION, ORIGINS, digest)
+    TeacherCandidate, ObservedOutcome, FEATURE_VERSION, LABEL_VERSION, ORIGINS, digest, quarantine_reasons)
 
 EXPIRY = '2026-12-01T00:00:00Z'
 
@@ -187,6 +187,60 @@ class FromDictDeserialization(unittest.TestCase):
         wire['feature_origins'] = ['frame.mission', 'frame.unexpected_origin']
         restored = LearningExample.from_dict(copy.deepcopy(wire))
         self.assertEqual(restored.feature_origins, ('frame.mission', 'frame.unexpected_origin'))
+
+    def test_feature_origins_count_boundary_16_accepted_17_rejected(self):
+        origins16 = [f'frame.origin_{i}' for i in range(16)]
+        restored = LearningExample.from_dict(with_direct('feature_origins', origins16))
+        self.assertEqual(restored.feature_origins, tuple(origins16))
+        with self.assertRaisesRegex(ValueError, r'^invalid_learning_feature_origins$'):
+            LearningExample.from_dict(with_direct('feature_origins', origins16 + ['frame.origin_16']))
+
+    def test_feature_origins_length_boundary_96_accepted_97_rejected(self):
+        at_cap = 'frame.' + 'x' * 90
+        self.assertEqual(len(at_cap), 96)
+        restored = LearningExample.from_dict(with_direct('feature_origins', [at_cap]))
+        self.assertEqual(restored.feature_origins, (at_cap,))
+        with self.assertRaisesRegex(ValueError, r'^invalid_learning_feature_origins$'):
+            LearningExample.from_dict(with_direct('feature_origins', ['frame.' + 'x' * 91]))
+
+    def test_feature_origins_tuple_parses_and_roundtrips(self):
+        wire = valid_example().to_dict()
+        wire['feature_origins'] = tuple(ORIGINS)
+        restored = LearningExample.from_dict(wire)
+        self.assertEqual(restored.feature_origins, ORIGINS)
+        rewired = restored.to_dict()
+        self.assertEqual(rewired['feature_origins'], list(ORIGINS))
+        self.assertEqual(LearningExample.from_dict(copy.deepcopy(rewired)).feature_origins, ORIGINS)
+
+    def test_feature_origins_str_subclass_items_are_rejected(self):
+        class OriginStr(str):
+            pass
+        cases = {
+            'subclass item in list': [OriginStr('frame.mission')] + list(ORIGINS[1:]),
+            'subclass item in tuple': (OriginStr('frame.mission'),) + tuple(ORIGINS[1:]),
+        }
+        for name, value in cases.items():
+            with self.subTest(case=name):
+                wire = valid_example().to_dict()
+                wire['feature_origins'] = value
+                with self.assertRaisesRegex(ValueError, r'^invalid_learning_feature_origins$'):
+                    LearningExample.from_dict(wire)
+
+    def test_feature_origin_leakage_reason_for_empty_and_unexpected_origins(self):
+        now = '2026-10-02T00:00:00Z'
+        valid_reasons = quarantine_reasons(valid_example(), now=now)
+        self.assertNotIn('feature_origin_leakage', valid_reasons)
+        cases = {
+            'empty list': [],
+            'unexpected origin': ['frame.unexpected_origin'],
+            'expected plus unexpected': list(ORIGINS) + ['frame.unexpected_origin'],
+        }
+        for name, value in cases.items():
+            with self.subTest(case=name):
+                wire = valid_example().to_dict()
+                wire['feature_origins'] = value
+                example = LearningExample.from_dict(wire)
+                self.assertIn('feature_origin_leakage', quarantine_reasons(example, now=now))
 
     def test_direct_fact_codes_boundary_16_accepted_17_rejected(self):
         codes16 = [f'DIRECT_FACT_{i}' for i in range(16)]

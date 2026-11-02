@@ -59,9 +59,10 @@ def codes(values: Any, cap=16) -> tuple[str, ...]:
 
 
 def origins(values: Any) -> tuple[str, ...]:
-    # Structural check only: valid-but-unexpected origin strings are kept so
-    # quarantine_reasons() can report feature_origin_leakage.
-    if type(values) not in (tuple, list) or any(type(x) is not str for x in values):
+    # Structural and size bounds only: valid-but-unexpected origin strings are kept so
+    # quarantine_reasons() can report feature_origin_leakage. Bounds match codes() (16 items)
+    # and _CODE (96 chars); character grammar is intentionally unrestricted here.
+    if type(values) not in (tuple, list) or len(values) > 16 or any(type(x) is not str or len(x) > 96 for x in values):
         raise ValueError("invalid_learning_feature_origins")
     return tuple(values)
 
