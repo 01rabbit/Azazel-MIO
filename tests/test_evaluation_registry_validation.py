@@ -164,6 +164,12 @@ class EvaluationRegistryFromDictValidationTests(unittest.TestCase):
         state = EvaluationRegistry.from_dict(raw(revoked_snapshots=codes))
         self.assertEqual(state.revoked_snapshots, tuple(codes))
 
+    def test_revoked_artifacts_at_exact_maximum_are_accepted_and_roundtrip(self):
+        digests = [digest_at(index) for index in range(128)]
+        state = EvaluationRegistry.from_dict(raw(revoked_artifacts=digests))
+        self.assertEqual(state.revoked_artifacts, tuple(digests))
+        self.assertEqual(EvaluationRegistry.from_dict(state.to_dict()), state)
+
 
 class EvaluationRegistryRevokeArgumentTests(unittest.TestCase):
     def test_revoke_without_target_is_rejected(self):
