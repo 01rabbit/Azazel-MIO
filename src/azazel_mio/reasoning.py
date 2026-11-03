@@ -32,6 +32,7 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
+from .observation_objectives import MioObservationObjective, ObservationProjectionReport, project_observation_report
 from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
 from .tactical_grounding import (
@@ -139,6 +140,10 @@ class ReasoningOutcome:
     # Deterministic frame-only summary when no validated recommendation exists.
     handoff: NoModelHandoff | None = None
     validation_diagnostic: Mapping[str, str] | None = None
+    # Local, non-executable proposals. Only a COMPLETE deception-observation-v1 cycle sets these.
+    observation_objectives: tuple[MioObservationObjective, ...] = ()
+    # Local MIO diagnostic of the observation projection (not a shared contract).
+    observation_projection: ObservationProjectionReport | None = None
 
 
 # Terminal states that get a deterministic no-model handoff. Cancelled and
@@ -564,6 +569,10 @@ class BoundedReasoningLoop:
         except Exception as exc:
             errors.append(_exception_code("model_recommend_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+        # Cancel/stale may flip during the final model call; never complete over it.
+        interrupted = self._interrupted(cancel_check, stale_check, errors)
+        if interrupted is not None:
+            return finish(interrupted, hypotheses, gaps, None)
         if not isinstance(raw_r, Mapping):
             errors.append("recommendation_not_mapping")
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
@@ -613,7 +622,13 @@ class BoundedReasoningLoop:
             kind="complete",
             payload={"model_calls": model_calls, "broker_calls": broker_calls},
         )
-        return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events(), tuple(audit))
+        objectives, projection = project_observation_report(
+            frame=frame, playbook_id=playbook.playbook_id, state=ReasoningState.COMPLETE,
+            hypotheses=hypotheses, gaps=gaps,
+            eligible_gap_ids=frozenset(s.gap_id for s in gap_scores if s.eligible),
+            max_gaps=self.budget.max_gaps)
+        return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events(), tuple(audit),
+                                observation_objectives=objectives, observation_projection=projection)
 
     @staticmethod
     def _finish(
@@ -639,6 +654,11 @@ class BoundedReasoningLoop:
         if state in HANDOFF_STATES:
             handoff = build_no_model_handoff(frame, reason=state.value, playbook=playbook, hypotheses=validated)
         trace.record(state=state.value, kind="terminal", payload={"errors": list(errors)[:8]})
+        # Non-COMPLETE terminals never project; record only the state-level skip.
+        _, skip_report = project_observation_report(
+            frame=frame, playbook_id=playbook.playbook_id, state=state,
+            hypotheses=(), gaps=(), eligible_gap_ids=())
         return ReasoningOutcome(state, tuple(hypotheses), tuple(gaps), recommendation, tuple(errors), trace.events(), tuple(audit), handoff,
                                 _validation_diagnostic(validation_stage, errors)
-                                if state is ReasoningState.VALIDATION_REJECTED else None)
+                                if state is ReasoningState.VALIDATION_REJECTED else None,
+                                observation_projection=skip_report)

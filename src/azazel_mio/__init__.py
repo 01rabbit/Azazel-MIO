@@ -41,6 +41,7 @@ from .playbook import (
     verify_generic_fallback,
 )
 from .reasoning import BoundedReasoningLoop, ReasoningBudget, ReasoningOutcome
+from .observation_objectives import MioObservationObjective, project_observation_objectives
 from .replay import ReplayFixture, run_replay, run_selected
 from .trace import ReasoningTrace, ReasoningTraceEvent
 
