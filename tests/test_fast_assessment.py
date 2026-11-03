@@ -354,6 +354,12 @@ def test_integer_severity_nine_remains_accepted_as_unknown_fallback():
     assert result.factors == ("severity=9",)
 
 
+def test_integer_severity_negative_one_remains_accepted_as_unknown_fallback():
+    result = assess_fast(FastAssessmentInput(severity=-1))
+    assert result.score == 16
+    assert result.factors == ("severity=-1",)
+
+
 def test_large_but_bounded_unknown_integer_severity_keeps_fallback():
     result = assess_fast(FastAssessmentInput(severity=90))
     assert result.score == 16
@@ -373,7 +379,9 @@ def test_malformed_or_out_of_range_port_is_rejected(port):
 def test_port_signal_kind_must_be_a_bounded_string():
     with pytest.raises(TypeError):
         PortSignal(None, 22)
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
+        PortSignal("", 22)
+    with pytest.raises(ValueError):
         PortSignal("x" * 65, 22)
 
 
@@ -404,13 +412,31 @@ def test_exact_class_and_port_count_caps_are_accepted():
     assert result.factors == ("severity=2",)
 
 
+def test_low_and_high_valid_port_bounds_are_accepted():
+    result = assess_fast(FastAssessmentInput(
+        severity=2, ports=(PortSignal("future-kind", 1), PortSignal("future-kind", 65535))))
+    assert result.score == 30
+    assert result.factors == ("severity=2",)
+
+
 def test_classes_must_be_a_tuple_of_bounded_strings():
     with pytest.raises(TypeError):
         FastAssessmentInput(severity=2, classes=["c2"] * 33)
     with pytest.raises(TypeError):
         FastAssessmentInput(severity=2, classes=("c2", 48))
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
+        FastAssessmentInput(severity=2, classes=("",))
+    with pytest.raises(ValueError):
         FastAssessmentInput(severity=2, classes=("c" * 65,))
+
+
+def test_action_must_be_a_nonempty_bounded_string():
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, action=None)
+    with pytest.raises(ValueError):
+        FastAssessmentInput(severity=2, action="")
+    with pytest.raises(ValueError):
+        FastAssessmentInput(severity=2, action="a" * 65)
 
 
 def test_boolean_flags_must_be_real_bools():

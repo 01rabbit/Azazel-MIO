@@ -48,8 +48,11 @@ _MIN_PORT: Final[int] = 1
 _MAX_PORT: Final[int] = 65535
 
 
-def _is_bounded_token(value: object) -> bool:
-    return type(value) is str and 0 < len(value) <= _MAX_TOKEN_CHARS
+def _require_bounded_token(value: object, name: str) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a str")
+    if not 0 < len(value) <= _MAX_TOKEN_CHARS:
+        raise ValueError(f"{name} must contain 1..{_MAX_TOKEN_CHARS} characters")
 
 
 @dataclass(frozen=True)
@@ -65,8 +68,7 @@ class PortSignal:
     port: int
 
     def __post_init__(self) -> None:
-        if not _is_bounded_token(self.kind):
-            raise TypeError("PortSignal.kind must be a non-empty bounded str")
+        _require_bounded_token(self.kind, "PortSignal.kind")
         # ``type() is int`` rejects bool, which is an int subclass.
         if type(self.port) is not int:
             raise TypeError("PortSignal.port must be an int")
@@ -103,16 +105,15 @@ class FastAssessmentInput:
             raise TypeError("classes must be a tuple")
         if len(self.classes) > _MAX_CLASSES:
             raise ValueError(f"classes must be a tuple of at most {_MAX_CLASSES} items")
-        if not all(_is_bounded_token(name) for name in self.classes):
-            raise TypeError("classes must contain only bounded str values")
+        for name in self.classes:
+            _require_bounded_token(name, "class")
         if type(self.ports) is not tuple:
             raise TypeError("ports must be a tuple")
         if len(self.ports) > _MAX_PORTS:
             raise ValueError(f"ports must be a tuple of at most {_MAX_PORTS} items")
         if not all(type(port) is PortSignal for port in self.ports):
             raise TypeError("ports must contain only PortSignal values")
-        if not _is_bounded_token(self.action):
-            raise TypeError("action must be a non-empty bounded str")
+        _require_bounded_token(self.action, "action")
         for flag in (self.token_only, self.deception_sid, self.benign_classless):
             if type(flag) is not bool:
                 raise TypeError("token_only, deception_sid, and benign_classless must be bool")
