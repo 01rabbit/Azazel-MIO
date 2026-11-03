@@ -51,25 +51,29 @@ signals.
 ## Normalized input bounds
 
 `FastAssessmentInput` is a typed in-process API, not a parser for raw events.
-Its constructor requires an exact integer severity in the signed 32-bit range;
-unknown values in that range (including `-1`, `9`, and `90`) retain the
-unknown-severity fallback of 16. Booleans, strings, floats, and arbitrary-size
-integers are rejected before score formatting.
+Its constructor requires a built-in `int` severity in the signed 32-bit range
+(`IntEnum` and other subclasses are not accepted); unknown values in that range
+(including `-1`, `9`, and `90`) retain the unknown-severity fallback of 16.
+Booleans, strings, floats, and arbitrary-size integers are rejected before
+score formatting.
 
-`classes` must be a tuple of at most 32 non-empty strings, each at most 64
-characters. `ports` must be a tuple of at most 16 `PortSignal` objects, with a
-non-empty kind of at most 64 characters and a port in `1..65535`. `action`
-must be a non-empty string of at most 64 characters. Boolean flags must be
-actual booleans. Unknown class and kind strings remain accepted and ignored by
-the kernel; the bounds limit work without changing recognized scores. Wrong
-types raise `TypeError`; empty or over-limit values raise `ValueError`.
+`classes` must be a built-in tuple of at most 32 built-in `str` values, each
+1..64 characters. `ports` must be a built-in tuple of at most 16 exact
+`PortSignal` objects; each has a built-in `str` kind of 1..64 characters and a
+built-in `int` port in `1..65535`. `action` must be a built-in `str` of 1..64
+characters. Boolean flags must be built-in booleans. Unknown class and kind
+strings remain accepted and ignored by the kernel; the bounds limit work
+without changing recognized scores. Wrong types raise `TypeError`; empty or
+over-limit values raise `ValueError`.
 
 These bounds intentionally narrow pathological Python inputs so the kernel
 cannot spend unbounded work iterating signal tuples or formatting arbitrary
-integers. The current Edge adapter passes canonical class labels and one
-already-classified target port, normalizes an empty action to `allowed`, and
-continues using its local score if MIO rejects an invalid adapter input. No
-input is silently truncated.
+integers. The Edge adapter at [main `38c2b077`](https://github.com/01rabbit/Azazel-Edge/blob/38c2b07774c61b86209d0cd94ce2e7689d38600c/py/azazel_edge/tactics_engine/scorer.py)
+passes at most its eight canonical class labels and one already-classified
+target port, normalizes an empty action to `allowed`, and continues using its
+local score if MIO rejects an invalid adapter input. No input is silently
+truncated. Validation runs at object construction; mutated or deserialized
+objects that bypass `__post_init__` are outside this in-process API contract.
 
 Edge adapter integration remains a separate change and must compare complete
 score/factor outputs before it replaces any local calculation.
