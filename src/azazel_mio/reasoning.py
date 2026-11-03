@@ -263,6 +263,10 @@ class BoundedReasoningLoop:
         if self.model is None:
             errors.append("model_absent")
             return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, (), (), None)
+        if model_calls >= self.budget.max_model_calls:
+            # Guard the first adapter entry too: a zero model-call budget must never call the model.
+            errors.append("model_budget_exhausted_before_hypothesis_generation")
+            return finish(ReasoningState.BUDGET_EXHAUSTED, (), (), None)
 
         try:
             prompt = compile_task("generate_hypotheses")
