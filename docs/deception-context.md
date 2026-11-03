@@ -6,8 +6,8 @@ to the identifiers, lifecycle state and observation refs.
 
 | Field | Grammar | Cap |
 | --- | --- | --- |
-| `limitations` | lower-case snake identifier, `[a-z][a-z0-9_]{2,63}`, no address shape, no secret word | 32 (`SITUATION_FRAME_DECEPTION_LIMITATIONS_CAP`) |
-| `evidence_refs` | opaque ID (`opaque_id`: no address shape, no secret shape), e.g. objective, hypothesis, frame, decision or session refs | 16 (`SITUATION_FRAME_DECEPTION_EVIDENCE_REFS_CAP`) |
+| `limitations` | `[a-z][a-z0-9_]{2,63}(:[A-Za-z0-9._-]{1,64})?` (optional parameter), no secret word | 32 (`SITUATION_FRAME_DECEPTION_LIMITATIONS_CAP`) |
+| `evidence_refs` | `[a-z][a-z0-9_]{0,31}:` kind prefix plus a body of `[A-Za-z0-9._~@=+:-]` (1 to 128), no address or secret shape; e.g. `advisory:mio-hypothesis-f1~h1`, `frame:<id>`, `decision:<id>` | 16 (`SITUATION_FRAME_DECEPTION_EVIDENCE_REFS_CAP`) |
 
 ## Semantics
 
@@ -17,23 +17,27 @@ to the identifiers, lifecycle state and observation refs.
   `no_interaction_observed_is_not_evidence_of_safety`). It is never added to
   `known_facts` and is not a label for training or ranking. It confers no
   authority.
-- Attacker-derived strings are not accepted: only the identifier grammars above.
+- Strings that do not match the grammars above, and entries containing an
+  imperative word, are not accepted.
 
-## Rejection
+## Dropped entries
 
-Unlike `observation_refs`, which silently drops invalid entries, an invalid
-`limitations` or `evidence_refs` rejects the whole context (`coerce` returns
-`None`; `MioSituationFrame.build` then reports the deception dependency as
-degraded, `from_dict` raises). Rejected: a non-list value, more entries than
-the cap, a non-string, a grammar or address/secret violation, and any entry
-with a segment (split on `_ - : .`) in `DECEPTION_CONTEXT_FORBIDDEN_WORDS`
-(`activate`, `authorized`, `execute`, `override`, `allow`, `grant`, ...; a
-superset of `grounding.FORBIDDEN_DIRECTIVE_KEYS`).
+An entry is dropped on its own; the context is kept. Dropped: a non-string,
+a grammar, address or secret violation, an entry past the cap, and any entry
+with a segment (split on `_ - . ~ : @ = +`, lower-cased) in
+`DECEPTION_CONTEXT_FORBIDDEN_WORDS` (`activate`, `authorized`, `execute`,
+`run`, `block`, `isolate`, `redirect`, ...). Segments are compared whole, so
+`redirection`, `isolation` and `active` pass. A non-list value drops that
+field. `MioDeceptionContext.coerce_with_drops` reports whether anything was
+dropped, and `MioSituationFrame.build` then adds the unknown
+`DECEPTION_CONTEXT_ENTRY_DROPPED`.
 
 ## Compatibility
 
 Both fields default to empty. `to_dict()` emits them only when non-empty, so a
 context without them serializes byte-for-byte as before and stored
-`mio.situation_frame.v2` frames remain valid; no schema version change. When
-the frame exceeds its byte budget, `evidence_refs` then `limitations` are
-trimmed after `observation_refs` (the context itself stays).
+`mio.situation_frame.v2` frames remain valid; no schema version change. An
+explicit empty list is dropped to the same canonical form by `build`, but
+`from_dict` of a stored frame carrying `[]` is rejected as non-canonical. When
+the frame exceeds its byte budget, `observation_refs` then `evidence_refs`
+are trimmed first; `limitations` are trimmed last, after `known_facts`.
