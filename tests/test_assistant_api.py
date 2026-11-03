@@ -1527,3 +1527,30 @@ def test_validation_diagnostic_absent_without_validation_rejection():
 def test_validation_diagnostic_stage_allowlist(stage):
     from azazel_mio.reasoning import _validation_diagnostic
     assert _validation_diagnostic(stage, ()) == {'stage': stage, 'rejection_class': 'unknown'}
+
+
+def test_zero_model_call_budget_exhausts_before_first_model_adapter_call():
+    from azazel_mio.broker import CapabilityBroker
+    from azazel_mio.playbook import select_playbook
+    from azazel_mio.reasoning import BoundedReasoningLoop, ReasoningBudget
+    calls = []
+
+    def model(task, prompt):
+        calls.append(task)
+        raise AssertionError('zero model-call budget must not invoke the model')
+
+    selection = select_playbook(frame(), requested_id='auth-ambiguity-v1')
+    outcome = BoundedReasoningLoop(model=model, broker=CapabilityBroker(),
+        budget=ReasoningBudget(max_model_calls=0)).run(
+        frame=frame(), playbook=selection.playbook, cycle_id='cycle-zero-budget', selection=selection)
+    assert calls == []
+    assert outcome.state is ReasoningState.BUDGET_EXHAUSTED
+    assert outcome.hypotheses == ()
+    assert outcome.evidence_gaps == ()
+    assert outcome.recommendation is None
+    assert outcome.handoff is not None
+    assert outcome.errors == ('model_budget_exhausted_before_hypothesis_generation',)
+    assert 'adapter_entered' not in [event.state for event in outcome.trace]
+    assert 'compile_succeeded' not in [event.state for event in outcome.trace]
+    assert any(event.kind == 'terminal' and event.state == 'budget_exhausted'
+               for event in outcome.trace)

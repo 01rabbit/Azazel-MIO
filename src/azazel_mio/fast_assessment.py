@@ -34,6 +34,26 @@ _BENIGN_LEVEL: Final[int] = 25
 _DECEPTION_FLOOR: Final[int] = 60
 _SEV1_NO_THREAT_CAP: Final[int] = 35
 
+# Input boundary limits. Unknown integer severities retain the fallback
+# behavior, including Edge's negative/positive unknown values; signed 32-bit
+# bounds keep arbitrary-precision integers from reaching factor formatting.
+# The 8 canonical classes and Edge's one target-port mapping fit well under
+# these caps.
+_MIN_SEVERITY: Final[int] = -(1 << 31)
+_MAX_SEVERITY: Final[int] = (1 << 31) - 1
+_MAX_CLASSES: Final[int] = 32
+_MAX_PORTS: Final[int] = 16
+_MAX_TOKEN_CHARS: Final[int] = 64
+_MIN_PORT: Final[int] = 1
+_MAX_PORT: Final[int] = 65535
+
+
+def _require_bounded_token(value: object, name: str) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a str")
+    if not 0 < len(value) <= _MAX_TOKEN_CHARS:
+        raise ValueError(f"{name} must contain 1..{_MAX_TOKEN_CHARS} characters")
+
 
 @dataclass(frozen=True)
 class PortSignal:
@@ -46,6 +66,14 @@ class PortSignal:
 
     kind: str
     port: int
+
+    def __post_init__(self) -> None:
+        _require_bounded_token(self.kind, "PortSignal.kind")
+        # ``type() is int`` rejects bool, which is an int subclass.
+        if type(self.port) is not int:
+            raise TypeError("PortSignal.port must be an int")
+        if not _MIN_PORT <= self.port <= _MAX_PORT:
+            raise ValueError(f"PortSignal.port must be in {_MIN_PORT}..{_MAX_PORT}")
 
 
 @dataclass(frozen=True)
@@ -66,6 +94,29 @@ class FastAssessmentInput:
     action: str = "allowed"
     deception_sid: bool = False
     benign_classless: bool = False
+
+    def __post_init__(self) -> None:
+        # ``type() is int`` rejects bool and numeric strings alike.
+        if type(self.severity) is not int:
+            raise TypeError("severity must be an int")
+        if not _MIN_SEVERITY <= self.severity <= _MAX_SEVERITY:
+            raise ValueError(f"severity must be in {_MIN_SEVERITY}..{_MAX_SEVERITY}")
+        if type(self.classes) is not tuple:
+            raise TypeError("classes must be a tuple")
+        if len(self.classes) > _MAX_CLASSES:
+            raise ValueError(f"classes must be a tuple of at most {_MAX_CLASSES} items")
+        for name in self.classes:
+            _require_bounded_token(name, "class")
+        if type(self.ports) is not tuple:
+            raise TypeError("ports must be a tuple")
+        if len(self.ports) > _MAX_PORTS:
+            raise ValueError(f"ports must be a tuple of at most {_MAX_PORTS} items")
+        if not all(type(port) is PortSignal for port in self.ports):
+            raise TypeError("ports must contain only PortSignal values")
+        _require_bounded_token(self.action, "action")
+        for flag in (self.token_only, self.deception_sid, self.benign_classless):
+            if type(flag) is not bool:
+                raise TypeError("token_only, deception_sid, and benign_classless must be bool")
 
 
 @dataclass(frozen=True)
