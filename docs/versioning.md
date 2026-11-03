@@ -10,8 +10,11 @@ PEP 440 local version such as `0.1.0+git.c31c244`. The `0.1.0` portion remains
 the product compatibility line; the local suffix distinguishes this wheel from
 other builds on that line. Record the complete source commit, source tree,
 build environment, and artifact SHA-256 in the consuming lock and verification
-record. Do not publish local-version artifacts as public releases or replace
-an existing artifact in place.
+record. Form the source archive with an explicit archive umask (for example,
+`git -c tar.umask=0022 archive`), and fix the build backend, `SOURCE_DATE_EPOCH`,
+and process umask. The consumer must record the exact values and verify the
+resulting artifact hash. Do not publish local-version artifacts as public
+releases or replace an existing artifact in place.
 
 Use a new pre-release or release version when the project intentionally cuts a
 new distribution milestone. Do not increment the product version mechanically
