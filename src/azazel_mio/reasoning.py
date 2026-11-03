@@ -32,6 +32,7 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
+from .observation_objectives import MioObservationObjective, project_observation_objectives
 from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
 from .tactical_grounding import (
@@ -139,6 +140,8 @@ class ReasoningOutcome:
     # Deterministic frame-only summary when no validated recommendation exists.
     handoff: NoModelHandoff | None = None
     validation_diagnostic: Mapping[str, str] | None = None
+    # Local, non-executable proposals. Only a COMPLETE deception-observation-v1 cycle sets these.
+    observation_objectives: tuple[MioObservationObjective, ...] = ()
 
 
 # Terminal states that get a deterministic no-model handoff. Cancelled and
@@ -564,6 +567,10 @@ class BoundedReasoningLoop:
         except Exception as exc:
             errors.append(_exception_code("model_recommend_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+        # Cancel/stale may flip during the final model call; never complete over it.
+        interrupted = self._interrupted(cancel_check, stale_check, errors)
+        if interrupted is not None:
+            return finish(interrupted, hypotheses, gaps, None)
         if not isinstance(raw_r, Mapping):
             errors.append("recommendation_not_mapping")
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
@@ -613,7 +620,12 @@ class BoundedReasoningLoop:
             kind="complete",
             payload={"model_calls": model_calls, "broker_calls": broker_calls},
         )
-        return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events(), tuple(audit))
+        objectives = project_observation_objectives(
+            frame=frame, playbook_id=playbook.playbook_id, state=ReasoningState.COMPLETE,
+            hypotheses=hypotheses, gaps=gaps,
+            eligible_gap_ids=frozenset(s.gap_id for s in gap_scores if s.eligible))
+        return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events(), tuple(audit),
+                                observation_objectives=objectives)
 
     @staticmethod
     def _finish(
