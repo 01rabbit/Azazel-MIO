@@ -11,11 +11,16 @@ should help distinguish.
 - Fields: `objective_id` (local, deterministic `obs-<24 hex>`), `frame_id`,
   `trace_id`, `source_gap_id` (the MIO evidence-gap ID), `hypothesis_ids`
   (1–8 unique IDs of live hypotheses).
+- Parsed gap IDs retain at most the first 8 unique valid hypothesis IDs
+  (`contracts._model_id_list` with limit 8), so `hypothesis_ids` can never
+  exceed the objective bound of 8.
 - Fixed authority: `authority="advisory_only"`, `executable=False`. Any other
   value is rejected at construction. The object is frozen.
-- `objective_id` is stable for a given frame/trace/gap. It is not unique per
-  cycle; Edge must not assume per-cycle uniqueness (dedupe/replay handling is
-  Edge's responsibility).
+- `objective_id` is a deterministic function of the frame ID, trace ID, and
+  gap ID only: the same inputs always yield the same ID. It is not unique per
+  cycle, and it does not encode the current generation. Edge owns
+  current-generation freshness and deduplication/replay handling; Edge must not
+  assume per-cycle uniqueness.
 - It carries no question text, capability, target, environment, package,
   tier, command, activation, or lease selector. The gap itself, including its
   question and capability, stays in the local `evidence_gaps` result.
@@ -34,13 +39,17 @@ Only when all of these hold:
   a deception playbook with any other status emits nothing;
 - the gap is marked `eligible` by the gap scorer. An ineligible gap (for
   example an unregistered capability, a capability outside the playbook
-  allowlist, no targets, an exhausted cycle broker budget, or a low score)
-  never yields an objective, even though the gap stays in `evidence_gaps`;
+  allowlist, no targets, a cycle broker budget allocated to higher-ranked gaps,
+  or a low score) never yields an objective, even though the gap stays in
+  `evidence_gaps`. The scorer greedily allocates no more than the remaining
+  broker-call budget to eligible gaps. Eligibility means an objective may be
+  proposed; it does not certify that the selected capability call returned
+  useful evidence;
 - the gap and hypothesis IDs have passed the cycle's existing validation.
 
-Eligibility means an objective *may be proposed*. It does not depend on
-whether the broker call for that gap ran, was skipped, or failed; evidence
-collection success is not required or implied.
+Eligibility means an objective *may be proposed*. It does not certify a
+successful capability call or a collected result; those remain separate cycle
+trace records and evidence.
 
 The loop passes the eligible gap IDs to the pure projector explicitly, so the
 projector itself never consults the broker or the scorer.

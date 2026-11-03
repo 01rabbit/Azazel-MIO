@@ -5,6 +5,7 @@ import pytest
 from azazel_mio import BoundedReasoningLoop, CapabilityBroker, MioSituationFrame
 from azazel_mio.broker import CapabilitySpec
 from azazel_mio.contracts import HypothesisStatus, MioEvidenceGap, MioHypothesis, ReasoningState
+from azazel_mio.reasoning import ReasoningBudget
 from azazel_mio.observation_objectives import (
     MioObservationObjective,
     OBSERVATION_PLAYBOOK_ID,
@@ -229,6 +230,59 @@ def test_projector_drops_gaps_absent_from_eligible_set_even_when_otherwise_valid
                                           state=ReasoningState.COMPLETE, hypotheses=hypotheses, gaps=gaps,
                                           eligible_gap_ids=())
     assert none == ()
+
+
+@pytest.mark.parametrize("status", ["not_provided", "unavailable", "timeout", "malformed"])
+def test_deception_playbook_with_any_non_available_status_emits_no_objective(status):
+    f = frame(deception_context=None, deception_status=status)
+    assert f.deception_status != "available"
+    out = project_observation_objectives(frame=f, playbook_id=OBSERVATION_PLAYBOOK_ID,
+                                         state=ReasoningState.COMPLETE, hypotheses=(hyp("h1"), hyp("h2")),
+                                         gaps=(MioEvidenceGap("g1", "q", ("h1",), "get_deception_state", 50),),
+                                         eligible_gap_ids=("g1",))
+    assert out == ()
+
+
+def test_same_inputs_yield_same_objective_id_and_distinct_gaps_differ():
+    kwargs = dict(frame=frame(), playbook_id=OBSERVATION_PLAYBOOK_ID, state=ReasoningState.COMPLETE,
+                  hypotheses=(hyp("h1"), hyp("h2")),
+                  gaps=(MioEvidenceGap("g1", "q", ("h1",), "get_deception_state", 50),
+                        MioEvidenceGap("g2", "q", ("h2",), "get_deception_state", 50)),
+                  eligible_gap_ids=("g1", "g2"))
+    first = project_observation_objectives(**kwargs)
+    second = project_observation_objectives(**kwargs)
+    assert [o.objective_id for o in first] == [o.objective_id for o in second]
+    assert len({o.objective_id for o in first}) == 2
+
+
+def test_parsed_gap_retains_at_most_first_eight_unique_hypothesis_ids():
+    ids = [f"h{i}" for i in range(10)] + ["h0"]
+    gap = MioEvidenceGap.from_mapping({"gap_id": "g1", "question": "q", "discriminates_hypothesis_ids": ids,
+                                       "capability": "get_deception_state"}, ordinal=1)
+    assert gap.discriminates_hypothesis_ids == tuple(f"h{i}" for i in range(8))
+
+
+def test_scorer_allocates_broker_budget_before_projecting_objectives():
+    gaps = [GAP, dict(GAP, gap_id="g2", capability="query_flow_summary",
+                      discriminates_hypothesis_ids=["h2"])]
+    broker = CountingBroker({
+        "get_deception_state": REGISTERED["get_deception_state"],
+        "query_flow_summary": CapabilitySpec(handler=lambda args: {"rows": 1}),
+    })
+    try:
+        outcome = BoundedReasoningLoop(
+            model=deception_model(gaps), broker=broker,
+            budget=ReasoningBudget(max_broker_calls=1),
+        ).run(frame=frame(), playbook=DECEPTION, cycle_id="cycle-budget-1")
+        assert outcome.state is ReasoningState.COMPLETE
+        assert broker.execute_calls == 1
+        scored = next(event for event in outcome.trace if event.kind == "evidence_gap_scores")
+        assert {item["gap_id"] for item in scored.payload["scores"] if item["eligible"]} == {"g1"}
+        assert {item["gap_id"] for item in scored.payload["scores"] if not item["eligible"]} == {"g2"}
+        assert {item.source_gap_id for item in outcome.observation_objectives} == {"g1"}
+        assert "gap_not_eligible:g2:cycle_broker_budget_exhausted" in outcome.errors
+    finally:
+        broker.close()
 
 
 def test_deception_playbook_with_unavailable_status_emits_no_objective():
