@@ -1548,5 +1548,9 @@ def test_zero_model_call_budget_exhausts_before_first_model_adapter_call():
     assert outcome.hypotheses == ()
     assert outcome.evidence_gaps == ()
     assert outcome.recommendation is None
+    assert outcome.handoff is not None
     assert outcome.errors == ('model_budget_exhausted_before_hypothesis_generation',)
     assert 'adapter_entered' not in [event.state for event in outcome.trace]
+    assert 'compile_succeeded' not in [event.state for event in outcome.trace]
+    assert any(event.kind == 'terminal' and event.state == 'budget_exhausted'
+               for event in outcome.trace)
