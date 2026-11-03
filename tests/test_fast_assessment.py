@@ -200,6 +200,20 @@ def test_benign_classless_dampener_is_fixed_at_twenty_five():
     assert result.factors == ("severity=2", "benign_dampener")
 
 
+def test_benign_dampener_never_suppresses_a_recognized_threat_class():
+    # The dampener applies only to classless alerts; a recognized class keeps
+    # its full score (30 base + 5 SID + 48 c2) even if benign is also set.
+    result = assess_fast(
+        FastAssessmentInput(severity=2, classes=("c2",), benign_classless=True)
+    )
+    assert result.score == 83
+    assert result.factors == (
+        "severity=2",
+        "sid_present",
+        "threat_class=c2(48)",
+    )
+
+
 def test_classless_unknown_port_and_action_do_not_create_threat():
     result = assess_fast(
         FastAssessmentInput(

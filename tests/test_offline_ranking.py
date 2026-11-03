@@ -301,4 +301,70 @@ assert runtime.rank_playbooks(frame)['selected'] == 'auth-ambiguity-v1'
         subprocess.run([sys.executable, '-B', '-c', code], env={**os.environ, 'PYTHONDONTWRITEBYTECODE':'1', 'PYTHONPATH':str(root/'src')}, check=True)
 
 
+class CliOutputPreflight(unittest.TestCase):
+    def _run_cli(self, root, report, artifact):
+        from unittest import mock
+        from azazel_mio import learning_offline
+
+        class FakeArtifact:
+            def to_dict(self): return {'fake': True}
+
+        def fake_evaluate(*args, **kwargs): return {'schema_version': 'x'}, FakeArtifact()
+
+        manifest = root / 'manifest.json'
+        manifest.write_text(json.dumps({'examples': [], 'partitions': {}, 'now': NOW,
+            'artifact_expires_at': EXPIRY, 'revoked_snapshots': [],
+            'costs': {'wrong_selection': 1, 'abstention': 0.25}}))
+        argv = ['offline', str(manifest), '--report', str(report)]
+        if artifact is not None: argv += ['--artifact', str(artifact)]
+        with mock.patch.object(learning_offline, 'evaluate', fake_evaluate), mock.patch('sys.argv', argv):
+            learning_offline.main()
+
+    def test_preexisting_artifact_refused_before_report_created(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact, report = root / 'artifact.json', root / 'report.json'
+            artifact.write_text('pre-existing\n')
+            with self.assertRaises(FileExistsError):
+                self._run_cli(root, report, artifact)
+            self.assertFalse(report.exists())
+            self.assertEqual(artifact.read_text(), 'pre-existing\n')
+
+    def test_preexisting_report_preserved_and_no_artifact_created(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact, report = root / 'artifact.json', root / 'report.json'
+            report.write_text('pre-existing report\n')
+            with self.assertRaises(FileExistsError):
+                self._run_cli(root, report, artifact)
+            self.assertFalse(artifact.exists())
+            self.assertEqual(report.read_text(), 'pre-existing report\n')
+
+    def test_same_report_and_artifact_path_refused_without_creating_output(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shared = root / 'same.json'
+            with self.assertRaises(FileExistsError):
+                self._run_cli(root, shared, shared)
+            self.assertFalse(shared.exists())
+            self.assertEqual(list(root.iterdir()), [root / 'manifest.json'])
+
+    def test_missing_report_parent_refused_before_artifact_created(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact, report = root / 'artifact.json', root / 'absent' / 'report.json'
+            with self.assertRaises(FileNotFoundError):
+                self._run_cli(root, report, artifact)
+            self.assertFalse(artifact.exists())
+            self.assertFalse(report.parent.exists())
+
+
 if __name__ == '__main__': unittest.main()

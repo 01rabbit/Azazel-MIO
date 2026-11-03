@@ -58,6 +58,15 @@ def codes(values: Any, cap=16) -> tuple[str, ...]:
     return tuple(values)
 
 
+def origins(values: Any) -> tuple[str, ...]:
+    # Structural and size bounds only: valid-but-unexpected origin strings are kept so
+    # quarantine_reasons() can report feature_origin_leakage. Bounds match codes() (16 items)
+    # and _CODE (96 chars); character grammar is intentionally unrestricted here.
+    if type(values) not in (tuple, list) or len(values) > 16 or any(type(x) is not str or len(x) > 96 for x in values):
+        raise ValueError("invalid_learning_feature_origins")
+    return tuple(values)
+
+
 def refs(values: Any) -> tuple[str, ...]:
     if type(values) not in (tuple, list) or len(values) > 32 or any(not model_id_ok(x, "evidence_ref") for x in values):
         raise ValueError("invalid_learning_refs")
@@ -155,7 +164,7 @@ class LearningExample:
             result[key] = None if value[key] is None else nested(kind, value[key])
         result["direct_fact_codes"] = codes(value["direct_fact_codes"])
         result["direct_evidence_refs"] = refs(value["direct_evidence_refs"])
-        result["feature_origins"] = tuple(value["feature_origins"]) if type(value["feature_origins"]) is list else ()
+        result["feature_origins"] = origins(value["feature_origins"])
         example = cls(**result)
         # Structural/type errors reject the record, not guessed defaults.
         for key in ("example_id", "incident_group", "entity_group"):
