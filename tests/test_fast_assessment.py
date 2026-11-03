@@ -338,6 +338,90 @@ def test_dns_port_has_its_own_factor_and_bonus():
     )
 
 
+@pytest.mark.parametrize(
+    "severity",
+    [True, False, "1", "9", 1.0, None, -(1 << 31) - 1, 1 << 31, 10**5000],
+    ids=["true", "false", "str-1", "str-9", "float", "none", "below-int32", "above-int32", "huge"],
+)
+def test_malformed_severity_is_rejected_at_the_input_boundary(severity):
+    with pytest.raises((TypeError, ValueError)):
+        FastAssessmentInput(severity=severity)
+
+
+def test_integer_severity_nine_remains_accepted_as_unknown_fallback():
+    result = assess_fast(FastAssessmentInput(severity=9))
+    assert result.score == 16
+    assert result.factors == ("severity=9",)
+
+
+def test_large_but_bounded_unknown_integer_severity_keeps_fallback():
+    result = assess_fast(FastAssessmentInput(severity=90))
+    assert result.score == 16
+    assert result.factors == ("severity=90",)
+
+
+@pytest.mark.parametrize(
+    "port",
+    [True, "22", 22.0, None, 0, -1, 65536, 10**30],
+    ids=["bool", "str", "float", "none", "zero", "negative", "over-65535", "huge"],
+)
+def test_malformed_or_out_of_range_port_is_rejected(port):
+    with pytest.raises((TypeError, ValueError)):
+        PortSignal("admin", port)
+
+
+def test_port_signal_kind_must_be_a_bounded_string():
+    with pytest.raises(TypeError):
+        PortSignal(None, 22)
+    with pytest.raises(TypeError):
+        PortSignal("x" * 65, 22)
+
+
+def test_ports_must_be_a_tuple_of_port_signals():
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, ports=[PortSignal("web", 443)])
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, ports=(("web", 443),))
+
+
+def test_too_many_ports_are_rejected_before_iteration():
+    ports = tuple(PortSignal("web", 443) for _ in range(17))
+    with pytest.raises(ValueError):
+        FastAssessmentInput(severity=2, ports=ports)
+
+
+def test_too_many_classes_are_rejected_before_iteration():
+    classes = tuple(f"future-{i}" for i in range(33))
+    with pytest.raises(ValueError):
+        FastAssessmentInput(severity=2, classes=classes)
+
+
+def test_exact_class_and_port_count_caps_are_accepted():
+    classes = tuple(f"future-{i}" for i in range(32))
+    ports = tuple(PortSignal("future-kind", 1000 + i) for i in range(16))
+    result = assess_fast(FastAssessmentInput(severity=2, classes=classes, ports=ports))
+    assert result.score == 30
+    assert result.factors == ("severity=2",)
+
+
+def test_classes_must_be_a_tuple_of_bounded_strings():
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, classes=["c2"] * 33)
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, classes=("c2", 48))
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, classes=("c" * 65,))
+
+
+def test_boolean_flags_must_be_real_bools():
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, token_only="yes")
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, deception_sid=1)
+    with pytest.raises(TypeError):
+        FastAssessmentInput(severity=2, benign_classless=None)
+
+
 def test_known_port_does_not_create_a_classless_threat():
     result = assess_fast(
         FastAssessmentInput(severity=2, ports=(PortSignal("admin", 22),))
