@@ -2,12 +2,12 @@
 
 Scope: documentation only. It changes no code, contracts, pins or rollout state.
 
-Evidence SHAs:
+Evidence SHAs (current MIO kernel and Edge scorer rows are read directly at these commits):
 
-- MIO base: `03913bfcd6b9658ee6f52bd210297d96a7afdafe` (scorer/fast-assessment rows; the earlier MIO base `88f26c59b91c97b8fedbc690f95766bc28928e97` is kept only where a row says so)
+- MIO current main: `e4a0e504bae91153f3dcb8105f8658ff80d4e884` (kernel source and current package metadata). The earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
 - Edge public `main`: `38c2b07774c61b86209d0cd94ce2e7689d38600c` (scorer, agent and model-lane rows re-read at this SHA)
 - Edge `cbc5d77df88a7c0c2aa9f1e8cd3ef4f81aa18be8`: the Rust decision-loop and Rust severity rows (sections 2 and 6) are still observed only at this earlier SHA; they were not re-read at `38c2`.
-- Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is the MIO source revision declared for installation from Edge's current runtime requirements; it is not `03913`. Package availability alone does not prove runtime deployment.
+- Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
 
 Labels:
 
@@ -59,11 +59,11 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 
 ## 4. MIO fast-assessment kernel (observed, with docstring claims)
 
-- `assess_fast` takes normalized inputs and returns a score plus ordered factors ([fast_assessment.py](https://github.com/01rabbit/Azazel-MIO/blob/03913bfcd6b9658ee6f52bd210297d96a7afdafe/src/azazel_mio/fast_assessment.py)). It is a pure function over `FastAssessmentInput`. A public-code search of MIO `src/` at `03913` found no caller inside `src/`; the only other references are in `tests/test_fast_assessment.py` and `docs/fast-assessment.md`.
-- **Observed (direct comparison, earlier SHAs):** I compared the constants in MIO `88f26c5` (`fast_assessment.py`) directly with the Edge scorer at `cbc5d77`. The class weights, severity bases, token ceiling `39`, deception floor `60`, benign level `25` and severity-1 cap `35` match. This is a constant-level comparison only, not a behavior or parity test. At `03913` and `38c2` I re-read the scalar constants (token ceiling `39`, deception floor `60`, benign level `25`, severity-1 cap `35`, severity bases) and they still match. The class-weight table was not re-compared in this pass.
-- **Edge live wiring (observed at `38c2`):** Edge's scorer imports and calls `assess_fast` as a comparison (section 3). Its pinned MIO revision is `9fedb01`, not `03913`.
-- **Docstring claims** in the MIO module (L1–L12): it is adapted from Edge's scorer at commit `47c880b`, and importing it does no I/O and loads no Edge modules. `47c880b` appears only in this MIO attribution; I did not verify it against Edge history.
-- **Not claimed here:** any parity test result. The MIO docs also name a revision for parity vectors ([fast-assessment.md](https://github.com/01rabbit/Azazel-MIO/blob/03913bfcd6b9658ee6f52bd210297d96a7afdafe/docs/fast-assessment.md)). This pass did not check that claim.
+- `assess_fast` takes normalized inputs and returns a score plus ordered factors ([fast_assessment.py at MIO main](https://github.com/01rabbit/Azazel-MIO/blob/e4a0e504bae91153f3dcb8105f8658ff80d4e884/src/azazel_mio/fast_assessment.py)). It is a pure function over `FastAssessmentInput`. A source search at `e4a0` found the function definition but no caller inside MIO `src/`; its consumers are product adapters.
+- **Observed (direct constant comparison at fixed current SHAs):** I read the MIO constants at `e4a0` and Edge scorer at `38c2`, then compared the two class-weight maps, severity bases, unknown-severity base, token-only ceiling, benign level, deception floor, and severity-1 cap with an AST literal-value script. All values matched. This is a static constant comparison only, not a behavioral or parity test. MIO `e4a0` also validates bounded input sizes/types; this check did not compare those checks with Edge's adapter.
+- **Edge live wiring (observed at `38c2`):** Edge's scorer imports and calls `assess_fast` as a comparison (section 3). Edge main still pins MIO `9fedb01`; open Draft #538 proposes source `b441d43` but is not main adoption.
+- **Docstring claims** in the MIO module: it is adapted from Edge's scorer at commit `47c880b`, and importing it does no I/O and loads no Edge modules. `47c880b` appears only in this MIO attribution; it was not verified against Edge history.
+- **Not claimed here:** any parity test result. The MIO parity-vector documentation is linked at [fast-assessment.md](https://github.com/01rabbit/Azazel-MIO/blob/e4a0e504bae91153f3dcb8105f8658ff80d4e884/docs/fast-assessment.md); this pass did not rerun that suite.
 - **Resolved at `38c2`:** Edge imports this kernel, but only in `TacticalScorer.score` as a comparison (section 3). Import is inside the function, so package absence degrades to `unavailable`. This does not make the kernel the decision path.
 
 ## 5. Replay and learning
@@ -79,7 +79,7 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 | Area | MIO (SHA per row) | Edge (SHA per cell) | Status |
 |---|---|---|---|
 | Live decision | None. | Rust `decide_defense` then `maybe_enforce` (`main.rs` L1554–L1555). | Observed call order and Edge document claim; cross-product agreement not established. |
-| Advisory score | `assess_fast` (pure kernel; no caller inside MIO `src/` at `03913`). | At `38c2`, `TacticalScorer.score` (`scorer.py` L246–L271) calls `assess_fast` as a comparison and uses its score/factors only on exact match; `_build_advisory` calls `SCORER.score` (`agent.py` L1802). The decision-loop doc (`cbc5d77`, L26–L29) says the scorer runs after the decision and does not change it. | Observed at `38c2`. Comparison only; `shadow.authority` is `comparison_only`. Rechecked scalar constants match (class weights not re-compared). Not a replacement for the Rust decision path. |
+| Advisory score | `assess_fast` at MIO `e4a0` (pure kernel; no caller inside MIO `src/`). | At `38c2`, `TacticalScorer.score` (`scorer.py` L246–L271) calls `assess_fast` as a comparison and uses its score/factors only on exact match; `_build_advisory` calls `SCORER.score` (`agent.py` L1802). The decision-loop doc (`cbc5d77`, L26–L29) says the scorer runs after the decision and does not change it. | Observed at `38c2`. Comparison only; `shadow.authority` is `comparison_only`. Static constants all match; no behavioral parity claim. Not a replacement for the Rust decision path. |
 | Optional model-assisted explanation | `AssistantCore` (MIO assistant API; the model callable is injected). | Opt-in lane `LIVE_MIO_MODEL_LANE` (`agent.py` L2741), gated by `AZAZEL_MIO_MODEL_ENABLED` (default `0`, L199). `_analyze_mio_fast_result` (L2464) builds `AssistantCore(model=StructuredTransport())`; the transport calls the product Ollama path `_ollama_chat` (L2340). Separately, `mio_live_auxiliary.py` (L504) constructs `AssistantCore(model=None)`. | Observed at `38c2`. Opt-in and governed submission. `mio-live-auxiliary.md` L79–L105 covers this model lane and states that advisory authority remains unchanged; L27's `read_only_advisory` is the no-model auxiliary lane. I did not trace every consumer of the model-lane output. |
 | Raw parsing and classification | Out of scope; caller pre-classifies. | Scorer derives SID, classtype, token and port signals itself. | Observed. Stays in Edge. |
 | Replay | Fixture replay, no alert scoring. | Not inspected. | MIO observed. Edge Unknown. |
