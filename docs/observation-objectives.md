@@ -67,6 +67,34 @@ The projection is pure. It takes no broker and adds no capability requests.
 Its inputs are the frame, the playbook ID, the cycle state, the validated
 hypotheses and gaps, and the eligible gap ID set.
 
+## Local projection diagnostic (not a shared contract)
+
+`ReasoningOutcome.observation_projection` carries an
+`ObservationProjectionReport`. It is a local MIO diagnostic of what the
+projector did. It is not a Fabric or Edge wire contract, it has no generation
+or freshness semantics, and `to_diagnostic()` is a convenience for local logs
+and tests only.
+
+- `state_skip`: set when no per-gap evaluation happened. Closed codes:
+  `not_complete`, `wrong_playbook`, `deception_unavailable`,
+  `invalid_frame_binding`, `malformed_input`.
+- `gap_outcomes`: one closed code per evaluated gap, in input order, bounded to
+  the cycle's `ReasoningBudget.max_gaps`. Codes: `emitted`, `not_eligible`,
+  `invalid_id`, `duplicate_gap`, `no_live_hypotheses`.
+- `unreported_gap_count`: gaps beyond that bound, not listed in `gap_outcomes`.
+- `emitted_count` and `omitted_hypothesis_count`: counts over all gaps. The
+  second counts live hypotheses cut by `MAX_OBJECTIVE_HYPOTHESES` (8).
+
+The report never contains raw gap or hypothesis IDs, question text, or
+capability names. Malformed inputs fail closed: no objectives and a
+`malformed_input` state skip. Non-COMPLETE terminal outcomes record only
+`state_skip = not_complete`.
+
+The objective payload (`MioObservationObjective.to_dict()`) and the
+`project_observation_objectives` return shape are unchanged. The report is
+produced by `project_observation_report`, which returns the same objectives
+plus the report.
+
 ## Edge dependency (not implemented here)
 
 Edge must independently authorize any observation; an objective is never

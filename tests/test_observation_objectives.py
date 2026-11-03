@@ -338,3 +338,154 @@ def test_uninterrupted_eligible_cycle_still_emits_with_checks_installed():
         broker.close()
     assert outcome.state is ReasoningState.COMPLETE
     assert len(outcome.observation_objectives) == 1
+
+
+# --- Local projection diagnostic (ObservationProjectionReport) -------------------
+
+import dataclasses  # noqa: E402
+
+from azazel_mio.observation_objectives import (  # noqa: E402
+    DEFAULT_REPORT_MAX_GAPS,
+    MAX_OBJECTIVE_HYPOTHESES,
+    ObservationProjectionReport,
+    project_observation_report,
+)
+
+
+def _report(*, f=None, playbook_id=OBSERVATION_PLAYBOOK_ID, state=ReasoningState.COMPLETE,
+            hypotheses=None, gaps=(), eligible=("g1",), max_gaps=DEFAULT_REPORT_MAX_GAPS):
+    hyps = (hyp("h1"), hyp("h2")) if hypotheses is None else hypotheses
+    return project_observation_report(frame=f or frame(), playbook_id=playbook_id, state=state,
+                                      hypotheses=hyps, gaps=gaps, eligible_gap_ids=eligible,
+                                      max_gaps=max_gaps)
+
+
+G1 = MioEvidenceGap("g1", "q", ("h1",), "get_deception_state", 50)
+
+
+@pytest.mark.parametrize("state", [s for s in ReasoningState if s is not ReasoningState.COMPLETE])
+def test_state_skip_not_complete(state):
+    objs, rep = _report(state=state, gaps=(G1,))
+    assert objs == () and rep == ObservationProjectionReport(state_skip="not_complete")
+
+
+def test_state_skip_wrong_playbook():
+    objs, rep = _report(playbook_id="generic-evidence-first-v1", gaps=(G1,))
+    assert objs == () and rep.state_skip == "wrong_playbook"
+
+
+@pytest.mark.parametrize("status", ["not_provided", "unavailable", "timeout", "malformed"])
+def test_state_skip_deception_unavailable(status):
+    objs, rep = _report(f=frame(deception_context=None, deception_status=status), gaps=(G1,))
+    assert objs == () and rep.state_skip == "deception_unavailable"
+
+
+def test_state_skip_invalid_frame_binding():
+    bad = dataclasses.replace(frame(), frame_id="bad id with spaces")
+    objs, rep = _report(f=bad, gaps=(G1,))
+    assert objs == () and rep.state_skip == "invalid_frame_binding"
+
+
+def test_malformed_inputs_fail_closed_with_state_skip():
+    objs, rep = _report(gaps=(G1, "not-a-gap"))
+    assert objs == () and rep.state_skip == "malformed_input"
+    bad_gap = MioEvidenceGap(["unhashable"], "q", ("h1",), "get_deception_state", 50)
+    objs, rep = _report(gaps=(bad_gap,))
+    assert objs == () and rep.state_skip == "malformed_input"
+    objs, rep = _report(gaps=(G1,), eligible=[["unhashable"]])
+    assert objs == () and rep.state_skip == "malformed_input"
+    objs, rep = _report(gaps=(G1,), max_gaps=-1)
+    assert objs == () and rep.state_skip == "malformed_input"
+
+
+def test_each_gap_skip_reason_is_reported_in_input_order():
+    gaps = (
+        MioEvidenceGap("g1", "emit", ("h1",), "get_deception_state", 50),
+        MioEvidenceGap("g2", "not eligible", ("h1",), "get_deception_state", 50),
+        MioEvidenceGap("bad id!", "invalid", ("h1",), "get_deception_state", 50),
+        MioEvidenceGap("g1", "dup", ("h2",), "get_deception_state", 50),
+        MioEvidenceGap("g4", "no live", ("hX",), "get_deception_state", 50),
+    )
+    objs, rep = _report(gaps=gaps, eligible=("g1", "bad id!", "g4"), max_gaps=5)
+    assert rep.state_skip is None
+    assert rep.gap_outcomes == ("emitted", "not_eligible", "invalid_id", "duplicate_gap", "no_live_hypotheses")
+    assert rep.emitted_count == 1 and [o.source_gap_id for o in objs] == ["g1"]
+    assert rep.unreported_gap_count == 0 and rep.omitted_hypothesis_count == 0
+
+
+def test_nine_live_hypotheses_capped_to_eight_with_omitted_count_one():
+    live = tuple(hyp(f"h{i}") for i in range(9))
+    gap = MioEvidenceGap("g1", "q", tuple(f"h{i}" for i in range(9)), "get_deception_state", 50)
+    objs, rep = _report(hypotheses=live, gaps=(gap,), eligible=("g1",))
+    assert len(objs) == 1 and len(objs[0].hypothesis_ids) == MAX_OBJECTIVE_HYPOTHESES
+    assert objs[0].hypothesis_ids == tuple(f"h{i}" for i in range(8))
+    assert rep.emitted_count == 1 and rep.omitted_hypothesis_count == 1
+    assert rep.gap_outcomes == ("emitted",)
+
+
+def test_report_gap_outcomes_are_bounded_to_budget_with_unreported_count():
+    gaps = tuple(MioEvidenceGap(f"g{i}", "q", ("h1",), "get_deception_state", 50) for i in range(5))
+    objs, rep = _report(gaps=gaps, eligible=tuple(f"g{i}" for i in range(5)), max_gaps=2)
+    assert rep.gap_outcomes == ("emitted", "emitted")
+    assert rep.unreported_gap_count == 3
+    assert rep.emitted_count == 5 and len(objs) == 5  # objectives are never truncated by the report
+
+
+def test_report_is_deterministic_and_objective_ids_are_stable():
+    kwargs = dict(gaps=(G1, MioEvidenceGap("g2", "q", ("h2",), "get_deception_state", 50)),
+                  eligible=("g1", "g2"))
+    first, rep1 = _report(**kwargs)
+    second, rep2 = _report(**kwargs)
+    assert rep1 == rep2 and first == second
+    assert [o.objective_id for o in first] == [o.objective_id for o in second]
+
+
+def test_wrapper_objectives_equal_report_objectives():
+    kwargs = dict(frame=frame(), playbook_id=OBSERVATION_PLAYBOOK_ID, state=ReasoningState.COMPLETE,
+                  hypotheses=(hyp("h1"), hyp("h2")), gaps=(G1,), eligible_gap_ids=("g1",))
+    wrapped = project_observation_objectives(**kwargs)
+    reported, _ = project_observation_report(**kwargs)
+    assert wrapped == reported
+
+
+def test_silently_dropped_gap_changes_the_report():
+    # Regression check: silently dropping an ineligible gap (instead of
+    # recording not_eligible) changes the report.
+    g2 = MioEvidenceGap("g2", "q", ("h2",), "query_flow_summary", 50)
+    _, full = _report(gaps=(G1, g2), eligible=("g1",))
+    _, dropped = _report(gaps=(G1,), eligible=("g1",))
+    assert full.gap_outcomes == ("emitted", "not_eligible")
+    assert dropped.gap_outcomes == ("emitted",)
+    assert full != dropped
+
+
+def test_report_diagnostic_is_fixed_keys_without_raw_identifiers():
+    gaps = (G1, MioEvidenceGap("secret-gap-id", "q", ("h1",), "get_deception_state", 50))
+    _, rep = _report(gaps=gaps, eligible=("g1", "secret-gap-id"))
+    data = rep.to_diagnostic()
+    assert set(data) == {"state_skip", "gap_outcomes", "unreported_gap_count", "emitted_count",
+                         "omitted_hypothesis_count"}
+    text = repr(data)
+    assert "g1" not in text and "h1" not in text and "secret-gap-id" not in text
+
+
+def test_completed_cycle_outcome_carries_projection_diagnostic_matching_objectives():
+    outcome, _ = run_deception()
+    rep = outcome.observation_projection
+    assert rep is not None and rep.state_skip is None
+    assert rep.emitted_count == len(outcome.observation_objectives) == 1
+    assert rep.gap_outcomes == ("emitted",)
+
+
+def test_non_complete_outcome_records_state_skip_and_no_objectives():
+    outcome, _ = run_deception(gap_items=(dict(GAP, discriminates_hypothesis_ids=["h1"],
+                                               capability="not_allowed_capability"),))
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert outcome.observation_objectives == ()
+    assert outcome.observation_projection.state_skip == "not_complete"
+
+
+def test_objective_payload_shape_unchanged_by_report_wiring():
+    outcome, _ = run_deception()
+    assert set(outcome.observation_objectives[0].to_dict()) == {
+        "objective_id", "frame_id", "trace_id", "source_gap_id", "hypothesis_ids", "authority", "executable"}
