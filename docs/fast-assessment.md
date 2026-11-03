@@ -69,7 +69,7 @@ over-limit values raise `ValueError`.
 These bounds intentionally narrow pathological Python inputs so the kernel
 cannot spend unbounded work iterating signal tuples or formatting arbitrary
 integers. The Edge adapter at [main `38c2b077`](https://github.com/01rabbit/Azazel-Edge/blob/38c2b07774c61b86209d0cd94ce2e7689d38600c/py/azazel_edge/tactics_engine/scorer.py)
-passes at most its eight canonical class labels and one already-classified
+passes a subset of its canonical class labels and at most one already-classified
 target port, normalizes an empty action to `allowed`, and continues using its
 local score if MIO rejects an invalid adapter input. No input is silently
 truncated. Validation runs at object construction; mutated or deserialized
