@@ -1,6 +1,6 @@
 # AI inventory and source-to-target map
 
-**Evidence cut: 2026-11-03.** Project-owner direction makes MIO the common AI assistance source of truth; see the [ownership ADR](ownership-adr.md). This is a source inventory, not cross-product owner consent, merged adoption, deployment, or a production contract. PR status and heads were read from GitHub at this cut. The evidence base is MIO main `3cdfe4c5643161bc260471e7085d1eb6b44a6fe2`. At this cut, this documentation PR [MIO #27](https://github.com/01rabbit/Azazel-MIO/pull/27) was open/draft at public head `c07fdf895c0373f0a7b53d8e1aaabf8468268405`; this refresh is prepared atop the evidence-base main.
+**Evidence cut: 2026-11-03.** Project-owner direction makes MIO the common AI assistance source of truth; see the [ownership ADR](ownership-adr.md). This is a source inventory, not cross-product owner consent, merged adoption, deployment, or a production contract. PR status and heads were read from GitHub at this cut. The evidence base is MIO main `3cdfe4c5643161bc260471e7085d1eb6b44a6fe2`. At this cut, this documentation PR [MIO #27](https://github.com/01rabbit/Azazel-MIO/pull/27) was open/draft at public head `c07fdf895c0373f0a7b53d8e1aaabf8468268405`; this refresh is prepared atop the evidence-base main. The writer checkout for this code-path correction starts at MIO `03913bfcd6b9658ee6f52bd210297d96a7afdafe`; the PR table below was not re-read in this correction.
 
 ## Exact public source anchors
 
@@ -46,6 +46,16 @@ Nexus implementation details are maintained privately and are not part of this p
 ## Actual product callsites and target ownership
 
 The callsite links below are historical source anchors at the earlier Edge #525 head `0534ed048235a92c5677c6d815321149fa6c96d5`; they are not claims about the later #525 head or a released consumer.
+
+Supplemental Edge source check (2026-11-04) at public main `38c2b07774c61b86209d0cd94ce2e7689d38600c` (not a PR head claim; the earlier inventory and PR table above remain at their 2026-11-03 evidence cut):
+
+- `py/azazel_edge/tactics_engine/scorer.py`: `TacticalScorer.score` computes Edge's local score, then calls MIO `azazel_mio.fast_assessment.assess_fast` as a comparison. The MIO score and factors are used only on exact match (`source="shared_core"`); otherwise Edge's value is kept (`source="edge_local"`). `shadow.authority` is `comparison_only`. The comparison does not own the Rust decision or enforcement.
+- `py/azazel_edge_ai/agent.py`: `_build_advisory` (L1786) calls `SCORER.score` (L1802). `agent.py` imports MIO `AssistantCore` inside functions (L2468, L2750), and `mio_live_auxiliary.py` (L504) constructs `AssistantCore(model=None)`.
+- `py/azazel_edge_ai/agent.py`: the optional model lane is `LIVE_MIO_MODEL_LANE` (L2741), gated by `AZAZEL_MIO_MODEL_ENABLED` (default off). It uses the product Ollama transport `_ollama_chat` (L2340) under explicit opt-in and governed submission. Its advisory authority is stated as `read_only_advisory` in `mio-live-auxiliary.md` (L27); I did not trace every consumer of its output.
+- `requirements/runtime.txt` (L10) pins MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`. Edge does not deploy MIO main `03913bfcd6b9658ee6f52bd210297d96a7afdafe` by this pin. Package availability alone does not prove runtime deployment.
+- Edge CI at `38c2`: `tests/test_scorer_shared_core_advisory_v1.py` covers the shared-core scorer comparison (exact match, valid mismatch, malformed, unavailable and degraded cases). `tests/test_mio_model_lane.py` covers the model lane. `.github/workflows/ci.yml` runs `PYTHONPATH=.:py pytest -q` in its Python tests job; I read that line but did not run any Edge test.
+
+The MIO `assess_fast` kernel has no caller inside MIO `src/` in this public code search. Its use by Edge is the comparison above, not a MIO-side integration.
 
 | Source at the anchored head | Behavior at pinned source head | Target and remaining work |
 | --- | --- | --- |
