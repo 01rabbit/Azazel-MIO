@@ -18,10 +18,13 @@ releases or replace an existing artifact in place.
 
 ## Current integration identity example (2026-11-04)
 
-At MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884`, `pyproject.toml`
-declares `0.1.0+git.c31c244`. PR #41's source head
-`b441d431532507387fb81f1e03e31fd1aea57b68` and the merge commit have the same
-source tree `f879a97422f14aeca0c6cee75e97cb4b5268a747`. The suffix refers to
+At current MIO main `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d` (tree
+`0970dad5a8c87b0ce002b4e24c9505301e7a0f2a`), `pyproject.toml` declares
+`0.1.0+git.c31c244`. This main includes docs-only PR #39; `pyproject.toml`,
+`src/`, and `tests/` are unchanged from PR #41's merge. PR #41's source head
+`b441d431532507387fb81f1e03e31fd1aea57b68` and merge commit
+`e4a0e504bae91153f3dcb8105f8658ff80d4e884` have the same source tree
+`f879a97422f14aeca0c6cee75e97cb4b5268a747`. The suffix refers to
 the real commit `c31c2442899e778f1c49e5becd739c59ef8f1092` (PR #40), from which
 the package source files were carried forward. Comparing `c31c244` with the
 PR #41 source head shows changes only to `pyproject.toml` and this versioning

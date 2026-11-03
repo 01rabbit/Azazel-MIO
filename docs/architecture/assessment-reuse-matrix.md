@@ -4,10 +4,10 @@ Scope: documentation only. It changes no code, contracts, pins or rollout state.
 
 Evidence SHAs (current MIO kernel and Edge scorer rows were re-read on 2026-11-04 at these commits):
 
-- MIO current main: `e4a0e504bae91153f3dcb8105f8658ff80d4e884` (kernel source and current package metadata). The earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
+- MIO current main: `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d` (tree `0970dad5a8c87b0ce002b4e24c9505301e7a0f2a`). Docs-only PR #39 advanced main from the PR #41 merge `e4a0e504bae91153f3dcb8105f8658ff80d4e884`; `src/`, `tests/`, and package metadata are unchanged. The kernel source evidence below is anchored to `e4a0`, and the earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
 - Edge public `main`: `38c2b07774c61b86209d0cd94ce2e7689d38600c` (scorer, agent and model-lane rows re-read at this SHA)
 - Edge `cbc5d77df88a7c0c2aa9f1e8cd3ef4f81aa18be8`: the Rust decision-loop and Rust severity rows (sections 2 and 6) are still observed only at this earlier SHA; they were not re-read at `38c2`.
-- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
+- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
 
 Labels:
 
