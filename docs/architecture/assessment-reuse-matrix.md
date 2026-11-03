@@ -2,12 +2,12 @@
 
 Scope: documentation only. It changes no code, contracts, pins or rollout state.
 
-Evidence SHAs (current MIO kernel and Edge scorer rows are read directly at these commits):
+Evidence SHAs (current MIO kernel and Edge scorer rows were re-read on 2026-11-04 at these commits):
 
 - MIO current main: `e4a0e504bae91153f3dcb8105f8658ff80d4e884` (kernel source and current package metadata). The earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
 - Edge public `main`: `38c2b07774c61b86209d0cd94ce2e7689d38600c` (scorer, agent and model-lane rows re-read at this SHA)
 - Edge `cbc5d77df88a7c0c2aa9f1e8cd3ef4f81aa18be8`: the Rust decision-loop and Rust severity rows (sections 2 and 6) are still observed only at this earlier SHA; they were not re-read at `38c2`.
-- Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
+- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
 
 Labels:
 
@@ -89,11 +89,11 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 ## 7. Proposed reuse (not established)
 
 - **P1.** Keep parsing, classification and deception/benign identification in Edge. Edge passes only normalized signals to MIO.
-- **P2.** Edge `38c2` already compares the Python scorer with `assess_fast` on the ordinary event path and uses MIO's score/factors only on exact match (section 3); its scorer test covers exact match and failure cases. A fixed-head synthetic event smoke at `38c2` / pinned MIO `9fedb01` observed `79 = 79` with matching factors ([MIO #1 checkpoint](https://github.com/01rabbit/Azazel-MIO/issues/1#issuecomment-6608772543)). This is one synthetic event, not a broad parity corpus; keep the fixed-vector parity tests (`tests/test_fast_assessment.py`, not re-verified here) as the intended acceptance evidence. This is not acceptance.
+- **P2.** Edge `38c2` already compares the Python scorer with `assess_fast` on the ordinary event path and uses MIO's score/factors only on exact match (section 3); its scorer test covers exact match and failure cases. A fixed-head synthetic event smoke at `38c2` / pinned MIO `9fedb01` observed `79 = 79` with matching factors ([MIO #1 checkpoint](https://github.com/01rabbit/Azazel-MIO/issues/1#issuecomment-6608772543)). This is one synthetic event, not a broad parity corpus; keep the fixed-vector parity tests (`tests/test_fast_assessment.py`, not re-verified here) as the intended acceptance evidence. Separate local process evidence for Edge #538's candidate Knowledge/model path is recorded in the [AI inventory](ai-inventory.md); it does not establish scorer parity or main adoption. This is not acceptance.
 - **P3.** Use MIO output only as an advisory explanation or shadow comparison. The Rust decision path stays authoritative.
 - **P4.** Any learned change goes through human review and the offline gates. This is a proposed rule. The narrow observed checks in section 5 do not prove that no other promotion path exists.
 - **P5.** The Rust severity decision and the Python tactical score are separate algorithms. Parity checks between MIO and Edge should target the Python advisory scorer. A Rust-to-Python parity check would be a separate, unproposed item.
 
 ## 8. Out of scope
 
-- No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. No product acceptance, rollout, HIL, or production claim is made.
+- No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. A separate task-local, uncommitted Edge #538 candidate process harness (local supplemental evidence on synthetic input, not Edge CI, not installed-package proof and not main behavior) is recorded in the [AI inventory](ai-inventory.md) current status. No product acceptance, rollout, HIL, or production claim is made.
