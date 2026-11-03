@@ -121,7 +121,8 @@ SITUATION_FRAME_DECEPTION_EVIDENCE_REFS_CAP = 16
 DECEPTION_CONTEXT_FORBIDDEN_WORDS = frozenset((
     "activate activation deactivate execute exec run start stop open allow authorize authorized "
     "approve approved enable extend terminate withdraw block isolate quarantine redirect expose "
-    "command shell sudo deploy install delete kill"
+    "command shell sudo deploy install delete kill "
+    "override enforce grant granted bypass"
 ).split())
 # Limitation token: snake name with an optional ":parameter" (C2).
 _LIMITATION_RE = re.compile(r"[a-z][a-z0-9_]{2,63}(?::[A-Za-z0-9._-]{1,64})?\Z")

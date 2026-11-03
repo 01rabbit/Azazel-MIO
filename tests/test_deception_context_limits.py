@@ -110,7 +110,7 @@ def test_non_sequence_dropped(bad):
 
 
 def test_forbidden_words_are_c3():
-    assert len(DECEPTION_CONTEXT_FORBIDDEN_WORDS) == 30
+    assert len(DECEPTION_CONTEXT_FORBIDDEN_WORDS) == 35
     for word in ("redirection", "isolation", "active", "safety", "runtime"):
         assert word not in DECEPTION_CONTEXT_FORBIDDEN_WORDS
 
@@ -159,3 +159,14 @@ def test_frame_from_dict_rejects_bad_extras():
     d["deception_context"]["limitations"] = []  # not canonical: absent, not empty
     with pytest.raises(ValueError):
         MioSituationFrame.from_dict(d)
+
+
+@pytest.mark.parametrize("word", ["override", "enforce", "grant", "granted", "bypass"])
+def test_r2_added_words_dropped(word):
+    c, dropped = MioDeceptionContext.coerce_with_drops({**BASE, "limitations": ["stale", f"x_{word}_y", f"telemetry_gap:{word}"], "evidence_refs": ["frame:f1", f"advisory:{word}-x"]})
+    assert c.limitations == ("stale",) and c.evidence_refs == ("frame:f1",) and dropped
+
+
+def test_trailing_newline_rejected():
+    c, dropped = MioDeceptionContext.coerce_with_drops({**BASE, "limitations": ["stale\n"], "evidence_refs": ["frame:f1\n"]})
+    assert c.limitations == () and c.evidence_refs == () and dropped
