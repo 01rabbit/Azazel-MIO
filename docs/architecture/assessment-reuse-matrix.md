@@ -76,7 +76,7 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 
 ## 6. Matrix
 
-| Area | MIO (base SHA) | Edge `cbc5d77` | Status |
+| Area | MIO (SHA per row) | Edge (SHA per cell) | Status |
 |---|---|---|---|
 | Live decision | None. | Rust `decide_defense` then `maybe_enforce` (`main.rs` L1554–L1555). | Observed call order and Edge document claim; cross-product agreement not established. |
 | Advisory score | `assess_fast` (pure kernel; no caller inside MIO `src/` at `03913`). | At `38c2`, `TacticalScorer.score` (`scorer.py` L246–L271) calls `assess_fast` as a comparison and uses its score/factors only on exact match; `_build_advisory` calls `SCORER.score` (`agent.py` L1802). The decision-loop doc (`cbc5d77`, L26–L29) says the scorer runs after the decision and does not change it. | Observed at `38c2`. Comparison only; `shadow.authority` is `comparison_only`. Constants match. Not a replacement for the Rust decision path. |
@@ -89,7 +89,7 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 ## 7. Proposed reuse (not established)
 
 - **P1.** Keep parsing, classification and deception/benign identification in Edge. Edge passes only normalized signals to MIO.
-- **P2.** Edge `38c2` already compares the Python scorer with `assess_fast` on the ordinary event path and uses MIO's score/factors only on exact match (section 3); its scorer test covers exact match and failure cases. A fixed-head synthetic event smoke at `38c2` / pinned MIO `9fedb01` observed `79 = 79` with matching factors ([MIO #1 checkpoint](https://github.com/01rabbit/Azazel-MIO/issues/1#issuecomment-6608772543)). This is one synthetic event, not a broad parity corpus; keep the fixed-vector parity tests as the acceptance evidence.
+- **P2.** Edge `38c2` already compares the Python scorer with `assess_fast` on the ordinary event path and uses MIO's score/factors only on exact match (section 3); its scorer test covers exact match and failure cases. A fixed-head synthetic event smoke at `38c2` / pinned MIO `9fedb01` observed `79 = 79` with matching factors ([MIO #1 checkpoint](https://github.com/01rabbit/Azazel-MIO/issues/1#issuecomment-6608772543)). This is one synthetic event, not a broad parity corpus; keep the fixed-vector parity tests (`tests/test_fast_assessment.py`, not re-verified here) as the intended acceptance evidence. This is not acceptance.
 - **P3.** Use MIO output only as an advisory explanation or shadow comparison. The Rust decision path stays authoritative.
 - **P4.** Any learned change goes through human review and the offline gates. This is a proposed rule. The narrow observed checks in section 5 do not prove that no other promotion path exists.
 - **P5.** The Rust severity decision and the Python tactical score are separate algorithms. Parity checks between MIO and Edge should target the Python advisory scorer. A Rust-to-Python parity check would be a separate, unproposed item.
@@ -97,4 +97,3 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 ## 8. Out of scope
 
 - No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. No product acceptance, rollout, HIL, or production claim is made.
-- No product acceptance, rollout, HIL, or production claim is made.
