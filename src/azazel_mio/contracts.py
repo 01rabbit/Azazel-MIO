@@ -7,7 +7,7 @@ import re
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from .id_grammar import EVIDENCE_REF, EVIDENCE_REF_KINDS, id_ok, opaque_id as _opaque_id  # noqa: F401
+from .id_grammar import has_secret_shape, SECRET_WORD_RE, EVIDENCE_REF, EVIDENCE_REF_KINDS, id_ok, opaque_id as _opaque_id  # noqa: F401
 
 _HYPOTHESIS_ALTERNATIVE_ID_RE = re.compile(r"[a-z][a-z0-9_]{2,63}\Z")
 
@@ -111,6 +111,25 @@ SITUATION_FRAME_CAPS = {"known_facts": 16, "unknowns": 12, "contradictions": 8, 
 SITUATION_FRAME_ACTOR_CAPS = {"protocols": 4, "target_ports": 8, "event_kinds": 4, "evidence_refs": 4}
 SITUATION_FRAME_ACTION_EVIDENCE_REFS_CAP = 4
 SITUATION_FRAME_DECEPTION_OBSERVATION_REFS_CAP = 8
+# Optional AZ-06 context extras (#55): limitation identifiers and opaque refs.
+SITUATION_FRAME_DECEPTION_LIMITATIONS_CAP = 32
+SITUATION_FRAME_DECEPTION_EVIDENCE_REFS_CAP = 16
+# Imperative / authority words (Deception#55 shared convention C3). A limitation
+# or ref is dropped when any whole segment, split on ``_ - . ~ : @ = +`` and
+# lower-cased, is one of these. Copied here because MIO has no dependencies;
+# "redirection", "isolation" and "active" are different segments and pass.
+DECEPTION_CONTEXT_FORBIDDEN_WORDS = frozenset((
+    "activate activation deactivate execute exec run start stop open allow authorize authorized "
+    "approve approved enable extend terminate withdraw block isolate quarantine redirect expose "
+    "command shell sudo deploy install delete kill "
+    "override enforce grant granted bypass"
+).split())
+# Limitation token: snake name with an optional ":parameter" (C2).
+_LIMITATION_RE = re.compile(r"[a-z][a-z0-9_]{2,63}(?::[A-Za-z0-9._-]{1,64})?\Z")
+# Evidence ref: kind prefix plus Fabric's opaque body character set (includes "~").
+_EVIDENCE_REF_RE = re.compile(r"[a-z][a-z0-9_]{0,31}:[A-Za-z0-9._~@=+:-]{1,128}\Z")
+_CONTEXT_WORD_SPLIT_RE = re.compile(r"[_:.~@=+\-]")
+DECEPTION_CONTEXT_ENTRY_DROPPED = "DECEPTION_CONTEXT_ENTRY_DROPPED"
 # Hard ceiling for to_canonical_json(). Documented in
 # docs/architecture/mio-situation-frame.md; enforced by deterministic trimming.
 SITUATION_FRAME_MAX_SERIALIZED_BYTES = 16384
@@ -377,29 +396,91 @@ class MioActionRecord:
         return {"role": self.role, "action": self.action, "decision_ref": self.decision_ref, "applied_state": self.applied_state, "mode": self.mode, "release_condition": self.release_condition, "decided_at": self.decided_at, "expires_at": self.expires_at, "evidence_refs": list(self.evidence_refs)}
 
 
+def _context_entries(values: Any, limit: int, *, limitation: bool) -> tuple[tuple[str, ...], bool]:
+    """Keep the valid entries; return (entries, dropped). An entry that breaks
+    the grammar, carries an imperative/authority word, looks like an address or
+    a secret, or exceeds the cap is dropped, and ``dropped`` is True. Absent
+    (None) is not a drop; a non-list value is dropped whole."""
+    if values is None:
+        return (), False
+    if not isinstance(values, (list, tuple)):
+        return (), True
+    out: list[str] = []
+    dropped = False
+    for raw in values:
+        if not _context_entry_ok(raw, limitation):
+            dropped = True
+        elif raw in out:
+            continue
+        elif len(out) >= limit:
+            dropped = True
+        else:
+            out.append(raw)
+    return tuple(out), dropped
+
+
+def _context_entry_ok(raw: Any, limitation: bool) -> bool:
+    if not isinstance(raw, str):
+        return False
+    if limitation:
+        # Closed grammar; the long-token rule is skipped because descriptive
+        # names (up to 64 chars) would trip it.
+        if not _LIMITATION_RE.match(raw) or SECRET_WORD_RE.search(raw):
+            return False
+    else:
+        # Fabric's body set has characters opaque_id lacks, so the address
+        # check runs on a copy with those mapped to "-".
+        if not _EVIDENCE_REF_RE.match(raw) or not _opaque_id(re.sub(r"[~@=+]", "-", raw)) or has_secret_shape(raw):
+            return False
+    return not any(word in DECEPTION_CONTEXT_FORBIDDEN_WORDS for word in _CONTEXT_WORD_SPLIT_RE.split(raw.lower()))
+
+
 @dataclass(frozen=True)
 class MioDeceptionContext:
     """AZ-06 facts only: identifiers, lifecycle state, observation refs. Never
-    belief, intent or authority; AZ-06 state is not Edge authority."""
+    belief, intent or authority; AZ-06 state is not Edge authority.
+
+    ``limitations`` (lower-case snake identifiers) and ``evidence_refs``
+    (objective / hypothesis / frame / decision / session refs) are optional,
+    carried as opaque IDs and never interpreted. Limitations are unresolved
+    conditions, not facts and not labels. An invalid, over-cap or
+    imperative-worded entry is dropped on its own (the context is kept);
+    ``coerce_with_drops`` reports that, and ``MioSituationFrame.build`` then
+    adds the unknown ``DECEPTION_CONTEXT_ENTRY_DROPPED``."""
 
     environment_id: str
     package_id: str = ""
     node_id: str = ""
     lifecycle_state: str = "unknown"
     observation_refs: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
 
     @classmethod
     def coerce(cls, value: Any) -> "MioDeceptionContext | None":
+        return cls.coerce_with_drops(value)[0]
+
+    @classmethod
+    def coerce_with_drops(cls, value: Any) -> "tuple[MioDeceptionContext | None, bool]":
         value = _as_plain(value)
         if not isinstance(value, Mapping):
-            return None
+            return None, False
         environment_id = _opaque_id(value.get("environment_id"))
         if not environment_id:
-            return None
-        return cls(environment_id=environment_id, package_id=_opaque_id(value.get("package_id")), node_id=_opaque_id(value.get("node_id")), lifecycle_state=_vocab(value.get("lifecycle_state"), DECEPTION_LIFECYCLE_STATES), observation_refs=_id_list(value.get("observation_refs"), SITUATION_FRAME_DECEPTION_OBSERVATION_REFS_CAP))
+            return None, False
+        limitations, drop_l = _context_entries(value.get("limitations"), SITUATION_FRAME_DECEPTION_LIMITATIONS_CAP, limitation=True)
+        evidence_refs, drop_e = _context_entries(value.get("evidence_refs"), SITUATION_FRAME_DECEPTION_EVIDENCE_REFS_CAP, limitation=False)
+        return (cls(limitations=limitations, evidence_refs=evidence_refs, environment_id=environment_id, package_id=_opaque_id(value.get("package_id")), node_id=_opaque_id(value.get("node_id")), lifecycle_state=_vocab(value.get("lifecycle_state"), DECEPTION_LIFECYCLE_STATES), observation_refs=_id_list(value.get("observation_refs"), SITUATION_FRAME_DECEPTION_OBSERVATION_REFS_CAP)), drop_l or drop_e)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"environment_id": self.environment_id, "package_id": self.package_id, "node_id": self.node_id, "lifecycle_state": self.lifecycle_state, "observation_refs": list(self.observation_refs)}
+        out: dict[str, Any] = {"environment_id": self.environment_id, "package_id": self.package_id, "node_id": self.node_id, "lifecycle_state": self.lifecycle_state, "observation_refs": list(self.observation_refs)}
+        # Emitted only when present, so a context without them serializes
+        # byte-for-byte as before and stored v2 frames stay fixed points.
+        if self.limitations:
+            out["limitations"] = list(self.limitations)
+        if self.evidence_refs:
+            out["evidence_refs"] = list(self.evidence_refs)
+        return out
 
 
 def _dependency_status(value: Any, *, has_refs: bool) -> str:
@@ -561,7 +642,7 @@ class MioSituationFrame:
         if defensive_state not in DEFENSIVE_STATES:
             raise ValueError("invalid_defensive_state")
         k_status = _dependency_status(knowledge_status, has_refs=bool(_sequence_len(knowledge_refs)))
-        context = MioDeceptionContext.coerce(deception_context) if deception_context is not None else None
+        context, entries_dropped = MioDeceptionContext.coerce_with_drops(deception_context) if deception_context is not None else (None, False)
         if deception_context is not None and context is None and str(deception_status or "").strip().lower() not in _DEGRADED_DEPENDENCY_STATUSES:
             # A supplied but unusable projection is malformed, not absent.
             deception_status = "malformed"
@@ -581,6 +662,8 @@ class MioSituationFrame:
         markers = [f"{name}_{status.upper()}" for name, status in (("KNOWLEDGE", k_status), ("DECEPTION", d_status)) if status in _DEGRADED_DEPENDENCY_STATUSES]
         if context is not None and context.lifecycle_state == "unknown":
             markers.append(DECEPTION_LIFECYCLE_UNKNOWN)
+        if context is not None and entries_dropped:
+            markers.append(DECEPTION_CONTEXT_ENTRY_DROPPED)
         markers += [m for m, bad in ((ACTOR_SUMMARY_MALFORMED, actors_malformed), (ACTION_RECORD_MALFORMED, actions_malformed)) if bad]
         unknown_items = markers + unknown_items
         contradiction_items = list(contradictions) if isinstance(contradictions, (list, tuple)) else []
@@ -605,6 +688,11 @@ class MioSituationFrame:
             changes: dict[str, Any] = {"truncated": True}
             for name, keep in _TRIM_ORDER:
                 items = getattr(frame, name)
+                if name == "contradictions" and frame.deception_context is not None and frame.deception_context.limitations:
+                    # Limitations go last: after facts, before contradictions.
+                    ctx = frame.deception_context
+                    changes["deception_context"] = replace(ctx, limitations=ctx.limitations[:-1])
+                    break
                 if len(items) > keep:
                     changes[name] = items[:-1]
                     break
@@ -613,6 +701,10 @@ class MioSituationFrame:
                     # its observation refs go before facts and markers.
                     ctx = frame.deception_context
                     changes["deception_context"] = replace(ctx, observation_refs=ctx.observation_refs[:-1])
+                    break
+                if name == "actions" and frame.deception_context is not None and frame.deception_context.evidence_refs:
+                    ctx = frame.deception_context
+                    changes["deception_context"] = replace(ctx, evidence_refs=ctx.evidence_refs[:-1])
                     break
             else:
                 longest = max(_TRIM_TEXT_FIELDS, key=lambda n: len(getattr(frame, n)))
