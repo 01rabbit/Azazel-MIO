@@ -8,6 +8,8 @@ Edgeでは現場の検知と通信状態を読み解き、Nexusではシステ�
 
 > **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。製品側の確認済みの状態は [AI inventory](docs/architecture/ai-inventory.md) を参照してください。
 
+ソースからの導入と最小の試験方法は [Common Python core](#common-python-core) を参照してください。
+
 ## M.I.O.が目指すこと
 
 専属のSOC担当者がいない現場でも、運用者が次の問いに答えられることを目指します。
@@ -56,7 +58,7 @@ Azazel-MIOは、製品をまたいで共有するAI補助能力を所有しま�
 | [Azazel-Deception](https://github.com/01rabbit/Azazel-Deception) | 承認されたデコイ環境の隔離・実行・観測 |
 | [Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric) | 製品間で受け渡す共通データ契約 |
 
-共有する通信契約をM.I.O.独自の互換形式として複製せず、Fabricとの責任分担を明確にします。製品間のwire契約はFabricが所有します。一方、現在のM.I.O.内部API（[internal API v1](docs/api-v1.md)、内部frame `mio.situation_frame.v2` を含む）はM.I.O.が所有しており、Fabric契約への対応付けは未完了です。モデルやruntimeの導入・認可・起動は、利用先の製品が管理します。
+共有する通信契約をM.I.O.独自の互換形式として複製せず、Fabricとの責任分担を明確にします。製品間のwire契約はFabricが所有します。一方、現在のM.I.O.内部API（[internal API v1](docs/api-v1.md)。内部frame `mio.situation_frame.v2` は [`src/azazel_mio/contracts.py`](src/azazel_mio/contracts.py) で定義）はM.I.O.が所有しており、Fabric契約への対応付けは未完了です。モデルやruntimeの導入・認可・起動は、利用先の製品が管理します。
 
 ## 助言と実行の境界
 
@@ -128,11 +130,11 @@ python -m pip install .
 
 開発時は編集可能インストールも使えます: `python -m pip install -e .`（`pyproject.toml` のsetuptools構成による。このREADMEの作成では実行していません）。
 
-現在のバージョンは `0.1.0+git.c31c244` で、ソースからのローカルビルド識別子です。公開リリースではありません（[versioning](docs/versioning.md)）。
+現在のバージョンは `pyproject.toml` の `version` が正本です。その末尾のローカルサフィックスはソースの基準ラベルで、このコミットのSHAではありません。公開リリースではありません（[versioning](docs/versioning.md)）。
 
 **試験**
 
-`pyproject.toml` は試験ランナーを宣言していません。テストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。
+`pyproject.toml` は試験ランナーを宣言していません。一部のテストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。`docs/assessment-baseline.md` はPython 3.12での記録で、パッケージは Python 3.11+ を要求しますが、3.11での試験実行は確認していません。
 
 ```sh
 python -m pip install pytest
@@ -145,8 +147,8 @@ PYTHONPATH=src python -m pytest -q
 - 移行元と互換性: [source/license migration](docs/migration.md)
 - バージョン: [versioning](docs/versioning.md)
 
-**任意・実験的な機能（既定の試験には含まれません）**
+**任意・評価用の機能（既定の試験には含まれません）**
 
-- 実モデル確認: ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成フレームで応答を一度確かめるだけで、製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
+- 実モデル確認: ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成の助言フレームに対する応答と、モデル未導入時のフォールバック（no-model fallback）を確認するもので、単一の実リクエストを送るものではありません。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
 - オフラインplaybook ranking: 評価マイルストーンです。モデルの有効化、自動学習、認可、実行は含みません（[offline ranking](docs/offline-playbook-ranking.md)）。
 - Assessment baseline: experimentalです（[assessment baseline](docs/assessment-baseline.md)）。
