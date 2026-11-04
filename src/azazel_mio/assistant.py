@@ -632,9 +632,13 @@ _FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])[0-9]{1,3}(?:[.\-_][0-9]{1,3}){3}(
 # each run (for example "srcfe80::1" -> "fe80::1") are tested by _fabric_ipv6_candidates.
 _FABRIC_IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]+")
 # Shorthand IPv4 with two or three numeric parts ("127.1", "10.1.2"), read as addresses by inet_aton-style parsers.
-# A letter may glue the label ("ip127.1", "src10.1"); a digit or a dash/underscore separator, or a digit-dot
-# prefix ("2026.15.1.2"), ends the number instead.
-_FABRIC_SHORT_IPV4 = re.compile(r"(?<![0-9\-_])(?<![0-9]\.)[0-9]{1,3}(?:\.[0-9]{1,3}){1,2}(?!\.?[0-9A-Za-z\-_])")
+# Prose is ambiguous ("confidence 0.75", "version 0.9.1", "10.5 GB"), so shorthand is interpreted only when an
+# address label sits immediately before it, with optional space, colon, equal sign or dot ("ip 127.1",
+# "src:10.1", "dst=10.1.2", "ip[.]127.1" after defang normalization). A letter may glue the label ("ip127.1",
+# "src10.1"); a letter before the label ("tip 0.75") does not start one. Unlabelled shorthand is preserved as prose.
+_FABRIC_LABELED_SHORT_IPV4 = re.compile(
+    r"(?i)(?<![A-Za-z])(?:ipv4|ip|src|source|dst|destination|addr|address|host)[\s:=.]*"
+    r"(?P<ip>[0-9]{1,3}(?:\.[0-9]{1,3}){1,2})(?!\.?[0-9A-Za-z\-_])")
 # Common defang forms: a bracketed, parenthesised or braced dot (or "dot") and colon, with optional spaces.
 _FABRIC_DEFANG_DOT = re.compile(r"\s*[\[({]\s*(?:\.|dot)\s*[\])}]\s*", re.IGNORECASE)
 _FABRIC_DEFANG_COLON = re.compile(r"\s*[\[({]\s*:\s*[\])}]\s*")
@@ -711,8 +715,8 @@ def _fabric_literals_clean(text: str) -> bool:
                 return False
         except ValueError:
             return False
-    for match in _FABRIC_SHORT_IPV4.finditer(text):
-        if _fabric_short_ipv4_refused(match.group(0)):
+    for match in _FABRIC_LABELED_SHORT_IPV4.finditer(text):
+        if _fabric_short_ipv4_refused(match.group("ip")):
             return False
     for match in _FABRIC_IPV6_RUN.finditer(text):
         run = match.group(0)
@@ -761,10 +765,24 @@ def _fabric_host_value_ok(text: str) -> bool:
         return len(labels) > 1 and all(labels) and re.fullmatch(r"[0-9]+", labels[-1]) is None
 
 
+def _fabric_ip_value_ok(text: str) -> bool:
+    """A typed ip subject is exactly one globally routable IP literal; shorthand, dotted names and IPv4-mapped
+    IPv6 forms are refused."""
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return False
+    return address.is_global
+
+
 def _fabric_subject(value: Any) -> dict[str, str]:
     value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
     entity_type = _fabric_copied_ident(value["entity_type"], 64)
     text = _fabric_copied_text(value["value"], 256)
+    if entity_type.lower() == "ip" and not _fabric_ip_value_ok(text):
+        raise _FabricReject
     if entity_type.lower() in _FABRIC_DNS_NAME_TYPES and not _fabric_host_value_ok(text):
         raise _FabricReject
     return {"entity_type": entity_type, "value": text}

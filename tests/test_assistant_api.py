@@ -2121,12 +2121,56 @@ def test_fabric_version_and_date_prose_is_not_mistaken_for_mac_or_shorthand():
     assert adv['facts'][0]['value'] == 'Agent 15.1.2 reported on 2026-10-30 at 23:00:00'
 
 
-# Numeric shorthand such as 127.1 or 10.1 is refused, not treated as a public name (review finding 3).
-@pytest.mark.parametrize('shorthand', ['127.1', '10.1', '10.1.2'])
-def test_fabric_numeric_shorthand_in_prose_is_refused(shorthand):
+# Labelled numeric shorthand such as "ip 127.1" is refused, not treated as a public name (review finding 3).
+# Unlabelled shorthand in prose is ambiguous and is preserved (see docs/api-v1.md).
+LABELED_SHORTHAND_PROSE = [
+    'ip 127.1', 'IP: 10.1', 'ipv4=10.1.2', 'src 10.1', 'source:127.1', 'dst 10.1', 'destination=192.168.1',
+    'addr 127.1', 'address: 10.1', 'host 10.1.2', 'ip[.]127.1', 'src[.]10.1',
+]
+
+
+@pytest.mark.parametrize('shorthand', LABELED_SHORTHAND_PROSE)
+def test_fabric_labelled_numeric_shorthand_in_prose_is_refused(shorthand):
     for payload in _prose_cases(shorthand):
         out = _assert_refused(payload)
         assert shorthand not in json.dumps(out)
+
+
+# Ordinary decimal, version and unit text is not mistaken for shorthand IPv4 (review finding: false positive).
+ORDINARY_NUMBER_PROSE = ['confidence 0.75', 'version 0.9.1', 'throughput 10.5 GB', 'tip 0.75', 'score 10.5']
+
+
+@pytest.mark.parametrize('text', ORDINARY_NUMBER_PROSE)
+def test_fabric_ordinary_number_and_version_prose_remains_usable(text):
+    payload = fabric_response()
+    payload['facts'][0]['value'] = f'Observed {text} in report'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == f'Observed {text} in report'
+
+
+def test_fabric_unlabelled_dotted_version_remains_usable():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Agent build 10.1.2 and 127.1 reported'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Agent build 10.1.2 and 127.1 reported'
+
+
+# Typed ip subjects must be exactly one globally routable IP literal.
+@pytest.mark.parametrize('value', ['10.1.2.3', '127.1', '10.1', '8[.]8[.]8[.]8', 'ip-1.example.com',
+                                   'host-1.example.com', '::ffff:8.8.8.8', '2606:4700:fd00::1', 'fe80::1'])
+def test_fabric_typed_ip_subject_rejects_non_global_shorthand_or_hostname(value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'ip', 'value': value}
+    out = _assert_refused(payload)
+    assert value not in json.dumps(out)
+
+
+@pytest.mark.parametrize('value', ['8.8.8.8', '2606:4700:4700::1111'])
+def test_fabric_typed_ip_subject_accepts_global_literal(value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'ip', 'value': value}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': 'ip', 'value': value}
 
 
 @pytest.mark.parametrize('shorthand', ['127.1', '10.1', '8.8'])
