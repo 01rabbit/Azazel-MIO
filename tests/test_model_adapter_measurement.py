@@ -40,6 +40,18 @@ class FakeTransport:
         return self.result
 
 
+class RaisingSecondClock:
+    def __init__(self, error):
+        self.calls = 0
+        self.error = error
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls == 2:
+            raise self.error
+        return 0
+
+
 def test_success_passes_arguments_unchanged_and_returns_result():
     inner = FakeTransport(result={"answer": 1})
     wrapper = MeasuredTransport(inner, allowed_tasks=["reason"], clock=FakeClock())
@@ -83,6 +95,43 @@ def test_exception_identity_preserved_and_recorded_without_text():
         assert secret not in str(record.__dict__)
 
 
+def test_clock_failure_does_not_mask_model_exception_or_success():
+    original = RuntimeError("model failure")
+    failing_clock = RaisingSecondClock(RuntimeError("clock failure"))
+    wrapper = MeasuredTransport(
+        FakeTransport(error=original), allowed_tasks=["reason"], clock=failing_clock
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        wrapper("reason", "p")
+    assert excinfo.value is original
+    assert wrapper.records() == ()
+
+    success_clock = RaisingSecondClock(RuntimeError("clock failure"))
+    success = FakeTransport(result={"ok": True})
+    wrapper = MeasuredTransport(success, clock=success_clock)
+    assert wrapper("reason", "p") is success.result
+    assert wrapper.records() == ()
+
+
+def test_elapsed_time_is_never_negative():
+    values = iter((10, 2))
+    wrapper = MeasuredTransport(FakeTransport(), clock=lambda: next(values))
+    wrapper("reason", "p")
+    assert wrapper.records()[0].elapsed_ns == 0
+
+
+def test_keyboard_interrupt_is_recorded_then_propagated():
+    original = KeyboardInterrupt("stop")
+    wrapper = MeasuredTransport(
+        FakeTransport(error=original), allowed_tasks=["reason"], clock=FakeClock()
+    )
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        wrapper("reason", "p")
+    assert excinfo.value is original
+    assert wrapper.records()[0].outcome == OUTCOME_FAILURE
+
+
 def test_bounded_history_keeps_most_recent_records():
     inner = FakeTransport()
     wrapper = MeasuredTransport(
@@ -104,6 +153,10 @@ def test_max_records_must_be_positive():
         MeasuredTransport(FakeTransport(), max_records=True)
     with pytest.raises(ValueError):
         MeasuredTransport(FakeTransport(), max_records=4097)
+    with pytest.raises(ValueError):
+        MeasuredTransport(FakeTransport(), allowed_tasks=["not-a-safe-label"])
+    with pytest.raises(ValueError):
+        MeasuredTransport(FakeTransport(), allowed_tasks=[f"task_{i}" for i in range(33)])
 
 
 def test_public_package_exports_measured_transport_and_bounds_task_labels():
@@ -123,6 +176,21 @@ def test_task_allowlist_sanitizes_unknown_identifiers():
 
     tasks = [r.task for r in wrapper.records()]
     assert tasks == ["reason", UNLISTED_TASK, UNLISTED_TASK]
+
+
+def test_non_string_and_string_subclass_task_labels_are_sanitized():
+    class TaskName(str):
+        pass
+
+    inner = FakeTransport()
+    wrapper = MeasuredTransport(inner, allowed_tasks=["reason"], clock=FakeClock())
+    subclass_task = TaskName("reason")
+    opaque_task = object()
+    wrapper(subclass_task, "p")
+    wrapper(opaque_task, "p")
+
+    assert inner.calls == [(subclass_task, "p"), (opaque_task, "p")]
+    assert [record.task for record in wrapper.records()] == [UNLISTED_TASK, UNLISTED_TASK]
 
 
 def test_last_model_is_passed_through_live():

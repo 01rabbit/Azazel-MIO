@@ -1,6 +1,7 @@
 """Pure model boundary. Products own authorization and transport."""
 from collections import deque
 from dataclasses import dataclass
+import re
 from threading import Lock
 from time import monotonic_ns
 from typing import Any, Callable, Deque, Iterable, Mapping, Protocol, Tuple
@@ -22,6 +23,7 @@ UNLISTED_TASK = "other"
 MAX_TASK_LABEL_CHARS = 64
 MAX_ALLOWED_TASKS = 32
 MAX_RECORDS = 4096
+_TASK_LABEL = re.compile(r"[a-z0-9_]{1,64}\Z")
 
 
 @dataclass(frozen=True)
@@ -52,10 +54,10 @@ class MeasuredTransport:
             raise ValueError(f"max_records must be between 1 and {MAX_RECORDS}")
         task_labels = tuple(allowed_tasks)
         if len(task_labels) > MAX_ALLOWED_TASKS or any(
-            type(label) is not str or not label or len(label) > MAX_TASK_LABEL_CHARS
+            type(label) is not str or _TASK_LABEL.fullmatch(label) is None
             for label in task_labels
         ):
-            raise ValueError("allowed_tasks must contain at most 32 non-empty labels of at most 64 characters")
+            raise ValueError("allowed_tasks must contain at most 32 lowercase ASCII identifier labels of at most 64 characters")
         self._transport = transport
         self._allowed_tasks = frozenset(task_labels)
         self._clock = clock
@@ -74,21 +76,31 @@ class MeasuredTransport:
             and task in self._allowed_tasks
             else UNLISTED_TASK
         )
-        started = self._clock()
+        try:
+            started = self._clock()
+        except Exception:
+            # Metrics are best-effort and must not change model behavior.
+            started = None
         try:
             result = self._transport(task, prompt)
         except BaseException:
-            self._append(label, started, OUTCOME_FAILURE)
+            self._append_if_measurable(label, started, OUTCOME_FAILURE)
             raise
-        self._append(label, started, OUTCOME_SUCCESS)
+        self._append_if_measurable(label, started, OUTCOME_SUCCESS)
         return result
 
     def records(self) -> Tuple[MeasuredCall, ...]:
         with self._lock:
             return tuple(self._records)
 
-    def _append(self, label: str, started: int, outcome: str) -> None:
-        elapsed = self._clock() - started
-        record = MeasuredCall(task=label, elapsed_ns=elapsed, outcome=outcome)
-        with self._lock:
-            self._records.append(record)
+    def _append_if_measurable(self, label: str, started: int | None, outcome: str) -> None:
+        if started is None:
+            return
+        try:
+            elapsed = max(0, self._clock() - started)
+            record = MeasuredCall(task=label, elapsed_ns=elapsed, outcome=outcome)
+            with self._lock:
+                self._records.append(record)
+        except Exception:
+            # A diagnostic clock/history failure must not mask the transport result.
+            return
