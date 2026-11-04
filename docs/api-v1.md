@@ -263,18 +263,25 @@ reserved addresses, IPv4-mapped IPv6 and dotted names are refused. Host subjects
 is not all-numeric and not hex-like address notation; a bare single label is refused. A final label matching
 `0[xX][0-9A-Fa-f]*` (for example `127.0x1`, `0x7f.0x1`, `10.0x1`) is refused because inet_aton-style parsers
 read it as address shorthand, while ordinary names such as `host-1.example.com` remain usable.
-Entity types are normalized (camelCase split, separators read as `_`) and matched by token, so `srcIP`,
-`srcip`, `ClientIP`, `remoteAddr`, `source_address`, `peer_address` and `address_v4` are address types, while `iphone`,
-`ipsec_policy`, `mac_addr` and `email_addr` are not. URL types (`url`, `uri`, `link`, `href`, `*_url`, `*_uri`)
+Entity types are normalized (camelCase split, separators read as `_`) and matched by token or known compact alias,
+so `srcIP`, `srcip`, `ClientIP`, `remoteAddr`, `source_address`, `peer_address`, `address_v4`, `attackerip` and
+`ip4` are address types. `iphone`, `ipsec_policy`, `mac_addr`, `email_addr`, `sender_address` and `wallet_address`
+are not. URL types (`url`, `uri`, `link`, `href`, `*_url`, `*_uri`)
 use the same strict authority checks with or without a scheme; a bracketed IPv6 host such as
 `https://[2606:4700:4700::1111]` is kept intact. The embedded-URL scan also covers nested and comma-joined
 URLs (`https://example.com/f?u=http://2130706433/`), and DNS host labels must be ASCII letters, digits and
 hyphens (at most 63 characters per label, 253 in total).
-IPv6 IPv4-compatible (`::/96`), NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 (`2002::/16`) and Teredo
-(`2001::/32`) addresses are always refused, even when the embedded IPv4 address is public, so the result does not
-depend on the Python version. Zone-scoped IPv6 literals with an interface suffix such as `%eth0` are also refused.
-Other entity types get no address-type validation, but copied strings
-are still screened for URL hosts and address literals.
+IPv6 IPv4-compatible (`::/96`), IPv4-translated/SIIT (`::ffff:0:0:0/96`), NAT64
+(`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 (`2002::/16`) and Teredo (`2001::/32`) addresses are always refused,
+even when the embedded IPv4 address is public. These prefix decisions are independent of the Python version;
+other address classes still use that version's `ipaddress.is_global` table. Zone-scoped IPv6 literals with an
+interface suffix such as `%eth0` are also refused.
+Other entity types get no address-type validation, but copied strings are still screened for URL hosts and address
+literals. A `scheme://` URL embedded in any copied string is checked, including nested or comma-joined URLs;
+scheme-less URLs in other entity types are not parsed. Typed URL values do get strict authority checks without a
+scheme. Address-tokened subjects must be a single public IP; non-IP values such as CIDR or reputation text are
+refused as unsupported. DNS hostnames must use ASCII letters, digits and hyphens; underscores, trailing-dot names
+and IDNs are refused.
 
 Residual limits: an arbitrary privately owned FQDN under a public suffix (for example
 an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0

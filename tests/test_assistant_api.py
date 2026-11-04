@@ -2375,6 +2375,7 @@ def test_fabric_non_address_subject_type_keeps_ordinary_prose():
 
 # The fixed prefix policy refuses transition/tunneling forms regardless of their embedded IPv4.
 @pytest.mark.parametrize('literal', ['64:ff9b::a00:1', '64:ff9b:1::1', '2002:c0a8:101::1', '::a00:1',
+                                    '::ffff:0:a00:1',
                                     '2001:0:4136:e378:8000:63bf:f5ff:fffe'])
 def test_fabric_global_ip_refuses_private_embedded_ipv4_transition_forms(literal):
     import ipaddress
@@ -2382,7 +2383,8 @@ def test_fabric_global_ip_refuses_private_embedded_ipv4_transition_forms(literal
     assert _fabric_global_ip(ipaddress.IPv6Address(literal)) is False
 
 
-@pytest.mark.parametrize('literal', ['::808:808', '64:ff9b::808:808', '64:ff9b:1::808:808', '2002:808:808::1',
+@pytest.mark.parametrize('literal', ['::808:808', '::ffff:0:808:808', '64:ff9b::808:808',
+                                    '64:ff9b:1::808:808', '2002:808:808::1',
                                     '2001:0:808:808:0:0:f7f7:f7f7'])
 def test_fabric_global_ip_refuses_transition_prefixes_with_public_embedded_ipv4(literal):
     import ipaddress
@@ -2401,14 +2403,16 @@ def test_fabric_nested_comma_joined_or_malformed_host_urls_are_refused(value):
 
 @pytest.mark.parametrize('entity_type', ['srcIP', 'ClientIP', 'remoteAddr', 'source_address', 'client_address',
                                          'peer_address', 'address_v4', 'IPAddress', 'srcip', 'clientip', 'sourceip',
-                                         'dstip', 'remoteaddr', 'ipv4address', 'ipv6addr'])
+                                         'dstip', 'remoteaddr', 'ipv4address', 'ipv6addr', 'attackerip', 'victimip',
+                                         'targetip', 'sourceipaddress', 'ip4', 'src_ip4'])
 def test_fabric_normalized_address_type_aliases_require_global_ip(entity_type):
     payload = fabric_response()
     payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': '2130706433'}
     _assert_refused(payload)
 
 
-@pytest.mark.parametrize('entity_type', ['iphone', 'ipsec_policy', 'mac_addr', 'email_addr'])
+@pytest.mark.parametrize('entity_type', ['iphone', 'ipsec_policy', 'mac_addr', 'email_addr', 'sender_address',
+                                         'wallet_address', 'contract_address', 'from_address', 'home_address'])
 def test_fabric_non_ip_lookalike_types_are_not_address_types(entity_type):
     payload = fabric_response()
     payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': 'Build 10.1.2 host'}

@@ -666,6 +666,7 @@ _FABRIC_LOCAL_HOST = re.compile(
 # Python versions, so the policy is fixed: all of these are refused, even with a globally routable embedded IPv4.
 _IPV6_TRANSITION_PREFIXES = (
     ipaddress.IPv6Network("::/96"),           # IPv4-compatible
+    ipaddress.IPv6Network("::ffff:0:0:0/96"), # IPv4-translated (SIIT)
     ipaddress.IPv6Network("64:ff9b::/96"),    # NAT64 well-known
     ipaddress.IPv6Network("64:ff9b:1::/48"),  # NAT64 local-use
     ipaddress.IPv6Network("2002::/16"),       # 6to4
@@ -894,17 +895,20 @@ def _fabric_type_key(entity_type: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-_FABRIC_ADDRESS_TOKENS = frozenset({"ip", "ipv4", "ipv6", "ipaddr", "ipaddress"})
+_FABRIC_ADDRESS_TOKENS = frozenset({"ip", "ip4", "ip6", "ipv4", "ipv6", "ipaddr", "ipaddress"})
 _FABRIC_COMPACT_ADDRESS_TYPES = frozenset({
     "srcip", "dstip", "destip", "sourceip", "destinationip", "clientip", "serverip", "remoteip", "localip",
-    "peerip", "hostip", "publicip", "privateip", "ipv4address", "ipv6address", "ipv4addr", "ipv6addr",
+    "peerip", "hostip", "publicip", "privateip", "attackerip", "victimip", "targetip", "ip4", "ip6",
+    "sourceipaddress", "ipv4address", "ipv6address", "ipv4addr", "ipv6addr",
     "srcaddr", "dstaddr", "destaddr", "sourceaddr", "destinationaddr", "clientaddr", "serveraddr", "remoteaddr",
     "localaddr", "peeraddr",
 })
 _FABRIC_ADDRESS_WORDS = frozenset({"addr", "address"})
 # Words that make "addr"/"address" something other than an IP address (hardware, mail, postal, web).
 _FABRIC_NON_IP_ADDRESS = frozenset({"mac", "email", "mail", "street", "postal", "hw", "hardware", "physical",
-                                    "bluetooth", "web", "url", "uri"})
+                                    "bluetooth", "web", "url", "uri", "sender", "from", "to", "recipient",
+                                    "reply", "wallet", "contract", "billing", "home", "mailing", "payment",
+                                    "memory"})
 
 
 def _fabric_is_address_type(key: str) -> bool:
