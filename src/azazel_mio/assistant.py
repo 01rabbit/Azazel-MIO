@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import html
+import ipaddress
 import json
 import re
 from typing import Any, Mapping, Sequence
@@ -15,6 +16,8 @@ from .contracts import ContextDependencyOutcome, MioSituationFrame, ReasoningSta
 from .playbook import DEFAULT_PLAYBOOKS, PromptCompiler, select_playbook
 from .contracts import model_id_ok
 from .handoff import build_no_model_handoff
+from .id_grammar import second_layer_ok
+from .redaction import redact_text
 from .reasoning import BoundedReasoningLoop
 from .lifecycle import ReasoningCoordinator
 from .tactical_grounding import (
@@ -616,17 +619,63 @@ def _fabric_instant_text(value: datetime) -> str:
     return text + (f".{value.microsecond:06d}" if value.microsecond else "") + "Z"
 
 
-def _fabric_subject(value: Any) -> dict[str, str]:
-    value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
-    return {"entity_type": _fabric_str(value["entity_type"], 64, ident=True),
-            "value": _fabric_str(value["value"], 256)}
-
-
 def _fabric_distinct_strs(items: list[Any], limit: int, **kind: bool) -> list[str]:
     out = [_fabric_str(item, limit, **kind) for item in items]
     if len(set(out)) != len(out):
         raise _FabricReject
     return out
+
+
+_FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
+_FABRIC_IPV6_LITERAL = re.compile(
+    r"(?<![0-9A-Za-z:])(?:[0-9A-Fa-f]{0,4}:){2,}(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}|[0-9A-Fa-f]{0,4})")
+# Clearly local-only host names. A bare word such as "internal" is ordinary prose and is not matched.
+_FABRIC_LOCAL_HOST = re.compile(
+    r"(?i)(?<![A-Za-z0-9-])(?:localhost|(?:[A-Za-z0-9-]+\.)+(?:localhost|localdomain|local|internal|lan|home\.arpa))"
+    r"(?![A-Za-z0-9-]|\.[A-Za-z0-9-])")
+
+
+def _fabric_text_publishable(text: str) -> bool:
+    """No non-global address literal (a dotted quad that does not parse counts as one) and no local-only host name."""
+    for match in _FABRIC_IPV4_LITERAL.finditer(text):
+        try:
+            if not ipaddress.IPv4Address(match.group(0)).is_global:
+                return False
+        except ValueError:
+            return False
+    for match in _FABRIC_IPV6_LITERAL.finditer(text):
+        try:
+            address = ipaddress.IPv6Address(match.group(0))
+        except ValueError:
+            continue
+        # IPv4-mapped literals are refused even when the dotted tail is global: they are IPv6 literals.
+        if address.ipv4_mapped is not None or not address.is_global:
+            return False
+    return _FABRIC_LOCAL_HOST.search(text) is None
+
+
+def _fabric_copied_ident(value: Any, limit: int) -> str:
+    """An identifier copied into the advisory must pass the MIO second layer (address and secret shapes).
+    Underscore is not an address character, so it is read as "-" for the shape checks only."""
+    value = _fabric_str(value, limit, ident=True)
+    if not second_layer_ok(value.replace("_", "-")) or not _fabric_text_publishable(value):
+        raise _FabricReject
+    return value
+
+
+def _fabric_copied_text(value: Any, limit: int) -> str:
+    """Source prose copied for display is treated as untrusted data: credential/PII text is redacted with the
+    MIO redaction rules, and address literals or local-only host names are refused, not shown."""
+    text = redact_text(_fabric_str(value, limit))
+    if not _fabric_text_publishable(text):
+        raise _FabricReject
+    return text
+
+
+def _fabric_subject(value: Any) -> dict[str, str]:
+    value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
+    return {"entity_type": _fabric_copied_ident(value["entity_type"], 64),
+            "value": _fabric_copied_text(value["value"], 256)}
 
 
 def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] | None, bool]:
@@ -635,6 +684,8 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
     Returns (projection, expired). Any deviation rejects the whole payload; no
     partial projection, truncation or coercion. Opaque refs, provider and request
     identifiers, and provenance/method references are validated but not copied.
+    Copied identifiers pass the MIO second layer; copied prose is redacted and
+    refused if it carries a non-global address literal or a local-only host name.
     """
     if type(value) is not FabricKnowledgeContextResponseAdvisory:
         return None, False
@@ -664,35 +715,36 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
             raw = _fabric_keys(raw, _FABRIC_FACT_KEYS)
             if raw["claim_class"] != "source_reported_fact":
                 raise _FabricReject
-            fact_id = _fabric_str(raw["fact_id"], 128, ident=True)
+            fact_id = _fabric_copied_ident(raw["fact_id"], 128)
             provenance = _fabric_distinct_strs(_fabric_list(raw["provenance"], low=1, high=8), 256, ref=True)
             fact_ids.append(fact_id)
             facts.append({"claim_class": "source_reported_fact", "fact_id": fact_id,
                           "subject": _fabric_subject(raw["subject"]),
-                          "predicate": _fabric_str(raw["predicate"], 64, ident=True),
-                          "value": _fabric_str(raw["value"], 512),
+                          "predicate": _fabric_copied_ident(raw["predicate"], 64),
+                          "value": _fabric_copied_text(raw["value"], 512),
                           "provenance_count": len(provenance)})
         inferences, inference_ids = [], []
         for raw in _fabric_list(data["inferences"], low=0, high=32):
             raw = _fabric_keys(raw, _FABRIC_INFERENCE_KEYS)
             if raw["claim_class"] != "inference":
                 raise _FabricReject
-            inference_id = _fabric_str(raw["inference_id"], 128, ident=True)
+            inference_id = _fabric_copied_ident(raw["inference_id"], 128)
             _fabric_distinct_strs(_fabric_list(raw["method_refs"], low=1, high=8), 256, ref=True)
-            basis = _fabric_distinct_strs(
-                _fabric_list(raw["basis_fact_ids"], low=1, high=16), 128, ident=True)
+            basis = [_fabric_copied_ident(item, 128) for item in _fabric_list(raw["basis_fact_ids"], low=1, high=16)]
+            if len(set(basis)) != len(basis):
+                raise _FabricReject
             inference_ids.append(inference_id)
             inferences.append({"claim_class": "inference", "inference_id": inference_id,
                                "subject": _fabric_subject(raw["subject"]),
-                               "statement": _fabric_str(raw["statement"], 512),
+                               "statement": _fabric_copied_text(raw["statement"], 512),
                                "basis_fact_ids": basis})
         known = set(fact_ids)
         if (len(known) != len(fact_ids) or len(set(inference_ids)) != len(inference_ids)
                 or known & set(inference_ids)
                 or any(ref not in known for item in inferences for ref in item["basis_fact_ids"])):
             raise _FabricReject
-        unknowns = [_fabric_str(x, 512) for x in _fabric_list(data["unknowns"], low=0, high=16)]
-        limitations = [_fabric_str(x, 512) for x in _fabric_list(data["limitations"], low=0, high=16)]
+        unknowns = [_fabric_copied_text(x, 512) for x in _fabric_list(data["unknowns"], low=0, high=16)]
+        limitations = [_fabric_copied_text(x, 512) for x in _fabric_list(data["limitations"], low=0, high=16)]
         if not any((facts, inferences, unknowns, limitations)):
             raise _FabricReject
     except (_FabricReject, TypeError, ValueError, UnicodeError, RecursionError):

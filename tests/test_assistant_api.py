@@ -1867,3 +1867,94 @@ def test_fabric_input_is_not_mutated_and_output_is_independent():
     assert payload == before
     out['fabric_knowledge_context_advisory']['facts'][0]['value'] = 'changed'
     assert payload['facts'][0]['value'] == 'Reported by a feed'
+
+
+def test_fabric_safe_synthetic_values_are_copied_unchanged():
+    adv = run_fabric(fabric_response())['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Reported by a feed'
+    assert adv['facts'][0]['subject'] == {'entity_type': 'host', 'value': 'host-1'}
+    assert adv['facts'][0]['fact_id'] == 'f1' and adv['facts'][0]['predicate'] == 'seen_in_feed'
+    assert adv['inferences'][0]['statement'] == 'May be scanning'
+    assert adv['unknowns'] == ['Actor intent'] and adv['limitations'] == ['Single feed']
+
+
+def test_fabric_credential_text_in_prose_cannot_escape_output():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'password: hunter2plain'
+    payload['inferences'][0]['statement'] = 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345'
+    payload['unknowns'] = ['api_key=SYNTHETICKEY987654']
+    payload['limitations'] = ['jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl']
+    out = run_fabric(payload)
+    adv = out['fabric_knowledge_context_advisory']
+    serialized = json.dumps(out)
+    for secret in ('hunter2plain', 'abcdefghijklmnopqrstuvwxyz012345', 'SYNTHETICKEY987654', 'eyJhbGciOiJIUzI1NiJ9'):
+        assert secret not in serialized
+    assert '[redacted:' in json.dumps(adv)
+
+
+@pytest.mark.parametrize('mutate', [
+    _set(['facts', 0, 'fact_id'], 'password-f1'),                 # secret word
+    _set(['facts', 0, 'fact_id'], 'f10.0.0.5'),                   # dotted quad
+    _set(['facts', 0, 'fact_id'], 'f1-10-0-0-5'),                 # dashed quad
+    _set(['facts', 0, 'fact_id'], 'aa:bb:cc:dd:ee:ff'),           # MAC-like run
+    _set(['facts', 0, 'fact_id'], '2001:db8::1'),                 # IPv6 literal
+    _set(['facts', 0, 'fact_id'], 'f1/local'),                    # outside the opaque-ID charset
+    _set(['facts', 0, 'predicate'], 'api_key'),                   # secret word
+    _set(['facts', 0, 'predicate'], 'seen.host.local'),           # local-only host
+    _set(['facts', 0, 'subject', 'entity_type'], 'bearer'),       # secret word
+    _set(['inferences', 0, 'inference_id'], 'i1-192-168-1-1'),    # dashed quad
+    lambda d: (d['facts'][0].update(fact_id='f1-token'), d['inferences'][0].update(basis_fact_ids=['f1-token'])),
+    lambda d: d['facts'][0]['subject'].update(entity_type='localhost'),
+])
+def test_fabric_unsafe_copied_identifiers_reject_whole_response(mutate):
+    payload = fabric_response()
+    mutate(payload)
+    out = run_fabric(payload)
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED'] and out['knowledge'] == []
+
+
+PRIVATE_OR_RESERVED_LITERALS = [
+    '10.1.2.3', '192.168.1.1', '172.16.0.9', '127.0.0.1', '169.254.10.20', '100.64.0.1',
+    '192.0.2.10', '0.0.0.0', '010.0.0.1', '::1', 'fe80::1', 'fd00::1', '[fd00::1]:443', '2001:db8::1',
+    'printer.local', 'localhost:8080', 'nas.lan', 'gw.home.arpa',
+]
+
+
+@pytest.mark.parametrize('literal', PRIVATE_OR_RESERVED_LITERALS)
+def test_fabric_private_or_reserved_address_material_is_not_emitted(literal):
+    unknown_case = fabric_response()
+    unknown_case['unknowns'] = ['Seen at ' + literal]
+    fact_case = fabric_response()
+    fact_case['facts'][0]['value'] = 'Traffic from ' + literal
+    for payload in (unknown_case, fact_case):
+        out = run_fabric(payload)
+        assert 'fabric_knowledge_context_advisory' not in out
+        assert out['dependency_outcome']['knowledge'] == 'rejected'
+        assert literal not in json.dumps(out)
+
+
+IPV4_MAPPED_LITERALS = ['::ffff:8.8.8.8', '::ffff:10.1.2.3', '::ffff:127.0.0.1', '[::ffff:8.8.8.8]:443']
+
+
+@pytest.mark.parametrize('literal', IPV4_MAPPED_LITERALS)
+def test_fabric_ipv4_mapped_ipv6_literal_is_not_emitted(literal):
+    unknown_case = fabric_response()
+    unknown_case['unknowns'] = ['Seen at ' + literal]
+    fact_case = fabric_response()
+    fact_case['facts'][0]['value'] = 'Traffic from ' + literal
+    for payload in (unknown_case, fact_case):
+        out = run_fabric(payload)
+        assert 'fabric_knowledge_context_advisory' not in out
+        assert out['dependency_outcome']['knowledge'] == 'rejected'
+        assert literal not in json.dumps(out)
+
+
+def test_fabric_public_ioc_literals_remain_usable():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Scanner source 8.8.8.8 and 2606:4700:4700::1111'
+    payload['inferences'][0]['statement'] = 'Related to 1.1.1.1'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Scanner source 8.8.8.8 and 2606:4700:4700::1111'
+    assert adv['inferences'][0]['statement'] == 'Related to 1.1.1.1'
