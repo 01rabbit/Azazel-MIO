@@ -2126,6 +2126,7 @@ def test_fabric_version_and_date_prose_is_not_mistaken_for_mac_or_shorthand():
 LABELED_SHORTHAND_PROSE = [
     'ip 127.1', 'IP: 10.1', 'ipv4=10.1.2', 'src 10.1', 'dst 10.1', 'addr 127.1', 'ip[.]127.1', 'src[.]10.1',
     'source:127.1', 'destination=192.168.1', 'address:10.1', 'host:10.1.2', 'host: 10.1.2',
+    'ip 0177.1', 'src 010.1', 'ip 0177.0.1',
 ]
 
 

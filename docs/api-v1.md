@@ -238,7 +238,10 @@ equal sign, optionally followed by spaces (`source:127.1`, `destination=192.168.
 `host: 10.1.2`). Bare phrase forms such as `host 10.1.2`, `source 127.1` or
 `The destination. 10.5 GB` are treated as prose and are not refused. A short label may be
 glued to the number (`ip127.1`, `src10.1`) and is still refused when the shorthand expands to a
-non-global address. A letter before the label does not start one (`tip 0.75` is ordinary text).
+non-global address. Under a label, a shorthand part with more than one digit that begins with `0`
+(for example `ip 0177.1`, `src 010.1`, `ip 0177.0.1`) is refused as ambiguous, because inet_aton-style
+parsers may read it as octal; ordinary single-digit `0` parts such as `ip 0.75` are not affected.
+A letter before the label does not start one (`tip 0.75` is ordinary text).
 Ordinary decimal, version and unit text such as `confidence 0.75`, `version 0.9.1`, `10.5 GB`
 and an unlabelled dotted version such as `10.1.2` remains usable. As a fail-closed
 consequence, a public address with a private-looking group after a colon (for example
