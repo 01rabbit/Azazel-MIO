@@ -2404,7 +2404,9 @@ def test_fabric_nested_comma_joined_or_malformed_host_urls_are_refused(value):
 @pytest.mark.parametrize('entity_type', ['srcIP', 'ClientIP', 'remoteAddr', 'source_address', 'client_address',
                                          'peer_address', 'address_v4', 'IPAddress', 'srcip', 'clientip', 'sourceip',
                                          'dstip', 'remoteaddr', 'ipv4address', 'ipv6addr', 'attackerip', 'victimip',
-                                         'targetip', 'sourceipaddress', 'ip4', 'src_ip4'])
+                                         'targetip', 'sourceipaddress', 'ip4', 'src_ip4', 'remoteaddress',
+                                         'clientaddress', 'sourceaddress', 'srcaddress', 'dstaddress', 'attackeraddr',
+                                         'c2ip'])
 def test_fabric_normalized_address_type_aliases_require_global_ip(entity_type):
     payload = fabric_response()
     payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': '2130706433'}

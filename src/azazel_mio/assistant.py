@@ -901,7 +901,8 @@ _FABRIC_COMPACT_ADDRESS_TYPES = frozenset({
     "peerip", "hostip", "publicip", "privateip", "attackerip", "victimip", "targetip", "ip4", "ip6",
     "sourceipaddress", "ipv4address", "ipv6address", "ipv4addr", "ipv6addr",
     "srcaddr", "dstaddr", "destaddr", "sourceaddr", "destinationaddr", "clientaddr", "serveraddr", "remoteaddr",
-    "localaddr", "peeraddr",
+    "localaddr", "peeraddr", "remoteaddress", "clientaddress", "sourceaddress", "srcaddress", "dstaddress",
+    "attackeraddr", "c2ip",
 })
 _FABRIC_ADDRESS_WORDS = frozenset({"addr", "address"})
 # Words that make "addr"/"address" something other than an IP address (hardware, mail, postal, web).

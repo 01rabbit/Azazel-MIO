@@ -264,9 +264,10 @@ is not all-numeric and not hex-like address notation; a bare single label is ref
 `0[xX][0-9A-Fa-f]*` (for example `127.0x1`, `0x7f.0x1`, `10.0x1`) is refused because inet_aton-style parsers
 read it as address shorthand, while ordinary names such as `host-1.example.com` remain usable.
 Entity types are normalized (camelCase split, separators read as `_`) and matched by token or known compact alias,
-so `srcIP`, `srcip`, `ClientIP`, `remoteAddr`, `source_address`, `peer_address`, `address_v4`, `attackerip` and
-`ip4` are address types. `iphone`, `ipsec_policy`, `mac_addr`, `email_addr`, `sender_address` and `wallet_address`
-are not. URL types (`url`, `uri`, `link`, `href`, `*_url`, `*_uri`)
+so `srcIP`, `srcip`, `ClientIP`, `remoteAddr`, `source_address`, `peer_address`, `address_v4`, `attackerip`,
+`remoteaddress`, `sourceaddress`, `attackeraddr`, `c2ip` and `ip4` are address types. `iphone`, `ipsec_policy`,
+`mac_addr`, `email_addr`, `sender_address` and `wallet_address` are not. URL types (`url`, `uri`, `link`, `href`,
+`*_url`, `*_uri`)
 use the same strict authority checks with or without a scheme; a bracketed IPv6 host such as
 `https://[2606:4700:4700::1111]` is kept intact. The embedded-URL scan also covers nested and comma-joined
 URLs (`https://example.com/f?u=http://2130706433/`), and DNS host labels must be ASCII letters, digits and
@@ -281,7 +282,8 @@ literals. A `scheme://` URL embedded in any copied string is checked, including 
 scheme-less URLs in other entity types are not parsed. Typed URL values do get strict authority checks without a
 scheme. Address-tokened subjects must be a single public IP; non-IP values such as CIDR or reputation text are
 refused as unsupported. DNS hostnames must use ASCII letters, digits and hyphens; underscores, trailing-dot names
-and IDNs are refused.
+and IDNs are refused. The generic URL scan does not decode percent-encoded URLs or parse malformed URL-like prose
+such as `http:127.1` or `//127.1/`.
 
 Residual limits: an arbitrary privately owned FQDN under a public suffix (for example
 an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0
