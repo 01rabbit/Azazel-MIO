@@ -1639,7 +1639,7 @@ from azazel_mio import FabricKnowledgeContextResponseAdvisory as _FabricAdv
 
 
 def fabric_response():
-    subject = {'entity_type': 'host', 'value': 'host-1'}
+    subject = {'entity_type': 'host', 'value': 'host-1.example.com'}
     return {
         'schema_version': 'knowledge-context-response/v1',
         'request_id': 'req-1', 'correlation_id': 'corr-1',
@@ -1688,7 +1688,7 @@ def test_fabric_response_projects_facts_and_inferences_separately_and_stays_out_
     assert out['knowledge'] == [] and 'knowledge_context_response_advisory' not in out
     assert out['dependency_outcome']['knowledge'] == 'available'
     assert prompts and all('Reported by a feed' not in p and 'May be scanning' not in p
-                           and 'host-1' not in p for p in prompts)
+                           and 'host-1.example.com' not in p for p in prompts)
 
 
 def test_fabric_response_default_shape_unchanged_when_absent():
@@ -1872,7 +1872,7 @@ def test_fabric_input_is_not_mutated_and_output_is_independent():
 def test_fabric_safe_synthetic_values_are_copied_unchanged():
     adv = run_fabric(fabric_response())['fabric_knowledge_context_advisory']
     assert adv['facts'][0]['value'] == 'Reported by a feed'
-    assert adv['facts'][0]['subject'] == {'entity_type': 'host', 'value': 'host-1'}
+    assert adv['facts'][0]['subject'] == {'entity_type': 'host', 'value': 'host-1.example.com'}
     assert adv['facts'][0]['fact_id'] == 'f1' and adv['facts'][0]['predicate'] == 'seen_in_feed'
     assert adv['inferences'][0]['statement'] == 'May be scanning'
     assert adv['unknowns'] == ['Actor intent'] and adv['limitations'] == ['Single feed']
@@ -1958,3 +1958,103 @@ def test_fabric_public_ioc_literals_remain_usable():
     adv = run_fabric(payload)['fabric_knowledge_context_advisory']
     assert adv['facts'][0]['value'] == 'Scanner source 8.8.8.8 and 2606:4700:4700::1111'
     assert adv['inferences'][0]['statement'] == 'Related to 1.1.1.1'
+
+
+# Embedded IPv6 after a separator colon in prose must not evade the address check.
+EMBEDDED_IPV6_PROSE = ['ip:fd00::1', 'src:fe80::1', 'addr:2001:db8::1', 'src:[fd00::1]:443']
+
+
+@pytest.mark.parametrize('literal', EMBEDDED_IPV6_PROSE)
+def test_fabric_embedded_ipv6_after_separator_colon_is_refused(literal):
+    fact_case = fabric_response()
+    fact_case['facts'][0]['value'] = 'Traffic seen ' + literal
+    inference_case = fabric_response()
+    inference_case['inferences'][0]['statement'] = 'Possibly ' + literal
+    unknown_case = fabric_response()
+    unknown_case['unknowns'] = ['Source ' + literal + ' unclear']
+    for payload in (fact_case, inference_case, unknown_case):
+        out = run_fabric(payload)
+        assert 'fabric_knowledge_context_advisory' not in out
+        assert out['dependency_outcome']['knowledge'] == 'rejected'
+        assert literal not in json.dumps(out)
+
+
+def test_fabric_embedded_public_ipv6_after_separator_colon_is_still_accepted_for_prose():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Scanner src:2606:4700:4700::1111 observed'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Scanner src:2606:4700:4700::1111 observed'
+
+
+DASHED_OR_UNDERSCORE_QUADS = [
+    'ip-10-0-0-5', 'ip_10_0_0_5', '10-0-0-5', '10_0_0_5', 'ip-192-168-1-1', 'host_127_0_0_1',
+    'ip-169-254-10-20', 'ip-999-1-1-1', 'ip-010-0-0-1', 'ip-10.0-0_5', 'addr-0-0-0-0',
+]
+
+
+@pytest.mark.parametrize('quad', DASHED_OR_UNDERSCORE_QUADS)
+def test_fabric_dashed_or_underscore_non_global_or_malformed_quad_is_refused(quad):
+    fact_case = fabric_response()
+    fact_case['facts'][0]['value'] = 'Probe from ' + quad
+    inference_case = fabric_response()
+    inference_case['inferences'][0]['statement'] = 'Related to ' + quad
+    unknown_case = fabric_response()
+    unknown_case['unknowns'] = ['Origin ' + quad + ' unknown']
+    for payload in (fact_case, inference_case, unknown_case):
+        out = run_fabric(payload)
+        assert 'fabric_knowledge_context_advisory' not in out
+        assert out['dependency_outcome']['knowledge'] == 'rejected'
+        assert quad not in json.dumps(out)
+
+
+def test_fabric_dashed_public_quad_and_ordinary_dates_remain_usable():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Scanner 8-8-8-8 seen on 2026-10-30 at 23:00:00'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Scanner 8-8-8-8 seen on 2026-10-30 at 23:00:00'
+
+
+@pytest.mark.parametrize('bare', ['srv-fin-01', 'SRV-FIN-01', 'dc01', 'printer'])
+def test_fabric_host_subject_bare_single_label_is_refused(bare):
+    payload = fabric_response()
+    payload['facts'][0]['subject']['value'] = bare
+    out = run_fabric(payload)
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert bare not in json.dumps(out)
+
+
+@pytest.mark.parametrize('local', [
+    'srv.corp', 'gw.home', 'wiki.intranet', 'vault.private', 'lab.test',
+    'demo.example', 'bad.invalid', 'nas.lan', 'gw.home.arpa',
+])
+def test_fabric_host_subject_local_suffix_is_refused(local):
+    payload = fabric_response()
+    payload['facts'][0]['subject']['value'] = local
+    out = run_fabric(payload)
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert local not in json.dumps(out)
+
+
+def test_fabric_host_subject_public_name_and_global_ip_remain_usable():
+    for value in ('host-1.example.com', '8.8.8.8', '2606:4700:4700::1111'):
+        payload = fabric_response()
+        payload['facts'][0]['subject']['value'] = value
+        adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+        assert adv['facts'][0]['subject'] == {'entity_type': 'host', 'value': value}
+
+
+def test_fabric_bare_label_is_allowed_for_non_host_subject_types():
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'user', 'value': 'srv-fin-01'}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': 'user', 'value': 'srv-fin-01'}
+
+
+def test_fabric_ordinary_prose_words_are_not_turned_into_hostnames():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Ran the test. Example output matched the internal review notes'
+    payload['unknowns'] = ['Whether the home page or corp policy applies is unclear']
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Ran the test. Example output matched the internal review notes'
+    assert adv['unknowns'] == ['Whether the home page or corp policy applies is unclear']

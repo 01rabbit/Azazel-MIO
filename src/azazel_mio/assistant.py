@@ -626,31 +626,46 @@ def _fabric_distinct_strs(items: list[Any], limit: int, **kind: bool) -> list[st
     return out
 
 
-_FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
-_FABRIC_IPV6_LITERAL = re.compile(
-    r"(?<![0-9A-Za-z:])(?:[0-9A-Fa-f]{0,4}:){2,}(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}|[0-9A-Fa-f]{0,4})")
+# IPv4 quads with ".", "-" or "_" separators (for example "ip-10-0-0-5" or "10_0_0_5").
+_FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])[0-9]{1,3}(?:[.\-_][0-9]{1,3}){3}(?![0-9])")
+# Leftmost-maximal runs with at least two colons. No lookbehind on ":" so that a separator
+# colon ("ip:fd00::1", "addr:2001:db8::1") does not hide the address; candidates are trimmed below.
+_FABRIC_IPV6_LITERAL = re.compile(r"(?<![A-Za-z0-9])[0-9A-Fa-f]*(?::[0-9A-Fa-f]*){2,}(?:\.[0-9]{1,3}){0,3}")
 # Clearly local-only host names. A bare word such as "internal" is ordinary prose and is not matched.
 _FABRIC_LOCAL_HOST = re.compile(
-    r"(?i)(?<![A-Za-z0-9-])(?:localhost|(?:[A-Za-z0-9-]+\.)+(?:localhost|localdomain|local|internal|lan|home\.arpa))"
+    r"(?i)(?<![A-Za-z0-9-])(?:localhost|(?:[A-Za-z0-9-]+\.)+(?:localhost|localdomain|local|internal|lan|home\.arpa|"
+    r"corp|home|intranet|private|test|example|invalid))"
     r"(?![A-Za-z0-9-]|\.[A-Za-z0-9-])")
 
 
+def _fabric_ipv6_candidates(token: str):
+    """Yield the token and, when a lone separator colon is attached, the address without it."""
+    yield token
+    if token.startswith(":") and not token.startswith("::"):
+        yield token[1:]
+    if token.endswith(":") and not token.endswith("::"):
+        yield token[:-1]
+
+
 def _fabric_text_publishable(text: str) -> bool:
-    """No non-global address literal (a dotted quad that does not parse counts as one) and no local-only host name."""
+    """No non-global or malformed address literal (dotted, dashed or underscore quad; IPv6), and no local-only host name."""
     for match in _FABRIC_IPV4_LITERAL.finditer(text):
         try:
-            if not ipaddress.IPv4Address(match.group(0)).is_global:
+            quad = ".".join(re.split(r"[.\-_]", match.group(0)))
+            if not ipaddress.IPv4Address(quad).is_global:
                 return False
         except ValueError:
             return False
     for match in _FABRIC_IPV6_LITERAL.finditer(text):
-        try:
-            address = ipaddress.IPv6Address(match.group(0))
-        except ValueError:
-            continue
-        # IPv4-mapped literals are refused even when the dotted tail is global: they are IPv6 literals.
-        if address.ipv4_mapped is not None or not address.is_global:
-            return False
+        for candidate in _fabric_ipv6_candidates(match.group(0)):
+            try:
+                address = ipaddress.IPv6Address(candidate)
+            except ValueError:
+                continue
+            # IPv4-mapped literals are refused even when the dotted tail is global: they are IPv6 literals.
+            if address.ipv4_mapped is not None or not address.is_global:
+                return False
+            break
     return _FABRIC_LOCAL_HOST.search(text) is None
 
 
@@ -672,10 +687,22 @@ def _fabric_copied_text(value: Any, limit: int) -> str:
     return text
 
 
+def _fabric_host_value_ok(text: str) -> bool:
+    """A host subject is a globally routable IP literal or a dotted name; a bare single label is refused."""
+    try:
+        return ipaddress.ip_address(text).is_global
+    except ValueError:
+        labels = text.split(".")
+        return len(labels) > 1 and all(labels)
+
+
 def _fabric_subject(value: Any) -> dict[str, str]:
     value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
-    return {"entity_type": _fabric_copied_ident(value["entity_type"], 64),
-            "value": _fabric_copied_text(value["value"], 256)}
+    entity_type = _fabric_copied_ident(value["entity_type"], 64)
+    text = _fabric_copied_text(value["value"], 256)
+    if entity_type.lower() == "host" and not _fabric_host_value_ok(text):
+        raise _FabricReject
+    return {"entity_type": entity_type, "value": text}
 
 
 def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] | None, bool]:
