@@ -220,7 +220,10 @@ frame has no stronger outcome. This means the response passed MIO validation
 and is within its time window; it does not mean its claims were independently
 corroborated. Request and correlation identifiers are checked for shape only:
 this API receives no corresponding request and does not verify that they match
-one. Construction does not authenticate the provider. If a coordinated
+one. When the legacy and Fabric advisory inputs are both supplied, a valid
+input can keep the aggregate dependency outcome `available` while a rejected
+input is separately reported as `KNOWLEDGE_CONTEXT_REJECTED`. Construction does
+not authenticate the provider. If a coordinated
 explanation is superseded, cancelled, or cannot start because of backpressure,
 its Knowledge advisories are omitted with the other non-current material.
 

@@ -593,10 +593,30 @@ def test_coordinated_assistant_fails_closed_for_non_callable_callback(monkeypatc
 
     monkeypatch.setattr(assistant_module, 'BoundedReasoningLoop', Loop)
     out = AssistantCore(model=object(), coordinator=ReasoningCoordinator()).explain(
-        frame(), now=NOW, **{callback_name: object()}).to_dict()
+        frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(context_response()),
+        fabric_knowledge_context_response=_FabricAdv(fabric_response()),
+        **{callback_name: object()}).to_dict()
     assert model_calls == []
     assert out['cycle_disposition'] == 'stale_cycle_cancelled'
     assert out['observations'] == out['next_checks'] == out['knowledge'] == []
+    assert 'knowledge_context_response_advisory' not in out
+    assert 'fabric_knowledge_context_advisory' not in out
+
+
+def test_coordinator_backpressure_omits_both_knowledge_advisories():
+    class Backpressure:
+        def begin(self, frame):
+            raise RuntimeError('reasoning_coordinator_backpressure')
+
+    out = AssistantCore(coordinator=Backpressure()).explain(
+        frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(context_response()),
+        fabric_knowledge_context_response=_FabricAdv(fabric_response())).to_dict()
+    assert out['cycle_disposition'] == 'backpressure'
+    assert out['dependency_outcome']['knowledge'] == 'unavailable'
+    assert 'knowledge_context_response_advisory' not in out
+    assert 'fabric_knowledge_context_advisory' not in out
 
 
 def test_coordinated_assistant_cleans_up_ticket_when_loop_raises(monkeypatch):
@@ -1827,6 +1847,18 @@ def test_legacy_and_fabric_can_coexist_with_separate_keys():
     assert out['knowledge_context_response_advisory']['kind'] == 'knowledge_context_response_advisory'
     assert out['fabric_knowledge_context_advisory']['kind'] == 'fabric_knowledge_context_response_advisory'
     assert 'KNOWLEDGE_CONTEXT_REJECTED' not in out['unknowns']
+
+
+def test_valid_legacy_advisory_remains_available_when_fabric_input_is_rejected():
+    malformed = fabric_response()
+    malformed['authority'] = 'execute'
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(context_response()),
+        fabric_knowledge_context_response=_FabricAdv(malformed)).to_dict()
+    assert out['dependency_outcome']['knowledge'] == 'available'
+    assert out['knowledge_context_response_advisory']['kind'] == 'knowledge_context_response_advisory'
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in out['unknowns']
 
 
 def test_fabric_input_is_not_mutated_and_output_is_independent():
