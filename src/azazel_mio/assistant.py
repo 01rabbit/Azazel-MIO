@@ -771,15 +771,16 @@ def _fabric_copied_text(value: Any, limit: int) -> str:
 def _fabric_host_value_ok(text: str) -> bool:
     """A DNS-name subject is a globally routable IP literal or a dotted name with more than one label.
 
-    A bare single label is refused, and so is a name whose final label is all-numeric ("127.1"): that is
-    shorthand for an address, not a DNS name. Arbitrary privately owned names under a public suffix are
-    not distinguishable here; upstream policy and source controls remain required.
+    A bare single label is refused, and so is a name whose final label is all-numeric ("127.1") or hex-like
+    ("0x1", "0x7f"): that is shorthand for an address, not a DNS name. Arbitrary privately owned names under
+    a public suffix are not distinguishable here; upstream policy and source controls remain required.
     """
     try:
         return ipaddress.ip_address(text).is_global
     except ValueError:
         labels = text.split(".")
-        return len(labels) > 1 and all(labels) and re.fullmatch(r"[0-9]+", labels[-1]) is None
+        return (len(labels) > 1 and all(labels) and re.fullmatch(r"[0-9]+", labels[-1]) is None
+                and re.fullmatch(r"0[xX][0-9A-Fa-f]*", labels[-1]) is None)
 
 
 def _fabric_ip_value_ok(text: str) -> bool:

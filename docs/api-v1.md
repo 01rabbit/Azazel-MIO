@@ -255,7 +255,10 @@ consequence, a public address with a private-looking group after a colon (for ex
 case-insensitive) must be exactly one globally routable IP literal: shorthand, private or
 reserved addresses, IPv4-mapped IPv6 and dotted names are refused. Host subjects (`host`,
 `hostname`, `fqdn`, `domain`) must be a global IP literal or a dotted name whose final label
-is not all-numeric; a bare single label is refused. Other entity types are not affected.
+is not all-numeric and not hex-like address notation; a bare single label is refused. A final label matching
+`0[xX][0-9A-Fa-f]*` (for example `127.0x1`, `0x7f.0x1`, `10.0x1`) is refused because inet_aton-style parsers
+read it as address shorthand, while ordinary names such as `host-1.example.com` remain usable.
+Other entity types are not affected.
 
 Residual limits: an arbitrary privately owned FQDN under a public suffix (for example
 an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0

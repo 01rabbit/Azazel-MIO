@@ -2037,6 +2037,16 @@ def test_fabric_host_subject_local_suffix_is_refused(local):
     assert local not in json.dumps(out)
 
 
+@pytest.mark.parametrize('hex_host', ['127.0x1', '0x7f.0x1', '10.0x1'])
+def test_fabric_host_subject_hex_final_label_is_refused(hex_host):
+    payload = fabric_response()
+    payload['facts'][0]['subject']['value'] = hex_host
+    out = run_fabric(payload)
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert hex_host not in json.dumps(out)
+
+
 def test_fabric_host_subject_public_name_and_global_ip_remain_usable():
     for value in ('host-1.example.com', '8.8.8.8', '2606:4700:4700::1111'):
         payload = fabric_response()
