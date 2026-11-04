@@ -283,8 +283,13 @@ def test_assistant_core_model_path_uses_measured_transport_without_schema_change
 
     assert result["state"] == "complete"
     assert result["generation_method"] == "model"
-    assert calls == ["generate_hypotheses", "identify_evidence_gaps", "recommend"]
-    assert [record.task for record in measured.records()] == calls
+    measured_calls = list(calls)
+    expected_calls = ["generate_hypotheses", "identify_evidence_gaps", "recommend"]
+    assert measured_calls == expected_calls
+    assert [record.task for record in measured.records()] == measured_calls
     assert all(record.outcome == OUTCOME_SUCCESS for record in measured.records())
-    assert result["schema_version"] == "mio.assistance.v1"
-    assert "reasoning_trace" in result and "handoff" in result
+
+    calls.clear()
+    baseline = AssistantCore(model=model).explain(frame, now=now).to_dict()
+    assert calls == expected_calls
+    assert result == baseline
