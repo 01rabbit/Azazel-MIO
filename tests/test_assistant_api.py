@@ -125,7 +125,17 @@ def test_context_response_default_shape_is_unchanged():
     lambda d: d['source_freshness'].update(oldest_feed_days=10 ** 4000),
     lambda d: d['source_freshness'].update(unreviewed='value'),
     lambda d: d['reported_defensive_state'].update(is_canonical='yes'),
+    lambda d: d['reported_defensive_state'].update(is_canonical=None),
+    lambda d: d['reported_defensive_state'].update(is_canonical=0),
     lambda d: d['reported_defensive_state'].update(canonical_state=[]),
+    lambda d: d['reported_defensive_state'].update(canonical_state='ISOLATE'),
+    lambda d: d['reported_defensive_state'].update(canonical_state=None),
+    lambda d: d['reported_defensive_state'].update(is_canonical=False),
+    lambda d: d['reported_defensive_state'].update(
+        reported_state='THROTTLE', is_canonical=False, canonical_state=None),
+    lambda d: d['reported_defensive_state'].update(
+        reported_state='UNKNOWN', is_canonical=True, canonical_state='UNKNOWN'),
+    lambda d: d['reported_defensive_state'].pop('reported_state'),
     lambda d: d.update(reason=[{'detail': 'x' * 3000}]),
 ])
 def test_malformed_context_response_degrades_without_copying(mutate):
@@ -147,11 +157,55 @@ def test_context_response_oversize_and_unapproved_state_degrade():
     assert 'knowledge_context_response_advisory' not in result
     assert 'KNOWLEDGE_CONTEXT_REJECTED' in result['unknowns']
     unsupported = context_response()
-    unsupported['reported_defensive_state']['canonical_state'] = 'UNKNOWN'
-    # An unknown canonical label is omitted while the useful public technique remains.
+    # Knowledge's unknown-report shape is (is_canonical=false, canonical_state=null).
+    unsupported['reported_defensive_state'].update(
+        reported_state='UNKNOWN', is_canonical=False, canonical_state=None)
+    # An unknown canonical report is omitted while the useful public technique remains.
     result = AssistantCore().explain(frame(), now=NOW,
         knowledge_context_response=KnowledgeContextResponseAdvisory(unsupported)).to_dict()
     assert result['knowledge_context_response_advisory']['reported_canonical_state'] is None
+
+
+def test_context_response_legacy_reported_state_without_canonical_metadata_is_unverified():
+    legacy = context_response()
+    legacy['reported_defensive_state'].pop('is_canonical')
+    legacy['reported_defensive_state'].pop('canonical_state')
+    result = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(legacy)).to_dict()
+    assert result['knowledge_context_response_advisory']['reported_canonical_state'] is None
+    assert result['knowledge_context_response_advisory']['claim_status'] == 'reported_unverified'
+
+
+def test_context_response_rejects_canonical_state_without_canonical_flag():
+    payload = context_response()
+    payload['reported_defensive_state'].pop('is_canonical')
+    result = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert 'knowledge_context_response_advisory' not in result
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in result['unknowns']
+    assert result['dependency_outcome']['knowledge'] == 'rejected'
+
+
+@pytest.mark.parametrize('missing_key', ['is_canonical', 'canonical_state'])
+def test_context_response_rejects_partial_canonical_metadata(missing_key):
+    payload = context_response()
+    payload['reported_defensive_state'].update(
+        reported_state='UNKNOWN', is_canonical=False, canonical_state=None)
+    payload['reported_defensive_state'].pop(missing_key)
+    result = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert 'knowledge_context_response_advisory' not in result
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in result['unknowns']
+
+
+def test_context_response_rejects_mismatched_recognized_canonical_states():
+    payload = context_response()
+    payload['reported_defensive_state'].update(
+        reported_state='ISOLATE', is_canonical=True, canonical_state='NOTIFY')
+    result = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(payload)).to_dict()
+    assert 'knowledge_context_response_advisory' not in result
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in result['unknowns']
 
 
 @pytest.mark.parametrize('status, expected', [
