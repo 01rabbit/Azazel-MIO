@@ -1679,7 +1679,8 @@ def test_fabric_response_projects_facts_and_inferences_separately_and_stays_out_
     assert adv['facts'][0]['claim_class'] == 'source_reported_fact'
     assert adv['facts'][0]['provenance_count'] == 1
     assert adv['inferences'][0]['claim_class'] == 'inference'
-    assert adv['inferences'][0]['basis_fact_ids'] == ['f1']
+    assert adv['facts'][0]['fact_id'] == 'fact-1' and adv['inferences'][0]['inference_id'] == 'inference-1'
+    assert adv['inferences'][0]['basis_fact_ids'] == ['fact-1']
     assert adv['expires_at'] == '2026-10-31T01:00:00Z' and adv['snapshot_state'] == 'complete'
     serialized = json.dumps(out)
     for opaque in ('opaque-secret', 'provider-secret', 'prov:secret', 'method:secret', 'req-1'):
@@ -1873,7 +1874,7 @@ def test_fabric_safe_synthetic_values_are_copied_unchanged():
     adv = run_fabric(fabric_response())['fabric_knowledge_context_advisory']
     assert adv['facts'][0]['value'] == 'Reported by a feed'
     assert adv['facts'][0]['subject'] == {'entity_type': 'host', 'value': 'host-1.example.com'}
-    assert adv['facts'][0]['fact_id'] == 'f1' and adv['facts'][0]['predicate'] == 'seen_in_feed'
+    assert adv['facts'][0]['fact_id'] == 'fact-1' and adv['facts'][0]['predicate'] == 'seen_in_feed'
     assert adv['inferences'][0]['statement'] == 'May be scanning'
     assert adv['unknowns'] == ['Actor intent'] and adv['limitations'] == ['Single feed']
 
@@ -2058,3 +2059,122 @@ def test_fabric_ordinary_prose_words_are_not_turned_into_hostnames():
     adv = run_fabric(payload)['fabric_knowledge_context_advisory']
     assert adv['facts'][0]['value'] == 'Ran the test. Example output matched the internal review notes'
     assert adv['unknowns'] == ['Whether the home page or corp policy applies is unclear']
+
+
+def _assert_refused(payload):
+    out = run_fabric(payload)
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    return out
+
+
+def _prose_cases(literal):
+    fact_case = fabric_response()
+    fact_case['facts'][0]['value'] = 'Traffic seen ' + literal
+    inference_case = fabric_response()
+    inference_case['inferences'][0]['statement'] = 'Possibly from ' + literal
+    unknown_case = fabric_response()
+    unknown_case['unknowns'] = ['Origin ' + literal + ' unclear']
+    return (fact_case, inference_case, unknown_case)
+
+
+# Glued or hex-letter prefixes must not hide a non-global IPv6 suffix (review finding 1).
+GLUED_IPV6_SUFFIX_PROSE = ['srcfe80::1', 'ip2001:db8::1', 'Dec:fd00::1', 'dead:fe80::1']
+
+
+@pytest.mark.parametrize('literal', GLUED_IPV6_SUFFIX_PROSE)
+def test_fabric_glued_or_hex_prefixed_ipv6_suffix_is_refused(literal):
+    for payload in _prose_cases(literal):
+        out = _assert_refused(payload)
+        assert literal not in json.dumps(out)
+
+
+def test_fabric_public_ipv6_is_not_misread_as_loopback_or_private_by_numeric_groups():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Scanner 2606:4700:4700::1 and 2606:4700:4700::1111 observed'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Scanner 2606:4700:4700::1 and 2606:4700:4700::1111 observed'
+
+
+def test_fabric_prose_with_double_colon_words_is_not_refused_as_unspecified_address():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Parser note: std::string handling reviewed'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Parser note: std::string handling reviewed'
+
+
+# MAC literals in source prose are refused (review finding 2); version and date prose stays usable.
+MAC_LITERALS_IN_PROSE = ['00:1a:2b:3c:4d:5e', '00-1A-2B-3C-4D-5E', '0011.2233.4455']
+
+
+@pytest.mark.parametrize('literal', MAC_LITERALS_IN_PROSE)
+def test_fabric_mac_literal_in_prose_is_refused(literal):
+    for payload in _prose_cases(literal):
+        out = _assert_refused(payload)
+        assert literal not in json.dumps(out)
+
+
+def test_fabric_version_and_date_prose_is_not_mistaken_for_mac_or_shorthand():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Agent 15.1.2 reported on 2026-10-30 at 23:00:00'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Agent 15.1.2 reported on 2026-10-30 at 23:00:00'
+
+
+# Numeric shorthand such as 127.1 or 10.1 is refused, not treated as a public name (review finding 3).
+@pytest.mark.parametrize('shorthand', ['127.1', '10.1', '10.1.2'])
+def test_fabric_numeric_shorthand_in_prose_is_refused(shorthand):
+    for payload in _prose_cases(shorthand):
+        out = _assert_refused(payload)
+        assert shorthand not in json.dumps(out)
+
+
+@pytest.mark.parametrize('shorthand', ['127.1', '10.1', '8.8'])
+def test_fabric_numeric_shorthand_host_subject_is_refused(shorthand):
+    payload = fabric_response()
+    payload['facts'][0]['subject']['value'] = shorthand
+    out = _assert_refused(payload)
+    assert shorthand not in json.dumps(out)
+
+
+# Host-type aliases refuse bare single labels (review finding 4).
+@pytest.mark.parametrize('entity_type', ['host', 'hostname', 'fqdn', 'domain'])
+@pytest.mark.parametrize('bare', ['srv-fin-01', 'printer'])
+def test_fabric_bare_label_refused_for_dns_name_type_aliases(entity_type, bare):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': bare}
+    out = _assert_refused(payload)
+    assert bare not in json.dumps(out)
+
+
+@pytest.mark.parametrize('entity_type', ['hostname', 'fqdn', 'domain'])
+def test_fabric_public_name_remains_usable_for_dns_name_type_aliases(entity_type):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': 'host-1.example.com'}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': entity_type, 'value': 'host-1.example.com'}
+
+
+# Source fact/inference IDs are validated but replaced by local ordinals (review finding 5).
+def test_fabric_source_ids_are_validated_but_replaced_by_local_references():
+    payload = fabric_response()
+    second = dict(payload['facts'][0], fact_id='ev-internal-f2', predicate='seen_elsewhere',
+                  value='Second feed')
+    payload['facts'] = [dict(payload['facts'][0], fact_id='ev-internal-f1'), second]
+    payload['inferences'][0].update(inference_id='inf-internal-i1', basis_fact_ids=['ev-internal-f2'])
+    out = run_fabric(payload)
+    adv = out['fabric_knowledge_context_advisory']
+    assert [fact['fact_id'] for fact in adv['facts']] == ['fact-1', 'fact-2']
+    assert adv['inferences'][0]['inference_id'] == 'inference-1'
+    assert adv['inferences'][0]['basis_fact_ids'] == ['fact-2']
+    serialized = json.dumps(out)
+    for source_id in ('ev-internal-f1', 'ev-internal-f2', 'inf-internal-i1'):
+        assert source_id not in serialized
+
+
+@pytest.mark.parametrize('basis', [['ev-internal-missing'], ['ev-internal-f1', 'ev-internal-f1']])
+def test_fabric_bad_basis_reference_still_rejects_after_local_remapping(basis):
+    payload = fabric_response()
+    payload['facts'] = [dict(payload['facts'][0], fact_id='ev-internal-f1')]
+    payload['inferences'][0]['basis_fact_ids'] = basis
+    _assert_refused(payload)

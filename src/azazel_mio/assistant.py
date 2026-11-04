@@ -628,9 +628,17 @@ def _fabric_distinct_strs(items: list[Any], limit: int, **kind: bool) -> list[st
 
 # IPv4 quads with ".", "-" or "_" separators (for example "ip-10-0-0-5" or "10_0_0_5").
 _FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])[0-9]{1,3}(?:[.\-_][0-9]{1,3}){3}(?![0-9])")
-# Leftmost-maximal runs with at least two colons. No lookbehind on ":" so that a separator
-# colon ("ip:fd00::1", "addr:2001:db8::1") does not hide the address; candidates are trimmed below.
-_FABRIC_IPV6_LITERAL = re.compile(r"(?<![A-Za-z0-9])[0-9A-Fa-f]*(?::[0-9A-Fa-f]*){2,}(?:\.[0-9]{1,3}){0,3}")
+# Address-like runs of hex digits, colons and dots. A letter outside A-F ends a run; the suffixes of
+# each run (for example "srcfe80::1" -> "fe80::1") are tested by _fabric_ipv6_candidates.
+_FABRIC_IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]+")
+# Shorthand IPv4 with two or three numeric parts ("127.1", "10.1.2"), read as addresses by inet_aton-style parsers.
+_FABRIC_SHORT_IPV4 = re.compile(r"(?<![0-9A-Za-z.\-_])[0-9]{1,3}(?:\.[0-9]{1,3}){1,2}(?!\.?[0-9A-Za-z\-_])")
+# MAC literals: colon or hyphen pairs (aa:bb:cc:dd:ee:ff) and Cisco dotted triples (aabb.ccdd.eeff).
+_FABRIC_MAC_LITERAL = re.compile(
+    r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}([:\-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}"
+    r"|[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})(?![0-9A-Fa-f])")
+# Host-subject types whose value must be a DNS name or a global IP literal.
+_FABRIC_DNS_NAME_TYPES = frozenset({"host", "hostname", "fqdn", "domain"})
 # Clearly local-only host names. A bare word such as "internal" is ordinary prose and is not matched.
 _FABRIC_LOCAL_HOST = re.compile(
     r"(?i)(?<![A-Za-z0-9-])(?:localhost|(?:[A-Za-z0-9-]+\.)+(?:localhost|localdomain|local|internal|lan|home\.arpa|"
@@ -638,17 +646,46 @@ _FABRIC_LOCAL_HOST = re.compile(
     r"(?![A-Za-z0-9-]|\.[A-Za-z0-9-])")
 
 
-def _fabric_ipv6_candidates(token: str):
-    """Yield the token and, when a lone separator colon is attached, the address without it."""
-    yield token
-    if token.startswith(":") and not token.startswith("::"):
-        yield token[1:]
-    if token.endswith(":") and not token.endswith("::"):
-        yield token[:-1]
+def _fabric_short_ipv4_refused(token: str) -> bool:
+    """Refuse inet_aton-style shorthand ("a.b" or "a.b.c") only when it expands to a non-global IPv4 address."""
+    parts = [int(part) for part in token.split(".")]
+    host_bits = 24 if len(parts) == 2 else 16
+    if any(part > 255 for part in parts[:-1]) or parts[-1] >= 1 << host_bits:
+        return False
+    value = 0
+    for part in parts[:-1]:
+        value = (value << 8) | part
+    value = (value << host_bits) | parts[-1]
+    return not ipaddress.IPv4Address(value).is_global
+
+
+def _fabric_ipv6_candidates(run: str):
+    """Yield IPv6 candidates for each permitted suffix start in an address-like run.
+
+    A suffix starts at the run's beginning, or at a hex digit or colon whose predecessor is a hex letter,
+    a dot or a separator colon. This exposes glued prefixes ("srcfe80::1") and separator prefixes
+    ("Dec:fd00::1"). It never starts after a decimal digit, so a numeric group such as "4700" cannot yield
+    a false "700::1", and a colon never starts after another colon, so the "::1111" inside a public
+    "2606:4700:4700::1111" is not tested alone. Lone separator colons and trailing dots are trimmed;
+    candidates without a hex digit are skipped.
+    """
+    for start, char in enumerate(run):
+        if start and (run[start - 1] in "0123456789" or (char == ":" and run[start - 1] == ":")):
+            continue
+        candidate = run[start:].rstrip(".")
+        if candidate.startswith(":") and not candidate.startswith("::"):
+            candidate = candidate[1:]
+        if candidate.endswith(":") and not candidate.endswith("::"):
+            candidate = candidate[:-1]
+        if re.search(r"[0-9A-Fa-f]", candidate):
+            yield candidate
 
 
 def _fabric_text_publishable(text: str) -> bool:
-    """No non-global or malformed address literal (dotted, dashed or underscore quad; IPv6), and no local-only host name."""
+    """No non-global or malformed address literal (dotted, dashed or underscore quad; shorthand IPv4; IPv6; MAC),
+    and no local-only host name. Every IPv6 suffix candidate is checked, not only the first parse."""
+    if _FABRIC_MAC_LITERAL.search(text):
+        return False
     for match in _FABRIC_IPV4_LITERAL.finditer(text):
         try:
             quad = ".".join(re.split(r"[.\-_]", match.group(0)))
@@ -656,8 +693,14 @@ def _fabric_text_publishable(text: str) -> bool:
                 return False
         except ValueError:
             return False
-    for match in _FABRIC_IPV6_LITERAL.finditer(text):
-        for candidate in _fabric_ipv6_candidates(match.group(0)):
+    for match in _FABRIC_SHORT_IPV4.finditer(text):
+        if _fabric_short_ipv4_refused(match.group(0)):
+            return False
+    for match in _FABRIC_IPV6_RUN.finditer(text):
+        run = match.group(0)
+        if run.count(":") < 2:
+            continue
+        for candidate in _fabric_ipv6_candidates(run):
             try:
                 address = ipaddress.IPv6Address(candidate)
             except ValueError:
@@ -665,7 +708,6 @@ def _fabric_text_publishable(text: str) -> bool:
             # IPv4-mapped literals are refused even when the dotted tail is global: they are IPv6 literals.
             if address.ipv4_mapped is not None or not address.is_global:
                 return False
-            break
     return _FABRIC_LOCAL_HOST.search(text) is None
 
 
@@ -688,19 +730,24 @@ def _fabric_copied_text(value: Any, limit: int) -> str:
 
 
 def _fabric_host_value_ok(text: str) -> bool:
-    """A host subject is a globally routable IP literal or a dotted name; a bare single label is refused."""
+    """A DNS-name subject is a globally routable IP literal or a dotted name with more than one label.
+
+    A bare single label is refused, and so is a name whose final label is all-numeric ("127.1"): that is
+    shorthand for an address, not a DNS name. Arbitrary privately owned names under a public suffix are
+    not distinguishable here; upstream policy and source controls remain required.
+    """
     try:
         return ipaddress.ip_address(text).is_global
     except ValueError:
         labels = text.split(".")
-        return len(labels) > 1 and all(labels)
+        return len(labels) > 1 and all(labels) and re.fullmatch(r"[0-9]+", labels[-1]) is None
 
 
 def _fabric_subject(value: Any) -> dict[str, str]:
     value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
     entity_type = _fabric_copied_ident(value["entity_type"], 64)
     text = _fabric_copied_text(value["value"], 256)
-    if entity_type.lower() == "host" and not _fabric_host_value_ok(text):
+    if entity_type.lower() in _FABRIC_DNS_NAME_TYPES and not _fabric_host_value_ok(text):
         raise _FabricReject
     return {"entity_type": entity_type, "value": text}
 
@@ -711,6 +758,8 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
     Returns (projection, expired). Any deviation rejects the whole payload; no
     partial projection, truncation or coercion. Opaque refs, provider and request
     identifiers, and provenance/method references are validated but not copied.
+    Fact and inference source IDs are validated and replaced by local ordinals
+    (fact-N, inference-N); basis references are remapped to the local fact IDs.
     Copied identifiers pass the MIO second layer; copied prose is redacted and
     refused if it carries a non-global address literal or a local-only host name.
     """
@@ -742,10 +791,10 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
             raw = _fabric_keys(raw, _FABRIC_FACT_KEYS)
             if raw["claim_class"] != "source_reported_fact":
                 raise _FabricReject
-            fact_id = _fabric_copied_ident(raw["fact_id"], 128)
+            fact_id = _fabric_copied_ident(raw["fact_id"], 128)  # validated; the source ID is not emitted
             provenance = _fabric_distinct_strs(_fabric_list(raw["provenance"], low=1, high=8), 256, ref=True)
             fact_ids.append(fact_id)
-            facts.append({"claim_class": "source_reported_fact", "fact_id": fact_id,
+            facts.append({"claim_class": "source_reported_fact", "fact_id": f"fact-{len(facts) + 1}",
                           "subject": _fabric_subject(raw["subject"]),
                           "predicate": _fabric_copied_ident(raw["predicate"], 64),
                           "value": _fabric_copied_text(raw["value"], 512),
@@ -761,7 +810,7 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
             if len(set(basis)) != len(basis):
                 raise _FabricReject
             inference_ids.append(inference_id)
-            inferences.append({"claim_class": "inference", "inference_id": inference_id,
+            inferences.append({"claim_class": "inference", "inference_id": f"inference-{len(inferences) + 1}",
                                "subject": _fabric_subject(raw["subject"]),
                                "statement": _fabric_copied_text(raw["statement"], 512),
                                "basis_fact_ids": basis})
@@ -770,6 +819,9 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
                 or known & set(inference_ids)
                 or any(ref not in known for item in inferences for ref in item["basis_fact_ids"])):
             raise _FabricReject
+        local_fact_ids = {source: f"fact-{index}" for index, source in enumerate(fact_ids, start=1)}
+        for item in inferences:
+            item["basis_fact_ids"] = [local_fact_ids[ref] for ref in item["basis_fact_ids"]]
         unknowns = [_fabric_copied_text(x, 512) for x in _fabric_list(data["unknowns"], low=0, high=16)]
         limitations = [_fabric_copied_text(x, 512) for x in _fabric_list(data["limitations"], low=0, high=16)]
         if not any((facts, inferences, unknowns, limitations)):

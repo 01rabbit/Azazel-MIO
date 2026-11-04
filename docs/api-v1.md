@@ -211,6 +211,30 @@ and `provenance_count`. Each inference carries `claim_class=inference`,
 `inference_id`, `subject`, `statement` and the `basis_fact_ids` it cites; facts
 and inferences are never merged. Request/correlation/provider IDs, source and
 snapshot refs, provenance refs and method refs are validated but not copied.
+Fact and inference source IDs (`fact_id`, `inference_id`) are validated as identifiers
+but are not copied. MIO emits bounded local references instead: `fact-1`, `fact-2`, …
+and `inference-1`, `inference-2`, … in response order. Each inference's
+`basis_fact_ids` is remapped to the local fact references, so the claim relationships
+are preserved while source identifiers do not appear in the output. Malformed,
+duplicate, or dangling source references still reject the whole payload.
+
+Copied prose is refused, not shown, when it contains a non-global IPv4 or IPv6
+literal; a MAC literal in colon, hyphen or Cisco dotted form; shorthand IPv4 with two
+or three numeric parts (for example `127.1` or `10.1`) that expands to a non-global
+address; or a local-only host name. IPv6 suffixes are tested from each hex-letter or
+separator-colon boundary not preceded by a digit, so a glued prefix (`srcfe80::1`) or a
+separator prefix (`Dec:fd00::1`) cannot hide a non-global suffix. As a fail-closed
+consequence, a public address with a private-looking group after a colon (for example
+`2606:4700:fd00::1`) is also refused. Ordinary version and date text such as `15.1.2`,
+`2026-10-30` and `23:00:00` remains usable. Host subjects (`host`, `hostname`, `fqdn`,
+`domain`) must be a global IP literal or a dotted name whose final label is not
+all-numeric; a bare single label is refused. Other entity types are not affected.
+
+Residual limits: an arbitrary privately owned FQDN under a public suffix (for example
+an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0
+policy and source controls remain required. Unseparated 12-hex MAC forms and malformed
+IPv6 with a dotted tail are not detected here. Shorthand version-like numbers in prose
+can be refused as ambiguous.
 
 All provider claims are source-reported, unverified and advisory-only. They are
 never converted into `observations`, known facts, `knowledge_refs`, evidence,
