@@ -13,6 +13,42 @@ outcomes are `unavailable`. Consumers must not use the frame ID or state in such
 response as a current assessment. Calls without a coordinator retain the original
 response shape and behavior.
 
+## Product model boundary and measurement
+
+The optional `model` argument is a product-provided callable with the
+`(task: str, prompt: str) -> Mapping[str, Any]` shape. Product code owns provider
+selection, authorization, transport, deadlines, cancellation and any token or
+resource-usage measurements. To retain bounded per-call elapsed time and outcome
+metadata in memory, products may wrap that callable:
+
+```python
+from azazel_mio import AssistantCore, MeasuredTransport
+
+tasks = (
+    "generate_hypotheses",
+    "identify_evidence_gaps",
+    "update_hypotheses",
+    "recommend",
+)
+measured = MeasuredTransport(provider_transport, allowed_tasks=tasks)
+assistance = AssistantCore(model=measured).explain(frame, now=product_clock())
+for call in measured.records():
+    record_metric(call.task, call.elapsed_ns, call.outcome)
+```
+
+`MeasuredTransport` passes task and prompt through unchanged and returns the
+provider result unchanged. Its immutable records contain only an allowlisted
+task label, elapsed nanoseconds and `success`/`failure`; prompt, response and
+exception text are not retained. Unknown task labels are recorded as `other`.
+History is bounded (256 records by default; caller limit 1–4096) and process-local;
+it is not a durable audit log. Timing is best-effort: a clock/history failure may
+omit a record but does not change the provider result or exception. The wrapper
+does not add a call limit; `ReasoningBudget` remains the per-cycle core bound.
+It does not report token counts, model loading, RSS, or resource supply. Providers
+that expose usage must report and validate those values in product-owned metrics.
+This wrapper and MIO output do not authorize a provider or request execution of
+a capability.
+
 `Assistance.to_dict()` returns schema_version (`mio.assistance.v1`), trace_id,
 frame_id, generation_method (`static_reference` or `model`), state, observations,
 hypotheses, unknowns, next_checks, knowledge, handoff, reasoning_trace.
