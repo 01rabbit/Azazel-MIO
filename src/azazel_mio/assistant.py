@@ -10,7 +10,6 @@ import ipaddress
 import json
 import re
 from typing import Any, Mapping, Sequence
-from urllib.parse import urlsplit
 
 from .broker import CapabilityBroker
 from .contracts import ContextDependencyOutcome, MioSituationFrame, ReasoningState
@@ -816,11 +815,22 @@ def _fabric_url_authority_ok(url: str) -> bool:
     authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
     if "@" in authority or "%" in authority:
         return False
-    try:
-        parts = urlsplit("//" + rest)
-        host = parts.hostname
-        parts.port  # noqa: B018 - validates the port
-    except ValueError:
+    if authority.startswith("["):
+        match = re.fullmatch(r"\[([^\[\]]+)\](?::([0-9]+))?", authority)
+        if match is None:
+            return False
+        host, port = match.groups()
+        try:
+            address = ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+        if port is not None and (len(port) > 5 or int(port) > 65535):
+            return False
+        return _fabric_global_ip(address)
+    if "[" in authority or "]" in authority or authority.count(":") > 1:
+        return False
+    host, separator, port = authority.partition(":")
+    if separator and (not re.fullmatch(r"[0-9]+", port) or len(port) > 5 or int(port) > 65535):
         return False
     return bool(host) and _fabric_host_value_ok(host)
 

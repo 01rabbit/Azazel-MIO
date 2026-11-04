@@ -2436,7 +2436,9 @@ def test_fabric_prose_refuses_scoped_ipv6():
 
 
 @pytest.mark.parametrize('value', ['user@example.com/x', 'example.com%2f@127.1/', r'example.com\@127.1/',
-                                   'example.com:80a/', '127.1/x', '2130706433', '//10.0.0.5/x'])
+                                   'example.com:80a/', '127.1/x', '2130706433', '//10.0.0.5/x',
+                                   'http://[example.com]/', 'http://[2606:4700:4700::1111]:65536/',
+                                   'http://[2606:4700:4700::1111]:80a/'])
 def test_fabric_typed_url_without_scheme_uses_strict_authority_checks(value):
     payload = fabric_response()
     payload['facts'][0]['subject'] = {'entity_type': 'url', 'value': value}
