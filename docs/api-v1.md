@@ -240,8 +240,13 @@ equal sign, optionally followed by spaces (`source:127.1`, `destination=192.168.
 glued to the number (`ip127.1`, `src10.1`) and is still refused when the shorthand expands to a
 non-global address. Under a label, a shorthand part with more than one digit that begins with `0`
 (for example `ip 0177.1`, `src 010.1`, `ip 0177.0.1`) is refused as ambiguous, because inet_aton-style
-parsers may read it as octal; ordinary single-digit `0` parts such as `ip 0.75` are not affected.
-A letter before the label does not start one (`tip 0.75` is ordinary text).
+parsers may read it as octal. Labelled dotted groups of two to four numeric parts are scanned, each
+part decimal digits (any length) or `0x` plus hex digits. Labelled hex shorthand (`ip 0x7f.1`,
+`src 0x7f.0.0.1`) is refused as ambiguous. A labelled four-part decimal group is parsed as IPv4 and
+refused when invalid (`src 10.0.0.0177`, `ip 10.1000` as two-part shorthand expands to a private address)
+or non-global; valid global literals are preserved. Labelled `ip 0.75` is refused because it denotes
+non-global shorthand (`0.0.0.75`), whereas unlabelled `confidence 0.75` is preserved.
+A letter before the label does not start one (`tip 0.75` and `tip 0x7f.1` are ordinary text).
 Ordinary decimal, version and unit text such as `confidence 0.75`, `version 0.9.1`, `10.5 GB`
 and an unlabelled dotted version such as `10.1.2` remains usable. As a fail-closed
 consequence, a public address with a private-looking group after a colon (for example

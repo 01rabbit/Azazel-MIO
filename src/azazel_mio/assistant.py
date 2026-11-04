@@ -641,7 +641,7 @@ _FABRIC_IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]+")
 # the label ("tip 0.75") does not start one. Unlabelled shorthand is preserved as prose.
 _FABRIC_LABELED_SHORT_IPV4 = re.compile(
     r"(?i)(?<![A-Za-z])(?:(?:ipv4|ip|src|dst|addr)[\s:=.]*|(?:source|destination|address|host)[:=]\s*)"
-    r"(?P<ip>(?:0[0-9]{1,3}|[0-9]{1,3})(?:\.[0-9]{1,3}){1,2})(?!\.?[0-9A-Za-z\-_])")
+    r"(?P<ip>(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){1,3})(?!\.?[0-9A-Za-z\-_])")
 # Common defang forms: a bracketed, parenthesised or braced dot (or "dot") and colon, with optional spaces.
 _FABRIC_DEFANG_DOT = re.compile(r"\s*[\[({]\s*(?:\.|dot)\s*[\])}]\s*", re.IGNORECASE)
 _FABRIC_DEFANG_COLON = re.compile(r"\s*[\[({]\s*:\s*[\])}]\s*")
@@ -664,7 +664,17 @@ def _fabric_short_ipv4_refused(token: str) -> bool:
     # A multi-digit part with a leading zero is ambiguous (inet_aton may read it as octal): refuse it under a label.
     if any(len(part) > 1 and part.startswith("0") for part in text_parts):
         return True
-    parts = [int(part) for part in text_parts]
+    # Hex parts ("0x7f.1") are ambiguous under inet_aton-style parsing: refuse them under a label.
+    if any(part[:2].lower() == "0x" for part in text_parts):
+        return True
+    # Bound digit runs before int() (very long runs exceed Python's conversion limit); they are out of range.
+    parts = [int(part) if len(part) <= 12 else 1 << 40 for part in text_parts]
+    if len(parts) == 4:
+        # Full dotted quad: leading zeros were refused above; invalid or non-global values are refused.
+        try:
+            return not ipaddress.IPv4Address(".".join(text_parts)).is_global
+        except ValueError:
+            return True
     host_bits = 24 if len(parts) == 2 else 16
     if any(part > 255 for part in parts[:-1]) or parts[-1] >= 1 << host_bits:
         return False

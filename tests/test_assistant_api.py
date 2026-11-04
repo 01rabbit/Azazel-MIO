@@ -2127,6 +2127,8 @@ LABELED_SHORTHAND_PROSE = [
     'ip 127.1', 'IP: 10.1', 'ipv4=10.1.2', 'src 10.1', 'dst 10.1', 'addr 127.1', 'ip[.]127.1', 'src[.]10.1',
     'source:127.1', 'destination=192.168.1', 'address:10.1', 'host:10.1.2', 'host: 10.1.2',
     'ip 0177.1', 'src 010.1', 'ip 0177.0.1',
+    'ip 0177.0.0.1', 'src 10.0.0.0177', 'ip 10.0177', 'ip 10.1000',
+    'ip 0x7f.1', 'src 0x7f.0.0.1',
 ]
 
 
@@ -2149,7 +2151,8 @@ def test_fabric_bare_full_word_label_prose_remains_usable(text):
 
 
 # Ordinary decimal, version and unit text is not mistaken for shorthand IPv4 (review finding: false positive).
-ORDINARY_NUMBER_PROSE = ['confidence 0.75', 'version 0.9.1', 'throughput 10.5 GB', 'tip 0.75', 'score 10.5']
+ORDINARY_NUMBER_PROSE = ['confidence 0.75', 'version 0.9.1', 'throughput 10.5 GB', 'tip 0.75', 'score 10.5',
+                       'tip 0x7f.1']
 
 
 @pytest.mark.parametrize('text', ORDINARY_NUMBER_PROSE)
