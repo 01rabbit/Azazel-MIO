@@ -168,6 +168,52 @@ do not by themselves make an otherwise empty projection useful. Source groups
 remain unverified receipt metadata and never enter prompts, observations,
 verified facts, or training. Existing JSON size/depth/node bounds still apply.
 
+### Fabric Knowledge Context response v1 (separate input)
+
+`FabricKnowledgeContextResponseAdvisory(response: Mapping[str, Any])`, passed as
+`AssistantCore.explain(..., fabric_knowledge_context_response=...)`, accepts one
+Fabric `knowledge-context-response/v1` payload (Fabric PR #76,
+`50494cf769978abdbad21626a130d6525c83135d`). It is a different contract from
+`KnowledgeContextResponseAdvisory` (legacy Knowledge `/v1/context`); neither
+wrapper is accepted by the other's keyword, and the legacy input, output key and
+behavior are unchanged. MIO has no Fabric runtime dependency: the check is a
+stdlib re-implementation of the wire shape.
+
+Validation is strict and fail-closed: exact field sets at every level (unknown
+or directive-shaped keys such as `action` or `command` are rejected), exact
+`str`/`list`/`dict` JSON types, Fabric identifier/opaque-reference grammar
+(opaque refs may not contain `://`), printable bounded text, the Fabric
+list caps (64 facts, 32 inferences, 8 provenance/method refs, 16 basis facts,
+16 unknowns/limitations), explicit-offset instants with
+`as_of <= generated_at < expires_at`, distinct and non-dangling fact/inference
+IDs, and node (2048), depth (8) and canonical UTF-8 size (128 KiB) limits. Any failure
+rejects the whole payload with no partial projection. A response with neither
+facts nor inferences is still useful when it carries bounded unknowns or limitations;
+only an entirely empty result is rejected. A response whose
+`expires_at` is not later than the caller's `now` is rejected as expired
+(`dependency_outcome.knowledge=expired`). Rejection adds
+`KNOWLEDGE_CONTEXT_REJECTED` and leaves the rest of the result unchanged.
+
+A valid response adds a separate top-level `fabric_knowledge_context_advisory`
+object (absent otherwise, so the default output shape is unchanged):
+`kind=fabric_knowledge_context_response_advisory`,
+`source_kind=fabric_knowledge_context_response_v1`, `schema_version`,
+`claim_status=source_reported_unverified`, `authority=advisory_only`,
+`trust=unverified_advisory_only`, `snapshot_state`
+(`complete|partial|stale`), UTC `generated_at`/`expires_at`, `facts`,
+`inferences`, `unknowns` and `limitations`. Each fact carries
+`claim_class=source_reported_fact`, `fact_id`, `subject`, `predicate`, `value`
+and `provenance_count`. Each inference carries `claim_class=inference`,
+`inference_id`, `subject`, `statement` and the `basis_fact_ids` it cites; facts
+and inferences are never merged. Request/correlation/provider IDs, source and
+snapshot refs, provenance refs and method refs are validated but not copied.
+
+All provider claims are source-reported, unverified and advisory-only. They are
+never converted into `observations`, known facts, `knowledge_refs`, evidence,
+authorization or model prompt material, and free text is carried as inert data.
+A valid response marks `dependency_outcome.knowledge` `available` only when the
+frame has no stronger outcome. Construction does not authenticate the provider.
+
 This is an in-process input seam only. Production networking, authentication
 principal and token rotation, TLS, privacy/retention approval, and request
 deadline ownership remain product-adapter inputs and are not implemented.

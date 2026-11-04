@@ -107,6 +107,18 @@ class KnowledgeContextResponseAdvisory:
 
 
 @dataclass(frozen=True)
+class FabricKnowledgeContextResponseAdvisory:
+    """One Fabric ``knowledge-context-response/v1`` payload for bounded projection.
+
+    Distinct from the legacy Knowledge /v1/context shape. Every claim in it is
+    source-reported, unverified and advisory-only; it is never prompt material,
+    an observation, a known fact, or authorization. Construction does not
+    authenticate the provider or confer trust.
+    """
+    response: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class Assistance:
     _payload: dict[str, Any]
 
@@ -510,6 +522,198 @@ def _bounded_context_response(value: Any) -> dict[str, Any] | None:
     }
 
 
+_FABRIC_RESPONSE_SCHEMA = "knowledge-context-response/v1"
+_FABRIC_IDENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:/@+\-]*")
+_FABRIC_INSTANT = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})")
+_FABRIC_MAX_BYTES = 128 * 1024
+_FABRIC_MAX_NODES = 2048
+_FABRIC_MAX_DEPTH = 8
+_FABRIC_TOP_KEYS = frozenset({
+    "schema_version", "request_id", "correlation_id", "source_product", "source_ref",
+    "provider_id", "snapshot", "facts", "inferences", "unknowns", "limitations",
+    "generated_at", "expires_at", "authority"})
+_FABRIC_SNAPSHOT_KEYS = frozenset({"ref", "state", "as_of"})
+_FABRIC_SUBJECT_KEYS = frozenset({"entity_type", "value"})
+_FABRIC_FACT_KEYS = frozenset({"claim_class", "fact_id", "subject", "predicate", "value", "provenance"})
+_FABRIC_INFERENCE_KEYS = frozenset({
+    "claim_class", "inference_id", "subject", "statement", "method_refs", "basis_fact_ids"})
+
+
+class _FabricReject(Exception):
+    pass
+
+
+def _fabric_walk(value: Any, depth: int, budget: list[int]) -> None:
+    """Bound depth/nodes/UTF-8 content and JSON types before serialization."""
+    budget[0] += 1
+    if budget[0] > _FABRIC_MAX_NODES or depth > _FABRIC_MAX_DEPTH:
+        raise _FabricReject
+    kind = type(value)
+    if kind is str:
+        if len(value) > _FABRIC_MAX_BYTES:
+            raise _FabricReject
+        budget[1] += len(value.encode("utf-8"))
+        if budget[1] > _FABRIC_MAX_BYTES:
+            raise _FabricReject
+        return
+    if kind is list:
+        for child in value:
+            _fabric_walk(child, depth + 1, budget)
+        return
+    if kind is dict:
+        for key, child in value.items():
+            if type(key) is not str or len(key) > 64:
+                raise _FabricReject
+            budget[1] += len(key.encode("utf-8"))
+            if budget[1] > _FABRIC_MAX_BYTES:
+                raise _FabricReject
+            _fabric_walk(child, depth + 1, budget)
+        return
+    raise _FabricReject
+
+
+def _fabric_str(value: Any, limit: int, *, ident: bool = False, ref: bool = False) -> str:
+    if type(value) is not str or not 0 < len(value) <= limit:
+        raise _FabricReject
+    if ident or ref:
+        if not _FABRIC_IDENT.fullmatch(value):
+            raise _FabricReject
+        if ref and "://" in value:
+            raise _FabricReject
+    elif not value.isprintable():
+        raise _FabricReject
+    return value
+
+
+def _fabric_list(value: Any, *, low: int, high: int) -> list[Any]:
+    if type(value) is not list or not low <= len(value) <= high:
+        raise _FabricReject
+    return value
+
+
+def _fabric_keys(value: Any, keys: frozenset[str]) -> dict[str, Any]:
+    if type(value) is not dict or set(value) != keys:
+        raise _FabricReject
+    return value
+
+
+def _fabric_instant(value: Any) -> datetime:
+    if type(value) is not str or not _FABRIC_INSTANT.fullmatch(value):
+        raise _FabricReject
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    fraction = re.search(r"\.([0-9]{1,6})(?=[+-][0-9]{2}:[0-9]{2}$)", text)
+    if fraction:
+        text = text[:fraction.start(1)] + fraction.group(1).ljust(6, "0") + text[fraction.end(1):]
+    try:
+        return datetime.fromisoformat(text).astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise _FabricReject from exc
+
+
+def _fabric_instant_text(value: datetime) -> str:
+    text = value.strftime("%Y-%m-%dT%H:%M:%S")
+    return text + (f".{value.microsecond:06d}" if value.microsecond else "") + "Z"
+
+
+def _fabric_subject(value: Any) -> dict[str, str]:
+    value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
+    return {"entity_type": _fabric_str(value["entity_type"], 64, ident=True),
+            "value": _fabric_str(value["value"], 256)}
+
+
+def _fabric_distinct_strs(items: list[Any], limit: int, **kind: bool) -> list[str]:
+    out = [_fabric_str(item, limit, **kind) for item in items]
+    if len(set(out)) != len(out):
+        raise _FabricReject
+    return out
+
+
+def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] | None, bool]:
+    """Fail-closed projection of a Fabric Knowledge Context response v1.
+
+    Returns (projection, expired). Any deviation rejects the whole payload; no
+    partial projection, truncation or coercion. Opaque refs, provider and request
+    identifiers, and provenance/method references are validated but not copied.
+    """
+    if type(value) is not FabricKnowledgeContextResponseAdvisory:
+        return None, False
+    try:
+        data = value.response
+        _fabric_walk(data, 0, [0, 0])
+        if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8")) > _FABRIC_MAX_BYTES:
+            raise _FabricReject
+        data = _fabric_keys(data, _FABRIC_TOP_KEYS)
+        if data["schema_version"] != _FABRIC_RESPONSE_SCHEMA or data["authority"] != "advisory_only":
+            raise _FabricReject
+        for key, limit in (("request_id", 128), ("correlation_id", 128),
+                           ("provider_id", 128), ("source_product", 64)):
+            _fabric_str(data[key], limit, ident=True)
+        _fabric_str(data["source_ref"], 256, ref=True)
+        snapshot = _fabric_keys(data["snapshot"], _FABRIC_SNAPSHOT_KEYS)
+        _fabric_str(snapshot["ref"], 256, ref=True)
+        if snapshot["state"] not in ("complete", "partial", "stale"):
+            raise _FabricReject
+        as_of = _fabric_instant(snapshot["as_of"])
+        generated = _fabric_instant(data["generated_at"])
+        expires = _fabric_instant(data["expires_at"])
+        if as_of > generated or expires <= generated:
+            raise _FabricReject
+        facts, fact_ids = [], []
+        for raw in _fabric_list(data["facts"], low=0, high=64):
+            raw = _fabric_keys(raw, _FABRIC_FACT_KEYS)
+            if raw["claim_class"] != "source_reported_fact":
+                raise _FabricReject
+            fact_id = _fabric_str(raw["fact_id"], 128, ident=True)
+            provenance = _fabric_distinct_strs(_fabric_list(raw["provenance"], low=1, high=8), 256, ref=True)
+            fact_ids.append(fact_id)
+            facts.append({"claim_class": "source_reported_fact", "fact_id": fact_id,
+                          "subject": _fabric_subject(raw["subject"]),
+                          "predicate": _fabric_str(raw["predicate"], 64, ident=True),
+                          "value": _fabric_str(raw["value"], 512),
+                          "provenance_count": len(provenance)})
+        inferences, inference_ids = [], []
+        for raw in _fabric_list(data["inferences"], low=0, high=32):
+            raw = _fabric_keys(raw, _FABRIC_INFERENCE_KEYS)
+            if raw["claim_class"] != "inference":
+                raise _FabricReject
+            inference_id = _fabric_str(raw["inference_id"], 128, ident=True)
+            _fabric_distinct_strs(_fabric_list(raw["method_refs"], low=1, high=8), 256, ref=True)
+            basis = _fabric_distinct_strs(
+                _fabric_list(raw["basis_fact_ids"], low=1, high=16), 128, ident=True)
+            inference_ids.append(inference_id)
+            inferences.append({"claim_class": "inference", "inference_id": inference_id,
+                               "subject": _fabric_subject(raw["subject"]),
+                               "statement": _fabric_str(raw["statement"], 512),
+                               "basis_fact_ids": basis})
+        known = set(fact_ids)
+        if (len(known) != len(fact_ids) or len(set(inference_ids)) != len(inference_ids)
+                or known & set(inference_ids)
+                or any(ref not in known for item in inferences for ref in item["basis_fact_ids"])):
+            raise _FabricReject
+        unknowns = [_fabric_str(x, 512) for x in _fabric_list(data["unknowns"], low=0, high=16)]
+        limitations = [_fabric_str(x, 512) for x in _fabric_list(data["limitations"], low=0, high=16)]
+        if not any((facts, inferences, unknowns, limitations)):
+            raise _FabricReject
+    except (_FabricReject, TypeError, ValueError, UnicodeError, RecursionError):
+        return None, False
+    if expires <= now:
+        return None, True
+    return {
+        "kind": "fabric_knowledge_context_response_advisory",
+        "source_kind": "fabric_knowledge_context_response_v1",
+        "schema_version": _FABRIC_RESPONSE_SCHEMA,
+        "claim_status": "source_reported_unverified",
+        "authority": "advisory_only",
+        "trust": "unverified_advisory_only",
+        "snapshot_state": snapshot["state"],
+        "generated_at": _fabric_instant_text(generated),
+        "expires_at": _fabric_instant_text(expires),
+        "facts": facts, "inferences": inferences,
+        "unknowns": unknowns, "limitations": limitations,
+    }, False
+
+
 def _expired_context(value: Any, now: datetime) -> bool:
     """Recognize only typed, parseable date-bounded Knowledge projections."""
     if type(value) not in (VerifiedKnowledgeContext, ReportedKnowledgeContext):
@@ -557,6 +761,7 @@ class AssistantCore:
                 reported_knowledge=(), now: str,
                 knowledge_lite_advisories=(), knowledge_attempted: bool = True,
                 knowledge_context_response=None,
+                fabric_knowledge_context_response=None,
                 cancel_check=None, stale_check=None) -> Assistance:
         if type(knowledge_attempted) is not bool:
             raise TypeError("knowledge_attempted_must_be_bool")
@@ -613,6 +818,13 @@ class AssistantCore:
             context_response_advisory = _bounded_context_response(knowledge_context_response)
             if context_response_advisory is None:
                 rejected = True
+        fabric_advisory = None
+        if fabric_knowledge_context_response is not None:
+            fabric_advisory, fabric_expired = _fabric_context_response(
+                fabric_knowledge_context_response, instant)
+            if fabric_advisory is None:
+                rejected = True
+                knowledge_expired = knowledge_expired or fabric_expired
         refs = tuple(dict.fromkeys(ref for ctx in contexts + static_references for ref in ctx["evidence_refs"]
                                    if model_id_ok(ref, "evidence_ref")))[:32]
         reported_refs = tuple(dict.fromkeys(
@@ -720,7 +932,8 @@ class AssistantCore:
             knowledge_outcome = ContextDependencyOutcome.EXPIRED
         elif contexts or reported_contexts or static_references:
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
-        elif context_response_advisory and knowledge_outcome is ContextDependencyOutcome.ABSENT:
+        elif ((context_response_advisory or fabric_advisory)
+              and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             if rejected and not lite_advisories:
@@ -731,6 +944,7 @@ class AssistantCore:
                 and not frame.knowledge_refs
                 and not contexts and not static_references and not reported_contexts and not lite_advisories
                 and context_response_advisory is None
+                and fabric_knowledge_context_response is None
                 and not knowledge and not references and not reported_knowledge and not knowledge_lite_advisories
                 and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             knowledge_outcome = ContextDependencyOutcome.NOT_QUERIED
@@ -797,6 +1011,8 @@ class AssistantCore:
             "knowledge": [] if interrupted else contexts + static_references + reported_contexts + lite_advisories,
             **({"knowledge_context_response_advisory": None if interrupted else context_response_advisory}
                if context_response_advisory is not None else {}),
+            **({"fabric_knowledge_context_advisory": None if interrupted else fabric_advisory}
+               if fabric_advisory is not None else {}),
             "handoff": handoff,
             "reasoning_trace": ([] if outcome.state is ReasoningState.VALIDATION_REJECTED
                                 else _public_reasoning_trace(outcome.trace)),
