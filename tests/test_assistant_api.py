@@ -2373,13 +2373,62 @@ def test_fabric_non_address_subject_type_keeps_ordinary_prose():
     assert adv['facts'][0]['subject'] == {'entity_type': 'asset', 'value': 'Build 10.1.2 host'}
 
 
-# The global-IP check does not rely on Python's table for transition/tunneling forms: embedded IPv4 is rechecked.
+# The fixed prefix policy refuses transition/tunneling forms regardless of their embedded IPv4.
 @pytest.mark.parametrize('literal', ['64:ff9b::a00:1', '64:ff9b:1::1', '2002:c0a8:101::1', '::a00:1',
                                     '2001:0:4136:e378:8000:63bf:f5ff:fffe'])
 def test_fabric_global_ip_refuses_private_embedded_ipv4_transition_forms(literal):
     import ipaddress
     from azazel_mio.assistant import _fabric_global_ip
     assert _fabric_global_ip(ipaddress.IPv6Address(literal)) is False
+
+
+@pytest.mark.parametrize('literal', ['::808:808', '64:ff9b::808:808', '64:ff9b:1::808:808', '2002:808:808::1',
+                                    '2001:0:808:808:0:0:f7f7:f7f7'])
+def test_fabric_global_ip_refuses_transition_prefixes_with_public_embedded_ipv4(literal):
+    import ipaddress
+    from azazel_mio.assistant import _fabric_global_ip
+    assert _fabric_global_ip(ipaddress.IPv6Address(literal)) is False
+
+
+@pytest.mark.parametrize('value', ['https://example.com/fetch?url=http://2130706433/', 'http://example.com,http://127.1/',
+                                   'x://127.1/',
+                                   'http://exa_mple.com/', 'http://exam!ple.com/', 'http://-bad.example.com/'])
+def test_fabric_nested_comma_joined_or_malformed_host_urls_are_refused(value):
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'see ' + value
+    _assert_refused(payload)
+
+
+@pytest.mark.parametrize('entity_type', ['srcIP', 'ClientIP', 'remoteAddr', 'source_address', 'client_address',
+                                         'peer_address', 'address_v4', 'IPAddress'])
+def test_fabric_normalized_address_type_aliases_require_global_ip(entity_type):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': '10.0.0.5'}
+    _assert_refused(payload)
+
+
+@pytest.mark.parametrize('entity_type', ['iphone', 'ipsec_policy', 'mac_addr', 'email_addr'])
+def test_fabric_non_ip_lookalike_types_are_not_address_types(entity_type):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': 'Build 10.1.2 host'}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject']['value'] == 'Build 10.1.2 host'
+
+
+@pytest.mark.parametrize('value', ['user@example.com/x', 'example.com%2f@127.1/', r'example.com\@127.1/',
+                                   'example.com:80a/', '127.1/x', '2130706433', '//10.0.0.5/x'])
+def test_fabric_typed_url_without_scheme_uses_strict_authority_checks(value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'url', 'value': value}
+    _assert_refused(payload)
+
+
+@pytest.mark.parametrize('value', ['https://[2606:4700:4700::1111]', 'example.com/path', 'example.com:8080'])
+def test_fabric_typed_url_public_bracketed_ipv6_and_no_scheme_remain_usable(value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'url', 'value': value}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject']['value'] == value
 
 
 @pytest.mark.parametrize('literal', ['2606:4700:4700::1111', '2a00:1450:4001::200e'])

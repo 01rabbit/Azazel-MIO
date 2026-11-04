@@ -9,6 +9,6 @@
 
 ### Fixed
 
-- Reject private, shorthand, integer and hex IP forms in typed address subjects and URL hosts, including URLs embedded in other copied advisory strings; screen IPv6 transition prefixes against embedded non-global IPv4.
+- Fabric advisory projection: reject private, shorthand, integer and hex IP forms in typed address subjects and URL hosts, including nested or joined URLs in copied strings; refuse IPv4-compatible, NAT64, 6to4 and Teredo IPv6 prefixes deterministically; and apply strict authority and normalized type checks.
 - Reject the entire Knowledge context advisory when defensive-state canonicalization metadata contradicts itself; keep legacy reports without canonical metadata unverified.
 - Reject future-dated Fabric Knowledge Context responses and omit Knowledge advisories from coordinated non-current results.
