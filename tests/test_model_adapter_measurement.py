@@ -229,3 +229,62 @@ def test_concurrent_calls_record_every_entry():
         t.join()
 
     assert len(wrapper.records()) == 400
+
+
+def test_assistant_core_model_path_uses_measured_transport_without_schema_change():
+    from azazel_mio import AssistantCore, MioSituationFrame
+
+    now = "2026-10-31T00:00:00Z"
+    frame = MioSituationFrame.build(
+        frame_id="frame-measured-core",
+        trace_id="trace-measured-core",
+        created_at=now,
+        mission="Keep communications available",
+        current_defensive_state="OBSERVE",
+        threat_level="UNKNOWN",
+        known_facts=("AUTH_FAILURES_OBSERVED",),
+        unknowns=("ADMIN_AUTOMATION_UNKNOWN",),
+        evidence_refs=("ev:ssh:1",),
+    )
+    calls = []
+
+    def model(task, prompt):
+        calls.append(task)
+        if task == "generate_hypotheses":
+            return {"hypotheses": [
+                {"hypothesis_id": "h1", "status": "proposed",
+                 "hypothesis_alternative_id": "hostile_activity",
+                 "statement": "The failures may reflect hostile activity.",
+                 "supporting_evidence_refs": ["ev:ssh:1"], "contradicting_evidence_refs": [],
+                 "assumptions": [], "falsification_conditions": ["Check successful logins."],
+                 "expected_observations": [], "missing_evidence": []},
+                {"hypothesis_id": "h2", "status": "proposed",
+                 "hypothesis_alternative_id": "benign_activity",
+                 "statement": "The failures may reflect benign automation.",
+                 "supporting_evidence_refs": [], "contradicting_evidence_refs": [],
+                 "assumptions": [], "falsification_conditions": ["Compare schedule."],
+                 "expected_observations": [], "missing_evidence": ["automation schedule"]},
+            ]}
+        if task == "identify_evidence_gaps":
+            return {"evidence_gaps": []}
+        if task == "recommend":
+            return {"summary": "Review the reported failures.",
+                    "recommended_action": "OBSERVE",
+                    "rationale": "Evidence does not establish compromise.",
+                    "evidence_refs": ["ev:ssh:1"],
+                    "limitations": ["No current telemetry is included."]}
+        raise AssertionError(f"unexpected model task: {task}")
+
+    measured = MeasuredTransport(
+        model, allowed_tasks=("generate_hypotheses", "identify_evidence_gaps", "recommend"),
+        clock=FakeClock(),
+    )
+    result = AssistantCore(model=measured).explain(frame, now=now).to_dict()
+
+    assert result["state"] == "complete"
+    assert result["generation_method"] == "model"
+    assert calls == ["generate_hypotheses", "identify_evidence_gaps", "recommend"]
+    assert [record.task for record in measured.records()] == calls
+    assert all(record.outcome == OUTCOME_SUCCESS for record in measured.records())
+    assert result["schema_version"] == "mio.assistance.v1"
+    assert "reasoning_trace" in result and "handoff" in result
