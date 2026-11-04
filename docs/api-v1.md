@@ -49,6 +49,8 @@ that expose usage must report and validate those values in product-owned metrics
 This wrapper and MIO output do not authorize a provider or request execution of
 a capability.
 
+## Assistance response and Knowledge projections
+
 `Assistance.to_dict()` returns schema_version (`mio.assistance.v1`), trace_id,
 frame_id, generation_method (`static_reference` or `model`), state, observations,
 hypotheses, unknowns, next_checks, knowledge, handoff, reasoning_trace.
