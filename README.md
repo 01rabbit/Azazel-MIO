@@ -6,7 +6,7 @@ M.I.O.は、Azazelの観測・知識・運用機能を使い、現場の担当�
 
 Edgeでは現場の検知と通信状態を読み解き、Nexusではシステム全体の運用を支えます。動く場所や利用するモデルが変わっても、M.I.O.としての役割、根拠の扱い、安全上の境界は共通です。
 
-> **開発状況：基盤整備中。** このリポジトリはM.I.O.の共通能力を集約・発展させるために新設されました。以下は責任分担と開発方針を示すもので、記載した能力の実装・移行・製品連携が完了したことを意味しません。
+> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。製品側の確認済みの状態は [AI inventory](docs/architecture/ai-inventory.md) を参照してください。
 
 ## M.I.O.が目指すこと
 
@@ -22,7 +22,9 @@ Edgeでは現場の検知と通信状態を読み解き、Nexusではシステ�
 
 ## 一つのM.I.O.、複数の現場
 
-| 利用する場所 | M.I.O.の役割 |
+以下は各場所での**目標とする役割**です。Edgeの現在の状態は公開文書で確認できる範囲に限り、Nexusの実装詳細はこのリポジトリの公開範囲外です。
+
+| 利用する場所 | 目標とするM.I.O.の役割 |
 | --- | --- |
 | **Edge** | 検知の説明、NOC/SOCの状況整理、通信影響の確認、対処候補と次の観測の提案 |
 | **Nexus** | 全体状況の要約、導入・運用の案内、障害復旧の支援、専門家への引継ぎ |
@@ -54,7 +56,7 @@ Azazel-MIOは、製品をまたいで共有するAI補助能力を所有しま�
 | [Azazel-Deception](https://github.com/01rabbit/Azazel-Deception) | 承認されたデコイ環境の隔離・実行・観測 |
 | [Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric) | 製品間で受け渡す共通データ契約 |
 
-共有する通信契約をM.I.O.独自の互換形式として複製せず、Fabricとの責任分担を明確にします。モデルやruntimeの導入・認可・起動は、利用先の製品が管理します。
+共有する通信契約をM.I.O.独自の互換形式として複製せず、Fabricとの責任分担を明確にします。製品間のwire契約はFabricが所有します。一方、現在のM.I.O.内部API（[internal API v1](docs/api-v1.md)、内部frame `mio.situation_frame.v2` を含む）はM.I.O.が所有しており、Fabric契約への対応付けは未完了です。モデルやruntimeの導入・認可・起動は、利用先の製品が管理します。
 
 ## 助言と実行の境界
 
@@ -92,7 +94,7 @@ M.I.O.は、通信制御、デコイの起動・露出、権限変更を直接�
 4. **Knowledgeの実連携を通す。** Liteと本体を区別し、実サービス同士で出典・期限・拒否・縮退を確認する。
 5. **運用者の経路を検証する。** 表示、追加確認、結果の読戻し、復旧、引継ぎまでを通して評価する。
 
-既存製品にある実装を、このREADMEだけで移行済みとは扱いません。移行元と移行先の対応、互換性、試験結果を変更ごとに記録します。
+既存製品にある実装を、このREADMEだけで移行済みとは扱いません。現在のM.I.O.coreには、Edgeの推論コアの一部を移植したものが含まれています（[migration](docs/migration.md)）。Edgeには従来のモデル経路が残っており、共通coreの存在はすべてのAI支援が移行済みであることを意味しません。移行元と移行先の対応、互換性、試験結果を変更ごとに記録します。
 
 ## 完成をどう判断するか
 
@@ -110,13 +112,41 @@ M.I.O.は、通信制御、デコイの起動・露出、権限変更を直接�
 
 ## 開発への参加
 
-現時点では、導入手順や公開パッケージはまだありません。初期変更では、役割・契約・移行計画と、最小の実働経路を優先します。
+現時点では、タグ付きの公開リリースや公開パッケージはありません。ソースからのインストールと試験の手順は末尾の「Common Python core」を参照してください。初期変更では、役割・契約・移行計画と、最小の実働経路を優先します。
 
 IssueやPull Requestには、目的、対象製品、入力と出力、権限への影響、失敗時の動作、検証結果、未確認事項を記載してください。秘密情報、生の機密データ、内部識別情報、認証情報を例やログに含めないでください。
 
 ## Common Python core
 
-`azazel-mio` is a stdlib-only, advisory-only Python 3.11+ package.
-Install from this checkout with `python -m pip install .`.
-See [internal API v1](docs/api-v1.md) and [source/license migration](docs/migration.md).
-Products own transport, governance, persistence and deterministic enforcement.
+`azazel-mio` は、標準ライブラリのみを使う助言専用のPython 3.11+パッケージです（`pyproject.toml` で実行時依存は宣言されていません）。製品がtransport・governance・永続化・決定論的執行を所有します。
+
+**インストール（このチェックアウトから）**
+
+```sh
+python -m pip install .
+```
+
+開発時は編集可能インストールも使えます: `python -m pip install -e .`（`pyproject.toml` のsetuptools構成による。このREADMEの作成では実行していません）。
+
+現在のバージョンは `0.1.0+git.c31c244` で、ソースからのローカルビルド識別子です。公開リリースではありません（[versioning](docs/versioning.md)）。
+
+**試験**
+
+`pyproject.toml` は試験ランナーを宣言していません。テストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。
+
+```sh
+python -m pip install pytest
+PYTHONPATH=src python -m pytest -q
+```
+
+**参照文書**
+
+- 内部API: [internal API v1](docs/api-v1.md)
+- 移行元と互換性: [source/license migration](docs/migration.md)
+- バージョン: [versioning](docs/versioning.md)
+
+**任意・実験的な機能（既定の試験には含まれません）**
+
+- 実モデル確認: ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成フレームで応答を一度確かめるだけで、製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
+- オフラインplaybook ranking: 評価マイルストーンです。モデルの有効化、自動学習、認可、実行は含みません（[offline ranking](docs/offline-playbook-ranking.md)）。
+- Assessment baseline: experimentalです（[assessment baseline](docs/assessment-baseline.md)）。
