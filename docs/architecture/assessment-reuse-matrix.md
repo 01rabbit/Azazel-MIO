@@ -2,12 +2,12 @@
 
 Scope: documentation only. It changes no code, contracts, pins or rollout state.
 
-Evidence SHAs (current MIO kernel and Edge scorer rows were re-read on 2026-11-04 at these commits):
+Evidence SHAs (the MIO and Edge rows were checked on 2026-11-04; each source-evidence SHA is stated per row):
 
-- MIO current main: `5bb09c8d28c57604dc1c63903b98fed7587b49ea` (tree `75b20e000a0be2dad1c9aae3219e5cf5f14700bf`), after #43 defensive-state validation, #44 local model developer smoke, and #45 measured transport. These do not change package version or dependency pins. Historical: main `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d` (tree `0970dad5a8c87b0ce002b4e24c9505301e7a0f2a`) advanced from the PR #41 merge `e4a0e504bae91153f3dcb8105f8658ff80d4e884` via docs-only PR #39; `4d2fd786dd1ea4e99f9393cb50c8f556507cdb53` is the subsequent historical main after #43. The kernel source evidence below is anchored to `e4a0` (not re-read at current main), and the earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
+- MIO main at Draft PR #42's base: `5bb09c8d28c57604dc1c63903b98fed7587b49ea` (tree `75b20e000a0be2dad1c9aae3219e5cf5f14700bf`), after #43 defensive-state validation, #44 local model developer smoke, and #45 measured transport. These do not change package version or dependency pins. Historical: main `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d` (tree `0970dad5a8c87b0ce002b4e24c9505301e7a0f2a`) advanced from the PR #41 merge `e4a0e504bae91153f3dcb8105f8658ff80d4e884` via docs-only PR #39; `4d2fd786dd1ea4e99f9393cb50c8f556507cdb53` is the subsequent historical main after #43. The kernel source evidence below is anchored to `e4a0` (not re-read at current main), and the earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
 - Edge public `main`: `38c2b07774c61b86209d0cd94ce2e7689d38600c` (scorer, agent and model-lane rows re-read at this SHA)
 - Edge `cbc5d77df88a7c0c2aa9f1e8cd3ef4f81aa18be8`: the Rust decision-loop and Rust severity rows (sections 2 and 6) are still observed only at this earlier SHA; they were not re-read at `38c2`.
-- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `5bb09c8d28c57604dc1c63903b98fed7587b49ea`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
+- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than MIO main at PR #42's base, `5bb09c8d28c57604dc1c63903b98fed7587b49ea`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
 
 Labels:
 

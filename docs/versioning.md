@@ -18,8 +18,8 @@ releases or replace an existing artifact in place.
 
 ## Current integration identity example (2026-11-04)
 
-At current MIO main `5bb09c8d28c57604dc1c63903b98fed7587b49ea` (tree
-`75b20e000a0be2dad1c9aae3219e5cf5f14700bf`), `pyproject.toml` still declares
+At MIO main `5bb09c8d28c57604dc1c63903b98fed7587b49ea` (tree
+`75b20e000a0be2dad1c9aae3219e5cf5f14700bf`), the base of Draft PR #42, `pyproject.toml` still declares
 `0.1.0+git.c31c244`. PR #43 changed `src/`, `tests/` and `CHANGELOG.md` but
 no package version or dependency pin. PR #44 adds a developer-only local model
 smoke tool and documentation; PR #45 adds a bounded metadata-only measured
