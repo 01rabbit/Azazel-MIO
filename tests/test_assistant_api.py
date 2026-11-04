@@ -2400,10 +2400,11 @@ def test_fabric_nested_comma_joined_or_malformed_host_urls_are_refused(value):
 
 
 @pytest.mark.parametrize('entity_type', ['srcIP', 'ClientIP', 'remoteAddr', 'source_address', 'client_address',
-                                         'peer_address', 'address_v4', 'IPAddress'])
+                                         'peer_address', 'address_v4', 'IPAddress', 'srcip', 'clientip', 'sourceip',
+                                         'dstip', 'remoteaddr', 'ipv4address', 'ipv6addr'])
 def test_fabric_normalized_address_type_aliases_require_global_ip(entity_type):
     payload = fabric_response()
-    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': '10.0.0.5'}
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': '2130706433'}
     _assert_refused(payload)
 
 
@@ -2413,6 +2414,19 @@ def test_fabric_non_ip_lookalike_types_are_not_address_types(entity_type):
     payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': 'Build 10.1.2 host'}
     adv = run_fabric(payload)['fabric_knowledge_context_advisory']
     assert adv['facts'][0]['subject']['value'] == 'Build 10.1.2 host'
+
+
+@pytest.mark.parametrize('entity_type', ['ip', 'host'])
+def test_fabric_typed_ip_and_host_subject_refuse_scoped_ipv6(entity_type):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': '2606:4700:4700::1111%eth0'}
+    _assert_refused(payload)
+
+
+def test_fabric_prose_refuses_scoped_ipv6():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'seen at 2606:4700:4700::1111%eth0'
+    _assert_refused(payload)
 
 
 @pytest.mark.parametrize('value', ['user@example.com/x', 'example.com%2f@127.1/', r'example.com\@127.1/',

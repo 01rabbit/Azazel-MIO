@@ -765,6 +765,15 @@ def _fabric_literals_clean(text: str) -> bool:
             return False
     for match in _FABRIC_IPV6_RUN.finditer(text):
         run = match.group(0)
+        if match.end() < len(text) and text[match.end()] == "%":
+            scope = re.match(r"%[A-Za-z0-9_.-]+", text[match.end():])
+            if scope:
+                try:
+                    ipaddress.IPv6Address(run)
+                except ValueError:
+                    pass
+                else:
+                    return False
         if run.count(":") < 2:
             continue
         for candidate in _fabric_ipv6_candidates(run):
@@ -849,7 +858,7 @@ def _fabric_host_value_ok(text: str) -> bool:
     ("0x1", "0x7f"): that is shorthand for an address, not a DNS name. Arbitrary privately owned names under
     a public suffix are not distinguishable here; upstream policy and source controls remain required.
     """
-    if "/" in text or "@" in text:
+    if "/" in text or "@" in text or "%" in text:
         return False  # a URL or userinfo form is not a bare host subject
     try:
         address = ipaddress.ip_address(text)
@@ -865,6 +874,8 @@ def _fabric_host_value_ok(text: str) -> bool:
 def _fabric_ip_value_ok(text: str) -> bool:
     """A typed address subject is exactly one globally routable IP literal; shorthand, integer or hex IPv4,
     dotted names, IPv4-mapped IPv6 and transition forms carrying non-global IPv4 are refused."""
+    if "%" in text:
+        return False  # scoped IPv6 includes a local interface identifier
     try:
         address = ipaddress.ip_address(text)
     except ValueError:
@@ -884,6 +895,12 @@ def _fabric_type_key(entity_type: str) -> str:
 
 
 _FABRIC_ADDRESS_TOKENS = frozenset({"ip", "ipv4", "ipv6", "ipaddr", "ipaddress"})
+_FABRIC_COMPACT_ADDRESS_TYPES = frozenset({
+    "srcip", "dstip", "destip", "sourceip", "destinationip", "clientip", "serverip", "remoteip", "localip",
+    "peerip", "hostip", "publicip", "privateip", "ipv4address", "ipv6address", "ipv4addr", "ipv6addr",
+    "srcaddr", "dstaddr", "destaddr", "sourceaddr", "destinationaddr", "clientaddr", "serveraddr", "remoteaddr",
+    "localaddr", "peeraddr",
+})
 _FABRIC_ADDRESS_WORDS = frozenset({"addr", "address"})
 # Words that make "addr"/"address" something other than an IP address (hardware, mail, postal, web).
 _FABRIC_NON_IP_ADDRESS = frozenset({"mac", "email", "mail", "street", "postal", "hw", "hardware", "physical",
@@ -893,6 +910,8 @@ _FABRIC_NON_IP_ADDRESS = frozenset({"mac", "email", "mail", "street", "postal", 
 def _fabric_is_address_type(key: str) -> bool:
     """Token match on the normalized key, so "iphone" and "ipsec_policy" are not addresses but "src_ip",
     "remote_addr" and "address_v4" are. "mac_addr" and "email_addr" are excluded."""
+    if key in _FABRIC_COMPACT_ADDRESS_TYPES:
+        return True
     tokens = set(key.split("_"))
     if tokens & _FABRIC_ADDRESS_TOKENS:
         return True
