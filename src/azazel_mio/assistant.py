@@ -474,11 +474,27 @@ def _bounded_context_response(value: Any) -> dict[str, Any] | None:
                 or state.get("authority_class", "producer_reported_state") != "producer_reported_state"
                 or type(state.get("is_canonical", False)) is not bool):
             return None
+        canonical_metadata = {"is_canonical", "canonical_state"}
+        metadata_present = canonical_metadata & state.keys()
+        if metadata_present and not canonical_metadata <= state.keys():
+            return None
         canonical = state.get("canonical_state")
         if canonical is not None and type(canonical) is not str:
             return None
-        if state.get("is_canonical") is True and type(canonical) is str and canonical in {
-                "OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}:
+        is_canonical = state.get("is_canonical", False)
+        canonical_states = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
+        # Knowledge emits exactly (true, reported_state) or (false, null).
+        # Any other triple is contradictory and fails closed.
+        if is_canonical is False and canonical is not None:
+            return None
+        if (is_canonical is False and metadata_present
+                and state["reported_state"] in canonical_states):
+            return None
+        if is_canonical is True:
+            if type(canonical) is not str or canonical != state["reported_state"]:
+                return None
+            if canonical not in canonical_states:
+                return None
             reported_state = canonical
     if not techniques and not source_groups and not projected_freshness and reported_state is None:
         return None
