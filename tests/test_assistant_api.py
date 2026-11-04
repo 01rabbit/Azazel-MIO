@@ -2147,6 +2147,56 @@ def test_fabric_bare_label_refused_for_dns_name_type_aliases(entity_type, bare):
     assert bare not in json.dumps(out)
 
 
+# Defanged private addresses are scanned in a normalized copy (review finding: defang bypass).
+DEFANGED_PRIVATE_LITERALS = [
+    '10[.]0[.]0[.]5', '10(.)0(.)0(.)5', '10{.}0{.}0{.}5', '10 [.] 0 [.] 0 [.] 5', '10[dot]0[dot]0[dot]5',
+    '192[.]168[.]1[.]1', 'fe80[:][:]1',
+]
+
+
+@pytest.mark.parametrize('literal', DEFANGED_PRIVATE_LITERALS)
+def test_fabric_defanged_private_address_is_refused_in_fact_statement_and_unknown(literal):
+    for payload in _prose_cases(literal):
+        out = _assert_refused(payload)
+        assert literal not in json.dumps(out)
+
+
+def test_fabric_defanged_public_ipv4_remains_usable_as_original_text():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Scanner source 8[.]8[.]8[.]8 observed'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Scanner source 8[.]8[.]8[.]8 observed'
+
+
+# Digit-prefixed IPv6 with a non-global hex-letter suffix must be refused (review finding: "1fe80::1").
+DIGIT_PREFIXED_IPV6_PROSE = ['1fe80::1', '9fd00::1']
+
+
+@pytest.mark.parametrize('literal', DIGIT_PREFIXED_IPV6_PROSE)
+def test_fabric_digit_prefixed_non_global_ipv6_is_refused(literal):
+    for payload in _prose_cases(literal):
+        out = _assert_refused(payload)
+        assert literal not in json.dumps(out)
+
+
+def test_fabric_digit_prefixed_public_ipv6_context_remains_usable():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'Scanner 2a00:1450::1 and 2606:4700:4700::1111 observed'
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == 'Scanner 2a00:1450::1 and 2606:4700:4700::1111 observed'
+
+
+# Letter-glued shorthand IPv4 expanding to a non-global address is refused (review finding: "ip127.1").
+GLUED_SHORTHAND_PROSE = ['ip127.1', 'src10.1']
+
+
+@pytest.mark.parametrize('literal', GLUED_SHORTHAND_PROSE)
+def test_fabric_letter_glued_shorthand_ipv4_is_refused(literal):
+    for payload in _prose_cases(literal):
+        out = _assert_refused(payload)
+        assert literal not in json.dumps(out)
+
+
 @pytest.mark.parametrize('entity_type', ['hostname', 'fqdn', 'domain'])
 def test_fabric_public_name_remains_usable_for_dns_name_type_aliases(entity_type):
     payload = fabric_response()

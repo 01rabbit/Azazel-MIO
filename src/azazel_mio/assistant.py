@@ -632,7 +632,12 @@ _FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])[0-9]{1,3}(?:[.\-_][0-9]{1,3}){3}(
 # each run (for example "srcfe80::1" -> "fe80::1") are tested by _fabric_ipv6_candidates.
 _FABRIC_IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]+")
 # Shorthand IPv4 with two or three numeric parts ("127.1", "10.1.2"), read as addresses by inet_aton-style parsers.
-_FABRIC_SHORT_IPV4 = re.compile(r"(?<![0-9A-Za-z.\-_])[0-9]{1,3}(?:\.[0-9]{1,3}){1,2}(?!\.?[0-9A-Za-z\-_])")
+# A letter may glue the label ("ip127.1", "src10.1"); a digit or a dash/underscore separator, or a digit-dot
+# prefix ("2026.15.1.2"), ends the number instead.
+_FABRIC_SHORT_IPV4 = re.compile(r"(?<![0-9\-_])(?<![0-9]\.)[0-9]{1,3}(?:\.[0-9]{1,3}){1,2}(?!\.?[0-9A-Za-z\-_])")
+# Common defang forms: a bracketed, parenthesised or braced dot (or "dot") and colon, with optional spaces.
+_FABRIC_DEFANG_DOT = re.compile(r"\s*[\[({]\s*(?:\.|dot)\s*[\])}]\s*", re.IGNORECASE)
+_FABRIC_DEFANG_COLON = re.compile(r"\s*[\[({]\s*:\s*[\])}]\s*")
 # MAC literals: colon or hyphen pairs (aa:bb:cc:dd:ee:ff) and Cisco dotted triples (aabb.ccdd.eeff).
 _FABRIC_MAC_LITERAL = re.compile(
     r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}([:\-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}"
@@ -663,14 +668,17 @@ def _fabric_ipv6_candidates(run: str):
     """Yield IPv6 candidates for each permitted suffix start in an address-like run.
 
     A suffix starts at the run's beginning, or at a hex digit or colon whose predecessor is a hex letter,
-    a dot or a separator colon. This exposes glued prefixes ("srcfe80::1") and separator prefixes
-    ("Dec:fd00::1"). It never starts after a decimal digit, so a numeric group such as "4700" cannot yield
-    a false "700::1", and a colon never starts after another colon, so the "::1111" inside a public
-    "2606:4700:4700::1111" is not tested alone. Lone separator colons and trailing dots are trimmed;
-    candidates without a hex digit are skipped.
+    a dot or a separator colon. This exposes glued prefixes ("srcfe80::1", "1fe80::1") and separator prefixes
+    ("Dec:fd00::1"). A start is skipped only when it is a decimal digit after a decimal digit, so a numeric
+    group such as "4700" cannot yield a false "700::1". A colon that begins or continues "::" is never a
+    start, so the "::1111" inside a public "2606:4700:4700::1111" is not tested alone. Lone separator colons
+    and trailing dots are trimmed; candidates without a hex digit are skipped.
     """
     for start, char in enumerate(run):
-        if start and (run[start - 1] in "0123456789" or (char == ":" and run[start - 1] == ":")):
+        if start and (
+            (char in "0123456789" and run[start - 1] in "0123456789")
+            or (char == ":" and (run[start - 1] == ":" or run[start + 1:start + 2] == ":"))
+        ):
             continue
         candidate = run[start:].rstrip(".")
         if candidate.startswith(":") and not candidate.startswith("::"):
@@ -681,7 +689,17 @@ def _fabric_ipv6_candidates(run: str):
             yield candidate
 
 
+def _fabric_scan_copy(text: str) -> str:
+    """Scan-only copy with common defang forms read as the characters they hide. Never displayed."""
+    return _FABRIC_DEFANG_COLON.sub(":", _FABRIC_DEFANG_DOT.sub(".", text))
+
+
 def _fabric_text_publishable(text: str) -> bool:
+    """Both the original text and its defang-normalized scan copy must be free of address and host literals."""
+    return _fabric_literals_clean(text) and _fabric_literals_clean(_fabric_scan_copy(text))
+
+
+def _fabric_literals_clean(text: str) -> bool:
     """No non-global or malformed address literal (dotted, dashed or underscore quad; shorthand IPv4; IPv6; MAC),
     and no local-only host name. Every IPv6 suffix candidate is checked, not only the first parse."""
     if _FABRIC_MAC_LITERAL.search(text):

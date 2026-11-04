@@ -221,9 +221,17 @@ duplicate, or dangling source references still reject the whole payload.
 Copied prose is refused, not shown, when it contains a non-global IPv4 or IPv6
 literal; a MAC literal in colon, hyphen or Cisco dotted form; shorthand IPv4 with two
 or three numeric parts (for example `127.1` or `10.1`) that expands to a non-global
-address; or a local-only host name. IPv6 suffixes are tested from each hex-letter or
-separator-colon boundary not preceded by a digit, so a glued prefix (`srcfe80::1`) or a
-separator prefix (`Dec:fd00::1`) cannot hide a non-global suffix. As a fail-closed
+address; or a local-only host name. Before checking, MIO builds a scan-only copy in which
+common defang forms are read as the characters they hide: `[.]`, `(.)`, `{.}` and `[dot]`,
+`(dot)`, `{dot}` (case-insensitive) become `.`, and `[:]`, `(:)`, `{:}` become `:`, with
+optional spaces inside and around the brackets. The original text must pass and so must
+the normalized copy, so `10[.]0[.]0[.]5` is refused while `8[.]8[.]8[.]8` remains usable
+as written. Only the original text is ever shown. IPv6 suffixes are tested from each
+hex-letter or separator-colon boundary, except a decimal digit after a decimal digit and a
+colon that begins or continues `::`, so a glued prefix (`srcfe80::1`), a digit-prefixed
+prefix (`1fe80::1`) or a separator prefix (`Dec:fd00::1`) cannot hide a non-global suffix.
+Shorthand IPv4 may be glued to a letter (`ip127.1`, `src10.1`) and is still refused when it
+expands to a non-global address. As a fail-closed
 consequence, a public address with a private-looking group after a colon (for example
 `2606:4700:fd00::1`) is also refused. Ordinary version and date text such as `15.1.2`,
 `2026-10-30` and `23:00:00` remains usable. Host subjects (`host`, `hostname`, `fqdn`,
@@ -234,7 +242,12 @@ Residual limits: an arbitrary privately owned FQDN under a public suffix (for ex
 an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0
 policy and source controls remain required. Unseparated 12-hex MAC forms and malformed
 IPv6 with a dotted tail are not detected here. Shorthand version-like numbers in prose
-can be refused as ambiguous.
+can be refused as ambiguous. Defang normalization covers only the forms listed above:
+other encodings (for example `hxxp`, `[at]`, full-width or Unicode dots, or unbracketed
+spaces such as `10 . 0 . 0 . 5`) are not normalized. Shorthand IPv4 preceded by a dash
+or underscore (`ip-127.1`, `ip_127.1`) is not refused, and shorthand preceded by a digit
+and dot (`2026.10.1`) is read as part of a longer dotted number, not as shorthand. Public
+IPv6 suffixes that begin with a private-looking group are refused fail-closed.
 
 All provider claims are source-reported, unverified and advisory-only. They are
 never converted into `observations`, known facts, `knowledge_refs`, evidence,
