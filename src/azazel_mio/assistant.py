@@ -657,7 +657,7 @@ def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] 
         as_of = _fabric_instant(snapshot["as_of"])
         generated = _fabric_instant(data["generated_at"])
         expires = _fabric_instant(data["expires_at"])
-        if as_of > generated or expires <= generated:
+        if as_of > generated or generated > now or expires <= generated:
             raise _FabricReject
         facts, fact_ids = [], []
         for raw in _fabric_list(data["facts"], low=0, high=64):
@@ -1029,4 +1029,6 @@ class AssistantCore:
                     "dependency_outcome": {"knowledge": ContextDependencyOutcome.UNAVAILABLE.value,
                                            "deception": ContextDependencyOutcome.UNAVAILABLE.value},
                 })
+                payload.pop("knowledge_context_response_advisory", None)
+                payload.pop("fabric_knowledge_context_advisory", None)
         return Assistance(payload)

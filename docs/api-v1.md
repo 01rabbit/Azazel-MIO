@@ -186,13 +186,17 @@ or directive-shaped keys such as `action` or `command` are rejected), exact
 list caps (64 facts, 32 inferences, 8 provenance/method refs, 16 basis facts,
 16 unknowns/limitations), explicit-offset instants with
 `as_of <= generated_at < expires_at`, distinct and non-dangling fact/inference
-IDs, and node (2048), depth (8) and canonical UTF-8 size (128 KiB) limits. Any failure
-rejects the whole payload with no partial projection. A response with neither
-facts nor inferences is still useful when it carries bounded unknowns or limitations;
+IDs, and a MIO-specific stricter node cap (2048; Fabric does not define a
+node-count cap), depth (8) and canonical UTF-8 size (128 KiB) limits. A payload
+can therefore be valid under Fabric's walker yet rejected by MIO's additional
+resource bound. Any failure rejects the whole payload with no partial
+projection. A response with neither facts nor inferences is still useful when
+it carries bounded unknowns or limitations;
 only an entirely empty result is rejected. A response whose
 `expires_at` is not later than the caller's `now` is rejected as expired
-(`dependency_outcome.knowledge=expired`). Rejection adds
-`KNOWLEDGE_CONTEXT_REJECTED` and leaves the rest of the result unchanged.
+(`dependency_outcome.knowledge=expired`); future-dated `generated_at` values are
+rejected. Rejection adds `KNOWLEDGE_CONTEXT_REJECTED` and leaves the rest of the
+result unchanged.
 
 A valid response adds a separate top-level `fabric_knowledge_context_advisory`
 object (absent otherwise, so the default output shape is unchanged):
@@ -212,7 +216,13 @@ All provider claims are source-reported, unverified and advisory-only. They are
 never converted into `observations`, known facts, `knowledge_refs`, evidence,
 authorization or model prompt material, and free text is carried as inert data.
 A valid response marks `dependency_outcome.knowledge` `available` only when the
-frame has no stronger outcome. Construction does not authenticate the provider.
+frame has no stronger outcome. This means the response passed MIO validation
+and is within its time window; it does not mean its claims were independently
+corroborated. Request and correlation identifiers are checked for shape only:
+this API receives no corresponding request and does not verify that they match
+one. Construction does not authenticate the provider. If a coordinated
+explanation is superseded, cancelled, or cannot start because of backpressure,
+its Knowledge advisories are omitted with the other non-current material.
 
 This is an in-process input seam only. Production networking, authentication
 principal and token rotation, TLS, privacy/retention approval, and request

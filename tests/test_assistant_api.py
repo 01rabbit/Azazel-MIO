@@ -542,7 +542,9 @@ def test_coordinated_assistant_discards_concurrent_stale_model_completion(monkey
     coordinator = ReasoningCoordinator()
     result = {}
     worker = threading.Thread(target=lambda: result.setdefault('old', AssistantCore(
-        model=object(), coordinator=coordinator).explain(frame(), now=NOW).to_dict()))
+        model=object(), coordinator=coordinator).explain(
+            frame(), now=NOW,
+            fabric_knowledge_context_response=_FabricAdv(fabric_response())).to_dict()))
     worker.start()
     assert entered.wait(3)
     newer = MioSituationFrame.build(frame_id='frame-2', trace_id='trace-1', created_at=NOW,
@@ -558,6 +560,7 @@ def test_coordinated_assistant_discards_concurrent_stale_model_completion(monkey
     assert result['old']['cycle_disposition'] == 'stale_cycle_superseded'
     assert result['old']['observations'] == result['old']['next_checks'] == []
     assert result['old']['knowledge'] == result['old']['hypotheses'] == []
+    assert 'fabric_knowledge_context_advisory' not in result['old']
     assert coordinator.current('trace-1') is None
 
 
@@ -1785,6 +1788,16 @@ def test_fabric_response_expired_is_rejected_as_expired():
     assert 'fabric_knowledge_context_advisory' not in out
     assert out['dependency_outcome']['knowledge'] == 'expired'
     assert out['unknowns'][:2] == ['KNOWLEDGE_CONTEXT_EXPIRED', 'KNOWLEDGE_CONTEXT_REJECTED']
+
+
+def test_fabric_response_with_future_generated_at_is_rejected():
+    payload = fabric_response()
+    payload['generated_at'] = '2026-10-31T00:00:01Z'
+    out = AssistantCore().explain(frame(), now=NOW,
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+    assert 'fabric_knowledge_context_advisory' not in out
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert out['unknowns'][0] == 'KNOWLEDGE_CONTEXT_REJECTED'
 
 
 def test_fabric_directive_shaped_text_is_inert_data():
