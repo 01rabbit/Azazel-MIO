@@ -10,6 +10,7 @@ import ipaddress
 import json
 import re
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
 from .broker import CapabilityBroker
 from .contracts import ContextDependencyOutcome, MioSituationFrame, ReasoningState
@@ -651,11 +652,50 @@ _FABRIC_MAC_LITERAL = re.compile(
     r"|[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})(?![0-9A-Fa-f])")
 # Host-subject types whose value must be a DNS name or a global IP literal.
 _FABRIC_DNS_NAME_TYPES = frozenset({"host", "hostname", "fqdn", "domain"})
+# Typed address subjects (compared after _fabric_type_key: lower case, separators as "_"). Their value must be
+# exactly one global IP literal. Prefix and suffix rules in _fabric_is_address_type cover the other spellings.
+_FABRIC_IP_TYPES = frozenset({"ip", "ipv4", "ipv6", "address", "addr", "ipaddress", "ip_address", "ip_addr"})
+# URL/URI subject types: the host of the value must pass the host-subject rules.
+_FABRIC_URL_TYPES = frozenset({"url", "uri", "link", "href"})
 # Clearly local-only host names. A bare word such as "internal" is ordinary prose and is not matched.
 _FABRIC_LOCAL_HOST = re.compile(
     r"(?i)(?<![A-Za-z0-9-])(?:localhost|(?:[A-Za-z0-9-]+\.)+(?:localhost|localdomain|local|internal|lan|home\.arpa|"
     r"corp|home|intranet|private|test|example|invalid))"
     r"(?![A-Za-z0-9-]|\.[A-Za-z0-9-])")
+
+
+# IPv6 transition and tunneling forms that carry an IPv4 address. Their global status depends on the Python
+# ipaddress table, so the embedded IPv4 is extracted and rechecked here rather than trusting ``is_global``.
+_IPV6_IPV4_COMPATIBLE = ipaddress.IPv6Network("::/96")
+_IPV6_NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+_IPV6_NAT64_LOCAL_USE = ipaddress.IPv6Network("64:ff9b:1::/48")
+_IPV6_6TO4 = ipaddress.IPv6Network("2002::/16")
+_IPV6_TEREDO = ipaddress.IPv6Network("2001::/32")
+
+
+def _fabric_global_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Globally routable public address, independent of Python ipaddress table differences.
+
+    IPv4-mapped IPv6 is refused (it is an IPv6 literal). IPv4-compatible and local-use NAT64 forms are refused
+    outright. NAT64 well-known (64:ff9b::/96), 6to4 (2002::/16) and Teredo (2001::/32) must carry global IPv4:
+    the embedded address (Teredo: both the server and the XOR-obfuscated client address) is rechecked.
+    """
+    if not isinstance(address, ipaddress.IPv6Address):
+        return address.is_global
+    if address.ipv4_mapped is not None or address in _IPV6_IPV4_COMPATIBLE or address in _IPV6_NAT64_LOCAL_USE:
+        return False
+    if not address.is_global:
+        return False
+    packed = address.packed
+    if address in _IPV6_NAT64_WELL_KNOWN:
+        embedded = [packed[12:16]]
+    elif address in _IPV6_6TO4:
+        embedded = [packed[2:6]]
+    elif address in _IPV6_TEREDO:
+        embedded = [packed[4:8], bytes(b ^ 0xFF for b in packed[12:16])]
+    else:
+        return True
+    return all(ipaddress.IPv4Address(raw).is_global for raw in embedded)
 
 
 def _fabric_short_ipv4_refused(token: str) -> bool:
@@ -745,9 +785,32 @@ def _fabric_literals_clean(text: str) -> bool:
             except ValueError:
                 continue
             # IPv4-mapped literals are refused even when the dotted tail is global: they are IPv6 literals.
-            if address.ipv4_mapped is not None or not address.is_global:
+            if not _fabric_global_ip(address):
                 return False
-    return _FABRIC_LOCAL_HOST.search(text) is None
+    return _FABRIC_LOCAL_HOST.search(text) is None and _fabric_embedded_urls_clean(text)
+
+
+_FABRIC_EMBEDDED_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]{1,15}://[^\s<>\"'`]+")
+
+
+def _fabric_embedded_urls_clean(text: str) -> bool:
+    """Every scheme://... substring in copied text must have a host that passes the strict host rules, whatever
+    the entity_type. Userinfo, percent-encoding or backslashes in the authority, bad ports and missing hosts are
+    refused as ambiguous (they are common host-confusion bypasses)."""
+    for match in _FABRIC_EMBEDDED_URL.finditer(text):
+        url = match.group(0).rstrip(".,;:!?)]}")
+        authority = re.split(r"[/?#]", url.split("://", 1)[1], maxsplit=1)[0]
+        if "@" in authority or "%" in authority or "\\" in authority:
+            return False
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname
+            parts.port  # noqa: B018 - validates the port
+        except ValueError:
+            return False
+        if not host or not _fabric_host_value_ok(host):
+            return False
+    return True
 
 
 def _fabric_copied_ident(value: Any, limit: int) -> str:
@@ -775,33 +838,63 @@ def _fabric_host_value_ok(text: str) -> bool:
     ("0x1", "0x7f"): that is shorthand for an address, not a DNS name. Arbitrary privately owned names under
     a public suffix are not distinguishable here; upstream policy and source controls remain required.
     """
+    if "/" in text or "@" in text:
+        return False  # a URL or userinfo form is not a bare host subject
     try:
-        return ipaddress.ip_address(text).is_global
+        address = ipaddress.ip_address(text)
     except ValueError:
         labels = text.split(".")
         return (len(labels) > 1 and all(labels) and re.fullmatch(r"[0-9]+", labels[-1]) is None
                 and re.fullmatch(r"0[xX][0-9A-Fa-f]*", labels[-1]) is None)
+    return _fabric_global_ip(address)
 
 
 def _fabric_ip_value_ok(text: str) -> bool:
-    """A typed ip subject is exactly one globally routable IP literal; shorthand, dotted names and IPv4-mapped
-    IPv6 forms are refused."""
+    """A typed address subject is exactly one globally routable IP literal; shorthand, integer or hex IPv4,
+    dotted names, IPv4-mapped IPv6 and transition forms carrying non-global IPv4 are refused."""
     try:
         address = ipaddress.ip_address(text)
     except ValueError:
         return False
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+    return _fabric_global_ip(address)
+
+
+def _fabric_url_host_ok(text: str) -> bool:
+    """A URL/URI subject must name a host that passes the host-subject rules (global IP literal or a dotted name
+    without shorthand last label). Shorthand, integer and hex hosts ("http://127.1/", "http://2130706433/") are
+    refused, as are hosts that are missing or unparseable."""
+    if any(ch.isspace() for ch in text) or "\\" in text:
         return False
-    return address.is_global
+    candidate = text if "://" in text else "//" + text
+    try:
+        host = urlsplit(candidate).hostname
+    except ValueError:
+        return False
+    return bool(host) and _fabric_host_value_ok(host)
+
+
+def _fabric_type_key(entity_type: str) -> str:
+    return re.sub(r"[\s\-.]+", "_", entity_type.strip().lower())
+
+
+def _fabric_is_address_type(key: str) -> bool:
+    return (key in _FABRIC_IP_TYPES or key.startswith(("ip", "ipv")) or key.endswith(("_ip", "_addr", "_ipv4", "_ipv6")))
+
+
+def _fabric_is_url_type(key: str) -> bool:
+    return key in _FABRIC_URL_TYPES or key.endswith(("_url", "_uri"))
 
 
 def _fabric_subject(value: Any) -> dict[str, str]:
     value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
     entity_type = _fabric_copied_ident(value["entity_type"], 64)
     text = _fabric_copied_text(value["value"], 256)
-    if entity_type.lower() == "ip" and not _fabric_ip_value_ok(text):
+    key = _fabric_type_key(entity_type)
+    if _fabric_is_address_type(key) and not _fabric_ip_value_ok(text):
         raise _FabricReject
-    if entity_type.lower() in _FABRIC_DNS_NAME_TYPES and not _fabric_host_value_ok(text):
+    if _fabric_is_url_type(key) and not _fabric_url_host_ok(text):
+        raise _FabricReject
+    if key in _FABRIC_DNS_NAME_TYPES and not _fabric_host_value_ok(text):
         raise _FabricReject
     return {"entity_type": entity_type, "value": text}
 

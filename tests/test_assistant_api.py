@@ -2297,3 +2297,93 @@ def test_fabric_bad_basis_reference_still_rejects_after_local_remapping(basis):
     payload['facts'] = [dict(payload['facts'][0], fact_id='ev-internal-f1')]
     payload['inferences'][0]['basis_fact_ids'] = basis
     _assert_refused(payload)
+
+
+# Typed address subjects (ipv4/ipv6/ip_address/address/src_ip, any spelling) must be exactly one global IP literal.
+@pytest.mark.parametrize('entity_type', ['ipv4', 'IPv6', 'ip_address', 'address', 'src_ip', 'dst-ip', 'ip address'])
+@pytest.mark.parametrize('value', ['127.1', '10.1', '2130706433', '3232235777', '0x7f000001', '0xc0.0xa8.1',
+                                   '10.0.0.5', '::ffff:8.8.8.8', '64:ff9b::a00:1', '64:ff9b:1::808:808',
+                                   '2002:a00:1::1', '2001:0:4136:e378:8000:63bf:f5ff:fffe', '::1.2.3.4'])
+def test_fabric_typed_address_subject_refuses_shorthand_integer_hex_and_transition_forms(entity_type, value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': value}
+    out = _assert_refused(payload)
+    assert value not in json.dumps(out)
+
+
+# URL/URI subjects: the embedded host must not be shorthand, integer, hex or a non-global address.
+@pytest.mark.parametrize('entity_type', ['url', 'URI', 'link', 'href', 'source_url'])
+@pytest.mark.parametrize('value', ['http://127.1/', 'http://2130706433/', 'http://0x7f000001/',
+                                   'https://0x7f.0x1/login', 'http://10.0.0.5/', 'http://0300.0.0.1/',
+                                   'http://[::ffff:8.8.8.8]/', 'http://[fd00::1]:8080/path',
+                                   'http://[64:ff9b::a00:1]/', 'http://user@10.0.0.5/', 'http://127.0.0.1.'])
+def test_fabric_url_subject_refuses_non_global_or_shorthand_host(entity_type, value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': value}
+    out = _assert_refused(payload)
+    assert value not in json.dumps(out)
+
+
+@pytest.mark.parametrize('value', ['https://host-1.example.com/path', 'https://8.8.8.8/',
+                                   'https://[2606:4700:4700::1111]/'])
+def test_fabric_url_subject_with_public_host_remains_usable(value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'url', 'value': value}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': 'url', 'value': value}
+
+
+# Any entity_type (and prose) carrying a URL is screened by host, not only entity_type=url.
+@pytest.mark.parametrize('entity_type', ['asset', 'note', 'service'])
+@pytest.mark.parametrize('value', ['http://127.1/', 'http://2130706433/', 'http://0x7f000001/',
+                                   'https://0x7f.0x1/x', 'see http://10.1/ now', 'http://user@example.com/',
+                                   'http://example.com%2f@127.1/', 'http://localhost/'])
+def test_fabric_any_subject_type_refuses_private_url_host(entity_type, value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': entity_type, 'value': value}
+    out = _assert_refused(payload)
+    assert value not in json.dumps(out)
+
+
+def test_fabric_prose_url_with_shorthand_host_is_refused():
+    payload = fabric_response()
+    payload['facts'][0]['value'] = 'fetched from http://127.1/admin'
+    _assert_refused(payload)
+
+
+@pytest.mark.parametrize('value', ['https://example.com/a', 'http://8.8.8.8/', 'version 1.2.3 on 2026-10-30'])
+def test_fabric_any_subject_type_keeps_public_url_and_ordinary_prose(value):
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'asset', 'value': value}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': 'asset', 'value': value}
+
+
+def test_fabric_ip_subject_accepts_global_literal_with_normalised_type_spelling():
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'IP-Address', 'value': '8.8.8.8'}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': 'IP-Address', 'value': '8.8.8.8'}
+
+
+def test_fabric_non_address_subject_type_keeps_ordinary_prose():
+    payload = fabric_response()
+    payload['facts'][0]['subject'] = {'entity_type': 'asset', 'value': 'Build 10.1.2 host'}
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['subject'] == {'entity_type': 'asset', 'value': 'Build 10.1.2 host'}
+
+
+# The global-IP check does not rely on Python's table for transition/tunneling forms: embedded IPv4 is rechecked.
+@pytest.mark.parametrize('literal', ['64:ff9b::a00:1', '64:ff9b:1::1', '2002:c0a8:101::1', '::a00:1',
+                                    '2001:0:4136:e378:8000:63bf:f5ff:fffe'])
+def test_fabric_global_ip_refuses_private_embedded_ipv4_transition_forms(literal):
+    import ipaddress
+    from azazel_mio.assistant import _fabric_global_ip
+    assert _fabric_global_ip(ipaddress.IPv6Address(literal)) is False
+
+
+@pytest.mark.parametrize('literal', ['2606:4700:4700::1111', '2a00:1450:4001::200e'])
+def test_fabric_global_ip_keeps_public_ipv6(literal):
+    import ipaddress
+    from azazel_mio.assistant import _fabric_global_ip
+    assert _fabric_global_ip(ipaddress.IPv6Address(literal)) is True

@@ -251,14 +251,20 @@ Ordinary decimal, version and unit text such as `confidence 0.75`, `version 0.9.
 and an unlabelled dotted version such as `10.1.2` remains usable. As a fail-closed
 consequence, a public address with a private-looking group after a colon (for example
 `2606:4700:fd00::1`) is also refused. Ordinary version and date text such as `15.1.2`,
-`2026-10-30` and `23:00:00` remains usable. A typed `ip` subject (`entity_type` `ip`,
-case-insensitive) must be exactly one globally routable IP literal: shorthand, private or
+`2026-10-30` and `23:00:00` remains usable. Any `scheme://` URL embedded in a copied subject or prose string, whatever its `entity_type`,
+has its host parsed and screened with the host rules below: shorthand, integer and hex hosts
+(`http://127.1/`, `http://2130706433/`, `http://0x7f.1/`), non-global IP literals, single-label
+hosts, userinfo (`@`), percent-encoded or backslash authorities and invalid ports are refused,
+while public hosts (`https://example.com/a`, `http://8.8.8.8/`) remain usable.
+A typed address subject (`entity_type` `ip` and its aliases such as `ipv4`, `ipv6`, `ip_address`,
+`*_ip`, `*_addr`, case-insensitive) must be exactly one globally routable IP literal: shorthand, private or
 reserved addresses, IPv4-mapped IPv6 and dotted names are refused. Host subjects (`host`,
 `hostname`, `fqdn`, `domain`) must be a global IP literal or a dotted name whose final label
 is not all-numeric and not hex-like address notation; a bare single label is refused. A final label matching
 `0[xX][0-9A-Fa-f]*` (for example `127.0x1`, `0x7f.0x1`, `10.0x1`) is refused because inet_aton-style parsers
 read it as address shorthand, while ordinary names such as `host-1.example.com` remain usable.
-Other entity types are not affected.
+Other entity types do not receive address-type-specific validation, but every embedded `scheme://` URL in copied
+subject and prose strings is still screened by its host.
 
 Residual limits: an arbitrary privately owned FQDN under a public suffix (for example
 an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0
