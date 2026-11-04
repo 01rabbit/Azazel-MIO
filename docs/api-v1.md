@@ -231,8 +231,12 @@ hex-letter or separator-colon boundary, except a decimal digit after a decimal d
 colon that begins or continues `::`, so a glued prefix (`srcfe80::1`), a digit-prefixed
 prefix (`1fe80::1`) or a separator prefix (`Dec:fd00::1`) cannot hide a non-global suffix.
 Shorthand IPv4 is interpreted in prose only when an address label sits immediately before
-it: `ip`, `ipv4`, `src`, `source`, `dst`, `destination`, `addr`, `address` or `host`, followed by
-optional spaces, colon, equal sign or dot (`ip 127.1`, `src:10.1`, `dst=10.1.2`). A label may be
+it. Short protocol-like labels `ip`, `ipv4`, `src`, `dst` and `addr` may be followed by optional
+spaces, colon, equal sign or dot (`ip 127.1`, `src:10.1`, `dst=10.1.2`). Full English labels
+`source`, `destination`, `address` and `host` count only when followed by an explicit colon or
+equal sign, optionally followed by spaces (`source:127.1`, `destination=192.168.1`,
+`host: 10.1.2`). Bare phrase forms such as `host 10.1.2`, `source 127.1` or
+`The destination. 10.5 GB` are treated as prose and are not refused. A short label may be
 glued to the number (`ip127.1`, `src10.1`) and is still refused when the shorthand expands to a
 non-global address. A letter before the label does not start one (`tip 0.75` is ordinary text).
 Ordinary decimal, version and unit text such as `confidence 0.75`, `version 0.9.1`, `10.5 GB`
@@ -251,7 +255,8 @@ policy and source controls remain required. Unseparated 12-hex MAC forms and mal
 IPv6 with a dotted tail are not detected here. Disambiguation is conservative: unlabelled
 shorthand notation (for example a bare `127.1` or `10.1` in prose) is treated as ambiguous
 prose and preserved, not classified as an IP, so an address written without one of the labels
-above is not refused. Defang normalization covers only the forms listed above:
+above is not refused. Bare full-word phrase forms (for example `host 127.1` or `address 10.1`
+without a colon or equal sign) are likewise preserved as prose, a residual case. Defang normalization covers only the forms listed above:
 other encodings (for example `hxxp`, `[at]`, full-width or Unicode dots, or unbracketed
 spaces such as `10 . 0 . 0 . 5`) are not normalized. Shorthand separated from its label by a
 dash or underscore (`ip-127.1`, `ip_127.1`) is not refused, and shorthand preceded by a digit

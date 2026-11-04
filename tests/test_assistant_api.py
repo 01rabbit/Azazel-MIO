@@ -2124,8 +2124,8 @@ def test_fabric_version_and_date_prose_is_not_mistaken_for_mac_or_shorthand():
 # Labelled numeric shorthand such as "ip 127.1" is refused, not treated as a public name (review finding 3).
 # Unlabelled shorthand in prose is ambiguous and is preserved (see docs/api-v1.md).
 LABELED_SHORTHAND_PROSE = [
-    'ip 127.1', 'IP: 10.1', 'ipv4=10.1.2', 'src 10.1', 'source:127.1', 'dst 10.1', 'destination=192.168.1',
-    'addr 127.1', 'address: 10.1', 'host 10.1.2', 'ip[.]127.1', 'src[.]10.1',
+    'ip 127.1', 'IP: 10.1', 'ipv4=10.1.2', 'src 10.1', 'dst 10.1', 'addr 127.1', 'ip[.]127.1', 'src[.]10.1',
+    'source:127.1', 'destination=192.168.1', 'address:10.1', 'host:10.1.2', 'host: 10.1.2',
 ]
 
 
@@ -2134,6 +2134,17 @@ def test_fabric_labelled_numeric_shorthand_in_prose_is_refused(shorthand):
     for payload in _prose_cases(shorthand):
         out = _assert_refused(payload)
         assert shorthand not in json.dumps(out)
+
+
+# Full English words without an explicit colon or equal sign are prose, not address labels.
+@pytest.mark.parametrize('text', [
+    'The destination. 10.5 GB were sent', 'Source 0.75 confidence', 'host 10.5 GB transferred',
+])
+def test_fabric_bare_full_word_label_prose_remains_usable(text):
+    payload = fabric_response()
+    payload['facts'][0]['value'] = text
+    adv = run_fabric(payload)['fabric_knowledge_context_advisory']
+    assert adv['facts'][0]['value'] == text
 
 
 # Ordinary decimal, version and unit text is not mistaken for shorthand IPv4 (review finding: false positive).
