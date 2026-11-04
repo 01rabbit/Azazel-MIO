@@ -58,14 +58,28 @@ model.
 `tests/test_real_model_smoke_tool.py` runs with no model and no network. It
 covers the allowlist, remote-tag refusal, digest checks, the task-sequence
 guard, and MIO's degradation to its static fallback when the transport raises
-`MioModelUnavailable` (one attempt, no leaked exception text or prompt). It
-also drives `_run_with_deadline` and the CLI against a fake local API, asserting
-that prompts and model response text are absent from output and that the
-artifact digest is omitted by default and printed only with
-`--include-artifact-digest`. The fake-API run returns a schema-valid synthetic
-response through all three MIO tasks and checks the accepted report shape. It
-does not make an HTTP request or prove a real model's behavior; malformed and
-truncated transport responses are covered by separate unit tests.
+`MioModelUnavailable` (one attempt, no leaked exception text or prompt).
+
+The `_api_json` tests replace `HTTPConnection` with an in-memory fake that
+records connect, request, and close events and never opens a socket. They
+assert the closed reason for redirect, non-200 status, timeout, `OSError`,
+`http.client.HTTPException`, oversized body, invalid JSON, and non-object JSON
+responses, and that the connection is closed on every path. They also assert
+the exact `/api/chat` payload: `stream` false, `think` false, `temperature` 0,
+`num_ctx` 4096, `num_predict` 768, and exactly one synthetic `user` message.
+The Ollama version must match a bounded, safe character set. The transport
+keeps the first failure reason.
+
+The fake-API run stubs `_api_json` (not `HTTPConnection`) and drives `run` and
+`_run_with_deadline` through all three MIO tasks, checking the accepted report
+shape. The CLI tests stub `run` itself. They check the closed reason printed
+for an overall-deadline expiry and for an arbitrary exception containing secret
+text, and they check that the artifact digest is omitted by default and printed
+only with `--include-artifact-digest`. Prompts and model response text must be
+absent from the output. A test also checks that a `None` prior `SIGALRM`
+handler is restored as `SIG_DFL`. None of these tests make a real HTTP request
+or prove a real model's behavior. Malformed and truncated transport responses
+are covered by separate unit tests.
 
 The deadline tests use `SIGALRM`/`setitimer` and are skipped on platforms
 without POSIX signals.

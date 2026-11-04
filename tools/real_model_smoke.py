@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-from http.client import HTTPConnection, HTTPResponse
+from http.client import HTTPConnection, HTTPException, HTTPResponse
 import json
 import re
 import signal
@@ -28,6 +28,7 @@ RUN_TIMEOUT_SECONDS = 150
 MAX_RESPONSE_BYTES = 1_000_000
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_OLLAMA_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}\Z")
 _REMOTE_TAG_WORDS = frozenset({"cloud", "remote"})
 _EXPECTED_TASK_SEQUENCE = ("generate_hypotheses", "identify_evidence_gaps", "recommend")
 MAX_MODEL_TASKS = len(_EXPECTED_TASK_SEQUENCE)
@@ -73,7 +74,7 @@ def _api_json(path: str, *, method: str = "GET", payload: dict | None = None) ->
         value = json.loads(raw)
     except SmokeFailure:
         raise
-    except (TimeoutError, socket.timeout, OSError):
+    except (TimeoutError, socket.timeout, OSError, HTTPException):
         raise SmokeFailure("local_ollama_unavailable") from None
     except (ValueError, json.JSONDecodeError):
         raise SmokeFailure("local_ollama_response_invalid") from None
@@ -124,12 +125,17 @@ class LocalOllamaStructuredTransport:
         self.last_model = model
         self.model_digest = _local_model_digest(model)
         api_version = _api_json("/api/version").get("version")
-        if type(api_version) is not str or not api_version or len(api_version) > 64:
+        if type(api_version) is not str or not _OLLAMA_VERSION.fullmatch(api_version):
             raise SmokeFailure("local_ollama_version_invalid")
         self.ollama_version = api_version
         self.calls: list[dict[str, int | float | str | None]] = []
         self.attempted_tasks: list[str] = []
         self.failure_code: str | None = None
+
+    def _record_failure(self, code: str) -> None:
+        # Keep the first closed reason; later checks must not overwrite it.
+        if self.failure_code is None:
+            self.failure_code = code
 
     def __call__(self, task: str, prompt: str) -> dict:
         # Enforce the exact ordered task sequence before any request is built
@@ -137,7 +143,7 @@ class LocalOllamaStructuredTransport:
         attempted = self.attempted_tasks
         if (len(attempted) >= MAX_MODEL_TASKS
                 or task != _EXPECTED_TASK_SEQUENCE[len(attempted)]):
-            self.failure_code = "task_sequence_refused"
+            self._record_failure("task_sequence_refused")
             raise MioModelUnavailable("task_sequence_refused") from None
         attempted.append(task)
         started = time.monotonic()
@@ -167,15 +173,15 @@ class LocalOllamaStructuredTransport:
             if _local_model_digest(self.last_model) != self.model_digest:
                 raise SmokeFailure("model_artifact_changed")
         except SmokeFailure as exc:
-            self.failure_code = exc.reason
+            self._record_failure(exc.reason)
             raise MioModelUnavailable("local_model_unavailable_or_invalid") from None
         except (ValueError, json.JSONDecodeError):
-            self.failure_code = "local_model_response_invalid"
+            self._record_failure("local_model_response_invalid")
             raise MioModelUnavailable("local_model_response_invalid") from None
         except Exception:
             # Do not let provider diagnostics, prompts or generated text enter
             # MIO's trace or the operator-facing smoke output.
-            self.failure_code = "local_model_unavailable_or_invalid"
+            self._record_failure("local_model_unavailable_or_invalid")
             raise MioModelUnavailable("local_model_unavailable_or_invalid") from None
 
         self.calls.append({
@@ -210,22 +216,34 @@ def _frame(now: str) -> MioSituationFrame:
     )
 
 
+def _restore_sigalrm(previous_handler) -> None:
+    # signal.signal() returns None when the prior handler was not installed
+    # from Python, and passing None back raises TypeError. SIG_DFL is the
+    # closest restorable value in that case.
+    signal.signal(signal.SIGALRM,
+                  signal.SIG_DFL if previous_handler is None else previous_handler)
+
+
 def run(model: str, *, include_artifact_digest: bool = False) -> dict:
     if not hasattr(signal, "setitimer"):
         raise SmokeFailure("total_deadline_unavailable")
     previous_handler = None
+    installed = False
     try:
         previous_handler = signal.signal(signal.SIGALRM, _run_deadline)
+        installed = True
         signal.setitimer(signal.ITIMER_REAL, RUN_TIMEOUT_SECONDS)
     except (OSError, ValueError):
-        if previous_handler is not None:
-            signal.signal(signal.SIGALRM, previous_handler)
+        if installed:
+            _restore_sigalrm(previous_handler)
         raise SmokeFailure("total_deadline_unavailable") from None
     try:
         return _run_with_deadline(model, include_artifact_digest=include_artifact_digest)
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            _restore_sigalrm(previous_handler)
 
 
 def _run_with_deadline(model: str, *, include_artifact_digest: bool) -> dict:

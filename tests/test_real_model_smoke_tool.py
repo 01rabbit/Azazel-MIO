@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from io import BytesIO
+from http.client import BadStatusLine, IncompleteRead
 import json
 import os
 from pathlib import Path
+import signal
+import socket
 import sys
 import unittest
 import time
@@ -40,6 +43,45 @@ def _bare_transport(model: str, digest: str):
 
 def _no_network(*_args, **_kwargs):
     raise AssertionError("network must not be used by fake-API tests")
+
+
+class _FakeHTTPResponse:
+    def __init__(self, status, body, read_error=None):
+        self.status = status
+        self._body = body
+        self._read_error = read_error
+
+    def read(self, limit):
+        if self._read_error is not None:
+            raise self._read_error
+        return self._body[:limit]
+
+
+def _fake_connection_class(sent, *, status=200, body=b"{}", request_error=None,
+                           response_error=None, read_error=None):
+    """An in-memory stand-in for HTTPConnection; it never opens a socket.
+
+    Every connection event is appended to `sent` so tests can assert the
+    exact host, port, timeout, method, path, body and close behavior.
+    """
+    class FakeHTTPConnection:
+        def __init__(self, host, port, *, timeout):
+            sent.append(("connect", host, port, timeout))
+
+        def request(self, method, path, *, body, headers):
+            sent.append(("request", method, path, body, dict(headers)))
+            if request_error is not None:
+                raise request_error
+
+        def getresponse(self):
+            if response_error is not None:
+                raise response_error
+            return _FakeHTTPResponse(status, body, read_error)
+
+        def close(self):
+            sent.append(("close",))
+
+    return FakeHTTPConnection
 
 
 class RealModelSmokeBoundaryTests(unittest.TestCase):
@@ -223,6 +265,144 @@ class RealModelSmokeBoundaryTests(unittest.TestCase):
                 transport("recommend", "synthetic prompt")
             self.assertEqual(transport.failure_code, "task_sequence_refused")
             self.assertEqual(api.call_count, 3)
+
+    def test_api_json_maps_every_transport_failure_to_closed_reason(self):
+        cases = [
+            ({"status": 302}, "redirect_refused"),
+            ({"status": 500}, "local_ollama_unavailable"),
+            ({"status": 200, "request_error": TimeoutError()}, "local_ollama_unavailable"),
+            ({"status": 200, "response_error": socket.timeout()}, "local_ollama_unavailable"),
+            ({"status": 200, "request_error": ConnectionRefusedError()}, "local_ollama_unavailable"),
+            ({"status": 200, "response_error": BadStatusLine("SECRET")}, "local_ollama_unavailable"),
+            ({"status": 200, "read_error": IncompleteRead(b"SECRET")}, "local_ollama_unavailable"),
+            ({"status": 200, "body": b"{"}, "local_ollama_response_invalid"),
+            ({"status": 200, "body": b"[]"}, "local_ollama_response_invalid"),
+            ({"status": 200, "body": b'"text"'}, "local_ollama_response_invalid"),
+        ]
+        for kwargs, reason in cases:
+            with self.subTest(reason=reason, kwargs=kwargs):
+                sent = []
+                with patch.object(real_model_smoke, "HTTPConnection",
+                                  _fake_connection_class(sent, **kwargs)):
+                    with self.assertRaises(real_model_smoke.SmokeFailure) as caught:
+                        real_model_smoke._api_json("/api/version")
+                self.assertEqual(caught.exception.reason, reason)
+                self.assertEqual(sent[0], ("connect", "127.0.0.1", 11434, 35))
+                self.assertEqual(sent[-1], ("close",))
+
+    def test_api_json_refuses_oversized_body_and_accepts_bounded_object(self):
+        sent = []
+        with patch.object(real_model_smoke, "MAX_RESPONSE_BYTES", 3), \
+                patch.object(real_model_smoke, "HTTPConnection",
+                             _fake_connection_class(sent, body=b"four")):
+            with self.assertRaises(real_model_smoke.SmokeFailure) as caught:
+                real_model_smoke._api_json("/api/version")
+        self.assertEqual(caught.exception.reason, "response_too_large")
+        self.assertEqual(sent[-1], ("close",))
+
+        sent = []
+        with patch.object(real_model_smoke, "HTTPConnection",
+                          _fake_connection_class(sent, body=b'{"version":"0.1.0"}')):
+            self.assertEqual(real_model_smoke._api_json("/api/version"),
+                             {"version": "0.1.0"})
+        self.assertEqual(sent[-1], ("close",))
+
+    def test_chat_payload_has_exact_limits_and_one_synthetic_user_message(self):
+        digest = "a" * 64
+        prompt = "synthetic prompt"
+        schema = {"type": "object", "properties": {}}
+        reply = json.dumps({"model": "local:1b", "done_reason": "stop",
+                            "message": {"content": "{}"}}).encode()
+        sent = []
+        transport = _bare_transport("local:1b", digest)
+        with patch.object(real_model_smoke, "compiled_model_response_schema",
+                          return_value=schema), \
+                patch.object(real_model_smoke, "_local_model_digest", return_value=digest), \
+                patch.object(real_model_smoke, "HTTPConnection",
+                             _fake_connection_class(sent, body=reply)):
+            self.assertEqual(transport("generate_hypotheses", prompt), {})
+        requests = [event for event in sent if event[0] == "request"]
+        self.assertEqual(len(requests), 1)
+        _, method, path, body, headers = requests[0]
+        self.assertEqual((method, path), ("POST", "/api/chat"))
+        self.assertEqual(headers, {"Content-Type": "application/json"})
+        payload = json.loads(body)
+        self.assertEqual(payload, {
+            "model": "local:1b",
+            "messages": [{"role": "user", "content": prompt}],
+            "format": schema,
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 768},
+        })
+        self.assertEqual(len(payload["messages"]), 1)
+        self.assertEqual(payload["messages"][0]["role"], "user")
+
+    def test_failure_code_keeps_first_reason(self):
+        digest = "a" * 64
+        replies = [
+            {"model": "local:1b", "done_reason": "stop", "message": {"content": ""}},
+            {"model": "local:1b", "done_reason": "stop", "message": {"content": "[]"}},
+        ]
+        transport = _bare_transport("local:1b", digest)
+        with patch.object(real_model_smoke, "compiled_model_response_schema", return_value={}), \
+                patch.object(real_model_smoke, "_local_model_digest", return_value=digest), \
+                patch.object(real_model_smoke, "_api_json", side_effect=replies):
+            with self.assertRaises(MioModelUnavailable):
+                transport("generate_hypotheses", "synthetic prompt")
+            with self.assertRaises(MioModelUnavailable):
+                transport("identify_evidence_gaps", "synthetic prompt")
+        self.assertEqual(transport.failure_code, "content_missing")
+
+    def test_ollama_version_must_be_bounded_safe_characters(self):
+        for version in ("0.12.3", "0.13.0-rc1+build.7"):
+            with patch.object(real_model_smoke, "_local_model_digest", return_value="a" * 64), \
+                    patch.object(real_model_smoke, "_api_json", return_value={"version": version}):
+                transport = real_model_smoke.LocalOllamaStructuredTransport("local:1b")
+            self.assertEqual(transport.ollama_version, version)
+        for bad in ("0.1\x1b[31mSECRET", "0.1 SECRET", "", "v" * 65, "0.1\n", 7):
+            with self.subTest(version=bad), \
+                    patch.object(real_model_smoke, "_local_model_digest", return_value="a" * 64), \
+                    patch.object(real_model_smoke, "_api_json", return_value={"version": bad}):
+                with self.assertRaises(real_model_smoke.SmokeFailure) as caught:
+                    real_model_smoke.LocalOllamaStructuredTransport("local:1b")
+                self.assertEqual(caught.exception.reason, "local_ollama_version_invalid")
+
+    @POSIX_SIGNAL_DEADLINE
+    def test_none_previous_sigalrm_handler_is_restored_to_default(self):
+        installs = []
+
+        def fake_signal(signum, handler):
+            installs.append(handler)
+            if handler is None:
+                # Mirrors the real signal.signal, which rejects None.
+                raise TypeError("signal handler must be callable or SIG_DFL/SIG_IGN")
+            return None  # prior handler not installed from Python
+
+        with patch.object(real_model_smoke.signal, "signal", new=fake_signal), \
+                patch.object(real_model_smoke.signal, "setitimer", new=lambda *_args: 0), \
+                patch.object(real_model_smoke, "_run_with_deadline", return_value={"ok": True}):
+            self.assertEqual(real_model_smoke.run("qwen3.5:0.8b"), {"ok": True})
+        self.assertEqual(installs, [real_model_smoke._run_deadline, signal.SIG_DFL])
+
+    def test_cli_redacts_overall_deadline_and_arbitrary_exception(self):
+        argv = ["real_model_smoke", "--model", "qwen3.5:0.8b"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(real_model_smoke, "run",
+                             side_effect=real_model_smoke.RunDeadlineExceeded()), \
+                redirect_stdout(StringIO()) as output:
+            self.assertEqual(real_model_smoke.main(), 1)
+        self.assertEqual(output.getvalue().strip(),
+                         '{"reason": "overall_deadline_exceeded", "status": "failed"}')
+
+        with patch.object(sys, "argv", argv), \
+                patch.object(real_model_smoke, "run",
+                             side_effect=RuntimeError(f"{SECRET} prompt text")), \
+                redirect_stdout(StringIO()) as output:
+            self.assertEqual(real_model_smoke.main(), 1)
+        self.assertEqual(output.getvalue().strip(),
+                         '{"reason": "smoke_failed", "status": "failed"}')
+        self.assertNotIn(SECRET, output.getvalue())
 
     def test_cli_failure_prints_only_closed_reason(self):
         with patch.object(sys, "argv", ["real_model_smoke", "--model", "qwen3.5:0.8b"]), \
