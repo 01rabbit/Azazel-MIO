@@ -343,6 +343,11 @@ Independent review of exact candidate `e17c7129bafd223cb92a6502b5da38c8bf4e29cd`
 (base `5bb09c8d28c57604dc1c63903b98fed7587b49ea`) found two Medium and five
 Low findings, plus one Info. Both Medium findings were fixed:
 
+The independent follow-up on `59fb7785108b5ec00ae8ea6d8ba32ac6bae4c221`
+found no High/Medium findings. It noted remaining low-level coverage and
+wording gaps; the final review-limit section, emoji-path regression test and
+subshell-wrapped README commands address those points.
+
 - IR-01: Three mutation tests identified by review modified new `0400` objects
   without making them writable, so root could mask a permission failure. The
   mutation tests now set `0600` explicitly. Full tests were rerun as uid 1001.
@@ -384,6 +389,14 @@ Linux case-sensitive filesystem; it passed separately on macOS with CPython
 `3.14` using `unittest`. An ARM64 wheel was built and installed, and
 `mio-ir --help` succeeded. Wheel SHA-256:
 `cc5cafad996d54c1cbd3b696d150db6f28925c65dc984754f1abeab8cbbbf5e3`.
+The exact package-source wheel was retained at
+`/Users/mao/CodexWork/mio-ir11-rebase-evidence-20261105/final-84fb89/artifacts/azazel_mio-0.1.0.dev20261105+ir11r8-py3-none-any.whl`
+with SHA-256 `2904c0ba5e3c4417638ae602f2bf6f4a5b365c4d4f9ebf28e552f779c93489d4`.
+It installed in the isolated ARM64 container and the README's case-create,
+import, verify, timeline and report commands passed with five synthetic
+records; the output contained five events and valid evidence. Both wheel
+builds use the same package source/metadata commit and version; their distinct
+build hashes are recorded rather than substituting one for the other.
 
 ### Review limits
 
