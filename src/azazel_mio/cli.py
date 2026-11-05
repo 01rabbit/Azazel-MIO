@@ -280,7 +280,7 @@ def import_file(db, root, case, filename, fmt):
     try:
         metadata = source.lstat()
     except OSError as exc:
-        raise ValueError("source must be a regular non-symlink file") from exc
+        raise ValueError(f"unable to inspect source (errno {exc.errno})") from exc
     if not stat.S_ISREG(metadata.st_mode):
         raise ValueError("source must be a regular non-symlink file")
     try:

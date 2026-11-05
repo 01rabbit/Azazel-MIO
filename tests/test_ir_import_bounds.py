@@ -63,6 +63,14 @@ class ImportBoundsTests(unittest.TestCase):
         self.assertEqual(self.evidence_count(), 0)
         self.assertEqual(self.event_count(), 0)
 
+    def test_missing_source_reports_lstat_errno_without_path(self):
+        source = self.root / "missing.json"
+        with self.assertRaisesRegex(
+                ValueError, rf"unable to inspect source \(errno {errno.ENOENT}\)"):
+            import_file(self.db, self.root, self.case, source, "json")
+        self.assertEqual(self.evidence_count(), 0)
+        self.assertEqual(self.event_count(), 0)
+
     def test_bounded_read_rejects_input_larger_than_reported_stat_size(self):
         source = self.root / "grew-after-stat.json"
         source.write_bytes(json_payload(TEST_LIMIT + 1))
