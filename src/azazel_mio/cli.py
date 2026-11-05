@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sqlite3
 import stat
 import string
@@ -54,10 +55,23 @@ _EXPECTED_FOREIGN_KEYS = {
     "events": (("evidence", "evidence_id", "id"),),
 }
 
+def _canonical_sql(sql):
+    """Normalize stored DDL: SQLite drops IF NOT EXISTS but keeps the original whitespace."""
+    return " ".join(re.sub(r"\bIF NOT EXISTS\s+", "", sql).split()).rstrip(";")
+
+# Exact table DDL (after normalization). CHECK, DEFAULT, ON DELETE and similar clauses are
+# compared as text, so any semantic change to a table is rejected.
+_CANONICAL_TABLE_SQL = {
+    re.match(r"CREATE TABLE (\w+)", stmt).group(1): _canonical_sql(stmt) for stmt in SCHEMA_V1
+}
+
 def _validate_schema(db):
-    objects = db.execute("SELECT type,name FROM sqlite_master ORDER BY type,name").fetchall()
-    if objects != [("table", name) for name in sorted(_EXPECTED_COLUMNS)]:
+    objects = db.execute("SELECT type,name,sql FROM sqlite_master ORDER BY type,name").fetchall()
+    if [(kind, name) for kind, name, _ in objects] != [("table", name) for name in sorted(_EXPECTED_COLUMNS)]:
         raise ValueError("malformed storage schema")
+    for _, name, sql in objects:
+        if sql is None or _canonical_sql(sql) != _CANONICAL_TABLE_SQL[name]:
+            raise ValueError("malformed storage schema")
     for table, columns in _EXPECTED_COLUMNS.items():
         info = tuple((r[1], r[2], r[3], r[5]) for r in db.execute(f"PRAGMA table_info({table})"))
         fks = tuple((r[2], r[3], r[4]) for r in db.execute(f"PRAGMA foreign_key_list({table})"))

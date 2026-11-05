@@ -113,6 +113,31 @@ class IRSchemaVersionTests(unittest.TestCase):
         self.assertIn("readonly-ok", out.getvalue())
         self.assertEqual(self.database.read_bytes(), before)
 
+    def _assert_altered_rejected_unchanged(self, ddl, version):
+        with closing(sqlite3.connect(self.database)) as raw:
+            raw.executescript(ddl)
+            raw.execute(f"PRAGMA user_version={version}")
+            raw.commit()
+        before_bytes = self.database.read_bytes()
+        before = snapshot(self.database)
+        with self.assertRaisesRegex(ValueError, "malformed storage schema"):
+            connect(self.root)
+        self.assertEqual(snapshot(self.database), before)
+        self.assertEqual(snapshot(self.database)[1], version)
+        self.assertEqual(self.database.read_bytes(), before_bytes)
+
+    def test_altered_table_definitions_rejected_unchanged_v0_and_v1(self):
+        altered = {
+            "check": LEGACY_DDL.replace("name TEXT NOT NULL", "name TEXT NOT NULL CHECK(name<>'')", 1),
+            "default": LEGACY_DDL.replace("created TEXT NOT NULL", "created TEXT NOT NULL DEFAULT 'now'"),
+            "fk_action": LEGACY_DDL.replace("REFERENCES cases(id)", "REFERENCES cases(id) ON DELETE CASCADE"),
+        }
+        for label, ddl in altered.items():
+            for version in (0, 1):
+                with self.subTest(clause=label, version=version):
+                    self.database.unlink(missing_ok=True)
+                    self._assert_altered_rejected_unchanged(ddl, version)
+
     def test_migration_failure_rolls_back_without_partial_ddl(self):
         broken = (
             "CREATE TABLE cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL)",
