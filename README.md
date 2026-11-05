@@ -118,5 +118,6 @@ IssueやPull Requestには、目的、対象製品、入力と出力、権限へ
 
 `azazel-mio` is a stdlib-only, advisory-only Python 3.11+ package.
 Install from this checkout with `python -m pip install .`.
-See [internal API v1](docs/api-v1.md) and [source/license migration](docs/migration.md).
+See [internal API v1](docs/api-v1.md), [IR evidence import recovery](docs/ir-import-recovery.md),
+and [source/license migration](docs/migration.md).
 Products own transport, governance, persistence and deterministic enforcement.

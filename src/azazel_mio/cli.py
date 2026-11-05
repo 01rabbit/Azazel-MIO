@@ -167,11 +167,13 @@ def ensure_private_directory(path, label):
         if (not stat.S_ISDIR(metadata.st_mode) or not current_user_owns(metadata)
                 or stat.S_IMODE(metadata.st_mode) & 0o077):
             raise ValueError(f"unsafe {label}: expected an owned private directory")
+        return False
     else:
         metadata = path.lstat()
         if (not stat.S_ISDIR(metadata.st_mode) or not current_user_owns(metadata)
                 or stat.S_IMODE(metadata.st_mode) & 0o077):
             raise ValueError(f"unsafe {label}: expected an owned private directory")
+        return True
 
 def existing_single_link_file(path, label):
     try:
@@ -205,7 +207,7 @@ def recover_interrupted_object_temp(path, destination):
         # The process stopped after link() but before removing the temp link.
         os.unlink(path)
     else:
-        raise ValueError("unsafe interrupted object temporary")
+        raise ValueError(f"unsafe interrupted object temporary: {path}")
 
 def unlink_staged_object_if_ours(path, destination, identity):
     if identity is None:
@@ -292,7 +294,7 @@ def verify(db, root, case):
         if directory_safe:
             try:
                 metadata = existing_single_link_file(path, "stored object")
-            except ValueError:
+        except ValueError:
                 metadata = None
             if metadata is not None and metadata.st_size <= MAX_BYTES:
                 try:
@@ -469,7 +471,9 @@ def import_file(db, root, case, filename, fmt):
     records = parse_records(raw, fmt)
     digest = hashlib.sha256(raw).hexdigest()
     directory = root / "objects"
-    ensure_private_directory(directory, "object directory")
+    created_directory = ensure_private_directory(directory, "object directory")
+    if created_directory:
+        fsync_directory(root)
     destination = directory / digest
     staging = directory / f".mio-object-{digest}.tmp"
     # Take the SQLite write lock before publishing the object. Any other writer that could
@@ -505,8 +509,8 @@ def import_file(db, root, case, filename, fmt):
                     fd = None
                     handle.write(raw)
                     handle.flush()
+                        os.fchmod(handle.fileno(), 0o400)
                     os.fsync(handle.fileno())
-                os.chmod(staging, 0o400)
                 # Publish atomically without replacing a path another writer created after
                 # the initial existence check. Keep the staged inode so failure cleanup can
                 # prove that the destination still names the file this call published. Set
@@ -571,7 +575,11 @@ def import_file(db, root, case, filename, fmt):
             pass
         finally:
             if not had_transaction and db.in_transaction:
-                db.rollback()
+                try:
+                    db.rollback()
+                except BaseException:
+                    # Preserve the original import error; caller closes a failed connection.
+                    pass
         raise
     return eid
 
