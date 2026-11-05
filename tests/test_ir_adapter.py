@@ -266,13 +266,42 @@ def test_verified_valid_must_be_strict_bool(monkeypatch):
         assess_ir_candidates(CASE, _timeline((1, 101, 5)), _verified((101, 1)), [_candidate()])
 
 
-def test_timeline_ids_reject_bool_and_string(monkeypatch):
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("case_id", True),
+        ("case_id", "7"),
+        ("record", True),
+        ("record", "5"),
+    ],
+)
+def test_timeline_ids_reject_malformed_fields(monkeypatch, field, value):
+    _no_core(monkeypatch)
+    row = {"case_id": CASE, "event_id": 1, "evidence_id": 101, "record": 5}
+    row[field] = value
+    with pytest.raises(ValueError, match="timeline row has malformed ids"):
+        assess_ir_candidates(CASE, [row], _verified((101, True)), [_candidate()])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("case_id", True), ("case_id", "7")],
+)
+def test_verified_rows_reject_malformed_case_id(monkeypatch, field, value):
+    _no_core(monkeypatch)
+    row = {"case_id": CASE, "evidence_id": 101, "valid": True}
+    row[field] = value
+    with pytest.raises(ValueError, match="verified evidence row is malformed"):
+        assess_ir_candidates(CASE, _timeline((1, 101, 5)), [row], [_candidate()])
+
+
+def test_timeline_ids_reject_bool_event_and_string_evidence(monkeypatch):
     _no_core(monkeypatch)
     rows = [{"case_id": CASE, "event_id": True, "evidence_id": 101, "record": 5}]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="timeline row has malformed ids"):
         assess_ir_candidates(CASE, rows, _verified((101, True)), [_candidate()])
     rows = [{"case_id": CASE, "event_id": 1, "evidence_id": "101", "record": 5}]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="timeline row has malformed ids"):
         assess_ir_candidates(CASE, rows, _verified((101, True)), [_candidate()])
 
 
@@ -291,31 +320,31 @@ def _unchecked_port(**changes):
 
 
 @pytest.mark.parametrize(
-    "make_inputs",
+    "make_inputs,error",
     [
-        pytest.param(lambda: _unchecked_inputs(severity=True), id="severity-bool"),
-        pytest.param(lambda: _unchecked_inputs(severity=-1), id="severity-negative"),
-        pytest.param(lambda: _unchecked_inputs(severity=ir_adapter._MAX_SEVERITY + 1), id="severity-too-large"),
-        pytest.param(lambda: _unchecked_inputs(token_only=1), id="token-only-not-bool"),
-        pytest.param(lambda: _unchecked_inputs(deception_sid=0), id="deception-sid-zero"),
-        pytest.param(lambda: _unchecked_inputs(benign_classless="no"), id="benign-classless-not-bool"),
-        pytest.param(lambda: _unchecked_inputs(classes=["c2"]), id="classes-list"),
-        pytest.param(lambda: _unchecked_inputs(classes=("C2",)), id="class-not-canonical"),
-        pytest.param(lambda: _unchecked_inputs(classes=("c2",) * (ir_adapter._MAX_CLASSES + 1)), id="too-many-classes"),
-        pytest.param(lambda: _unchecked_inputs(ports=[PortSignal("web", 443)]), id="ports-list"),
-        pytest.param(lambda: _unchecked_inputs(ports=(("web", 443),)), id="port-not-signal"),
-        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(port=True),)), id="port-bool"),
-        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(port=0),)), id="port-zero"),
-        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(kind="WEB"),)), id="port-not-canonical"),
-        pytest.param(lambda: _unchecked_inputs(ports=(PortSignal("web", 443),) * (ir_adapter._MAX_PORTS + 1)), id="too-many-ports"),
-        pytest.param(lambda: _unchecked_inputs(action="Drop"), id="action-not-canonical"),
-        pytest.param(lambda: _unchecked_inputs(action=""), id="action-empty"),
+        pytest.param(lambda: _unchecked_inputs(severity=True), "severity out of bounds", id="severity-bool"),
+        pytest.param(lambda: _unchecked_inputs(severity=-1), "severity out of bounds", id="severity-negative"),
+        pytest.param(lambda: _unchecked_inputs(severity=ir_adapter._MAX_SEVERITY + 1), "severity out of bounds", id="severity-too-large"),
+        pytest.param(lambda: _unchecked_inputs(token_only=1), "token_only must be bool", id="token-only-not-bool"),
+        pytest.param(lambda: _unchecked_inputs(deception_sid=0), "boolean signals must be bool", id="deception-sid-zero"),
+        pytest.param(lambda: _unchecked_inputs(benign_classless="no"), "boolean signals must be bool", id="benign-classless-not-bool"),
+        pytest.param(lambda: _unchecked_inputs(classes=["c2"]), "classes must be a bounded tuple", id="classes-list"),
+        pytest.param(lambda: _unchecked_inputs(classes=("C2",)), "classes must be canonical lower-case tokens", id="class-not-canonical"),
+        pytest.param(lambda: _unchecked_inputs(classes=("c2",) * (ir_adapter._MAX_CLASSES + 1)), "classes must be a bounded tuple", id="too-many-classes"),
+        pytest.param(lambda: _unchecked_inputs(ports=[PortSignal("web", 443)]), "ports must be a bounded tuple", id="ports-list"),
+        pytest.param(lambda: _unchecked_inputs(ports=(("web", 443),)), "port signal is malformed", id="port-not-signal"),
+        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(port=True),)), "port out of bounds", id="port-bool"),
+        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(port=0),)), "port out of bounds", id="port-zero"),
+        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(kind="WEB"),)), "port signal is malformed", id="port-not-canonical"),
+        pytest.param(lambda: _unchecked_inputs(ports=(PortSignal("web", 443),) * (ir_adapter._MAX_PORTS + 1)), "ports must be a bounded tuple", id="too-many-ports"),
+        pytest.param(lambda: _unchecked_inputs(action="Drop"), "action must be a canonical lower-case token", id="action-not-canonical"),
+        pytest.param(lambda: _unchecked_inputs(action=""), "action must be a canonical lower-case token", id="action-empty"),
     ],
 )
-def test_strict_bounded_inputs_reject(monkeypatch, make_inputs):
+def test_strict_bounded_inputs_reject(monkeypatch, make_inputs, error):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=error):
         inputs = make_inputs()
         assess_ir_candidates(CASE, timeline, verified, [_candidate(inputs=inputs)])
 
