@@ -177,6 +177,13 @@ class IRWorkflowTests(unittest.TestCase):
         raw = b'{"summary":"bounded","nested":' + nested + b"}"
         self.assertEqual(len(parse_records(raw, "json")), 1)
 
+    def test_json_nesting_limit_rejects_one_above_boundary(self):
+        nested = (b'{"x":' * MAX_JSON_NESTING + b"0"
+                  + b"}" * MAX_JSON_NESTING)
+        raw = b'{"summary":"too deep","nested":' + nested + b"}"
+        with self.assertRaisesRegex(ValueError, "JSON nesting exceeds parser limit"):
+            parse_records(raw, "json")
+
     def test_json_nesting_limit_ignores_braces_inside_strings(self):
         raw = json.dumps({"summary": "{" * (MAX_JSON_NESTING + 1) + "}" * (MAX_JSON_NESTING + 1)}).encode()
         self.assertEqual(len(parse_records(raw, "json")), 1)
