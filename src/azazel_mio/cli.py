@@ -294,7 +294,7 @@ def verify(db, root, case):
         if directory_safe:
             try:
                 metadata = existing_single_link_file(path, "stored object")
-        except ValueError:
+            except ValueError:
                 metadata = None
             if metadata is not None and metadata.st_size <= MAX_BYTES:
                 try:
@@ -509,7 +509,7 @@ def import_file(db, root, case, filename, fmt):
                     fd = None
                     handle.write(raw)
                     handle.flush()
-                        os.fchmod(handle.fileno(), 0o400)
+                    os.fchmod(handle.fileno(), 0o400)
                     os.fsync(handle.fileno())
                 # Publish atomically without replacing a path another writer created after
                 # the initial existence check. Keep the staged inode so failure cleanup can
