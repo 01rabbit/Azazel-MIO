@@ -1,6 +1,6 @@
 # PR 11 offline IR refresh candidate
 
-Additive standalone offline evidence utility, separate from MIO reasoning. Current package exports and metadata preserved; only console script registration added. No network, elevation, model or production actions.
+Additive standalone offline evidence utility, separate from MIO reasoning. Current package exports are retained; this branch registers the `mio-ir` console script and assigns a unique development version. No network, elevation, model or production actions.
 
 ## Exact sources before changes
 
@@ -200,27 +200,85 @@ checked against source and handled as follows:
 - The guide captures the created `case_id` from JSON and uses it for later
   commands, so an existing store cannot redirect the example into case 1.
 - The guide now documents summary truncation (with original bytes retained),
-  ISO string-only timestamps, rejection of overlong timestamps, empty JSONL,
+  offset-bearing ISO string timestamps (naive timestamps remain unknown),
+  rejection of overlong timestamps, empty JSONL,
   empty JSON/BOM rejection, per-import record numbering, and markdown line
   sanitization. It also documents that output paths are resolved, so an external
   symlink points to the destination replaced atomically.
 - Stale review references now identify current code locations; invalid evidence
   is documented as exit 3; and the metadata description distinguishes the
   development version from retained package exports.
+- Markdown summaries escape CommonMark punctuation as well as normalizing
+  CR/LF. The CLI closes the SQLite connection after commit. The report hardlink
+  regression confirms the object is invalid due to its link count before
+  invoking report generation.
 - Added regression cases for summary truncation with raw-object preservation,
-  empty JSONL versus empty JSON, and BOM rejection.
+  empty JSONL versus empty JSON, BOM rejection, markdown injection, and naive
+  timestamps.
 
 The refreshed source/test commit is
-`24579a1b566dc05644de8aa2b780b9136b1dc1d7` (tree
-`1b5aa8e777ff67dc18c96c583fd3dcad0059fd5d`). Exact-source validation used a
+`2f1818acabcea8ac14d449a24eb2c13e58fc44e0` (tree
+`db4fc38f6da29a9206ce255e06d001e27f7dc174`). Its package version was bumped
+from `0.1.0.dev20261105+ir11r2` to
+`0.1.0.dev20261105+ir11r3` before the final wheel build, so the artifact filename
+identifies this content. Exact-source validation used a
 self-contained Git archive copied into a disposable Docker `python:3.12-arm64-c65`
-container, `pytest==8.4.2`, and the serialized suite lock: **691 passed**, exit
+container, `pytest==8.4.2`, and the serialized suite lock: **693 passed**, exit
 0. A wheel built from the same archive installed successfully in Linux ARM64 /
 Python 3.12; `mio-ir --help` succeeded, the installed version was
-`0.1.0.dev20261105+ir11r2`, and the wheel SHA-256 was
-`7ee17dc0206250f6ac9e2b319934f2f4c61960bc9d8f7143fefcbbdbb0e84fe8`.
+`0.1.0.dev20261105+ir11r3`, and the wheel SHA-256 was
+`4415b2c8b562b1272ffb5e7d2c23014b4f0d5f7de1a15a6a1123f8f6a16965c8`.
 
-This section is evidence for source commit `24579a1`; the final review of a
-following documentation-only commit is still required before synchronization.
+The candidate has no cumulative per-case evidence or event count limit; timeline
+and report generation load all case events. Input bounds are per imported file.
+The latest read-only review found no High/Medium issue but led to the fixes
+recorded above; it did not run tests or verify Git object identities.
 Debian ARM64 VMware guest acceptance remains pending and is independent of this
 Linux ARM64 container check.
+
+## Post-review refinements and current exact-source validation — 2026-11-05
+
+A second Claude Code Haiku/low read-only review of the then-current candidate
+reported no High/Medium issues and six Low items. Its findings and dispositions:
+
+- Markdown punctuation in untrusted summaries could create links, emphasis, or
+  raw HTML in a rendered report. The CLI now escapes CommonMark punctuation
+  after replacing CR/LF; regressions cover heading-like CR input and link/HTML/
+  emphasis/code syntax.
+- The candidate version was reused across wheels with different contents. The
+  tested source commit below uses the distinct `+ir11r3` development version;
+  the earlier `+ir11r2` and `+ir11r3` local artifacts remain in separate evidence
+  directories with their own hashes and are historical only. The current wheel
+  uses the filename for `+ir11r3` and its hash below.
+- The document opening now distinguishes retained exports from the new
+  console-script and development-version metadata. The CLI module docstring now
+  says event timestamps come from input records. Import/report timestamps are
+  generated at processing time.
+- Limits are explicitly per input file. There is no cumulative per-case event or
+  evidence cap, and timeline/report materializes the case's events; this remains
+  a documented local-tool limitation.
+- Naive timestamps without a UTC offset remain unknown and are documented.
+- SQLite connections are closed after transaction commit. The hardlink report
+  test asserts that verification sees the linked object as invalid before
+  report generation; the exit 3 is due to object link-count validation, while
+  the test also confirms atomic output replacement preserves evidence bytes.
+
+The exact tested source/test commit is
+`2f1818acabcea8ac14d449a24eb2c13e58fc44e0` (tree
+`db4fc38f6da29a9206ce255e06d001e27f7dc174`), package version
+`0.1.0.dev20261105+ir11r3`. From a self-contained Git archive in Docker
+`python:3.12-arm64-c65`, Python 3.12, `pytest==8.4.2`, serialized by the suite
+lock, the full suite passed: **693 passed**, exit 0. The matching ARM64 wheel
+was installed in a disposable container; its `mio-ir --help` succeeded and its
+SHA-256 is
+`4415b2c8b562b1272ffb5e7d2c23014b4f0d5f7de1a15a6a1123f8f6a16965c8`.
+
+The packaged README workflow also passed in that container using only synthetic
+fixtures: create a case and parse its returned ID, import the five-record JSONL,
+verify evidence, build its timeline, and generate a nonempty JSON report. No
+real evidence or credentials were used; the wheel remains local and unpublished.
+
+The review did not run tests or validate commit identities. It did not report a
+High/Medium defect. Final review of the following documentation-only candidate
+head remains required before syncing PR #11. Debian ARM64 VMware guest
+acceptance remains outstanding.
