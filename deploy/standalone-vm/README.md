@@ -1,6 +1,6 @@
 # Debian ARM64 VMware Fusion PoC
 
-Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Install from a locally available checkout and dependencies:
+Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands from the checkout root:
 
 ```sh
 python3 -m venv .venv
@@ -52,8 +52,9 @@ and content objects must be owned regular files with one link; symlinks,
 hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks
 require POSIX user-ID reporting; unsupported platforms fail closed. Reports
 must be exported outside the storage directory, including SQLite journal paths.
-Database, sidecar, and object file mode bits are not checked or changed; access
-relies on ownership and the private storage-directory mode.
+New content objects are created with mode `0400`. Existing database, sidecar,
+and object file mode bits are not checked or changed; access relies on ownership
+and the private storage-directory mode.
 Output paths are resolved before validation; an external output symlink therefore
 targets its resolved destination. Existing report files are replaced atomically
 with private files.

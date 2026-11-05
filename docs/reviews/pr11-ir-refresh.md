@@ -2,22 +2,22 @@
 
 Additive standalone offline evidence utility, separate from MIO reasoning. Current package exports are retained; this branch registers the `mio-ir` console script and assigns a unique development version. No network, elevation, model or production actions.
 
-## Exact sources before changes
+## Historical: exact sources before changes
 
 - Base c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524; tree 2943cc80691148d63f71200198f661bf71462ee1.
 - PR11 head 9debcfdf504ee580f8bf3b2ab061b87eed111540; tree 977a453d74aca810c4419ab11064a877aec7a973.
 - Historical base 6302e665c3ac6cf7004407965299d81dc9ddfc8a.
 - PR15 head 6df0d75c1ebf835dd9b3d764300c6743335174ce; tree 7d93bb9e9753ca5853e6043653aecedbfd471c9b.
 
-No AGENTS.md in fresh checkout. Inspected PR11 historical six-file diff and PR15 source. Restored distinct CLI, synthetic fixture, tests and deployment guide; integrated current pyproject rather than old packaging or initializer.
+No AGENTS.md in the fresh checkout. Inspected the historical PR11 six-file diff and PR15 source. Restored a distinct CLI, synthetic fixture, tests and deployment guide; integrated the then-current pyproject rather than old packaging or initializer.
 
-## Findings
+## Historical findings
 
-IR11-01 (medium), src/azazel_mio/cli.py:21 and :90: pre-existing objects symlink redirects imports outside store; root/database symlinks alias storage. Reproduced old CLI writing synthetic evidence through objects symlink. Reject these entries and mark verification invalid for a symlinked object directory. Tests: test_storage_symlinks_rejected, test_database_symlink_rejected.
+IR11-01 (medium): a pre-existing objects symlink redirected imports outside the store; root/database symlinks aliased storage. Reproduced with the old CLI and synthetic data. Reject these entries and mark verification invalid for a symlinked object directory. Tests: `test_storage_symlinks_rejected`, `test_database_symlink_rejected`.
 
-IR11-02 (medium), src/azazel_mio/cli.py:171: original export guard allows SQLite sidecar overwrite and outside hardlinks to internal evidence/database inodes. Reject exports anywhere inside private storage and atomically replace external exports using private temporary files. Tests: test_report_cannot_overwrite_internal_journal, test_report_hardlink_does_not_truncate_evidence.
+IR11-02 (medium): the original export guard allowed SQLite sidecar overwrite and outside hardlinks to internal evidence/database inodes. Reject exports anywhere inside private storage and atomically replace external exports using private temporary files. Tests: `test_report_cannot_overwrite_internal_journal`, `test_report_hardlink_does_not_truncate_evidence`.
 
-## Plan and validation
+## Historical plan and validation
 
 Restore standalone slice, fix above concrete issues, run focused tests then full suite because package metadata changed. macOS Python 3.12.14:
 
@@ -34,13 +34,13 @@ Restore standalone slice, fix above concrete issues, run focused tests then full
 No pytest skips/warnings reported for this historical candidate. Validation logs
 were kept outside the repository and are not part of this PR. Synthetic evidence only.
 
-## Limitations
+## Historical limitations
 
 Debian ARM64 guest not validated. Not forensic WORM storage. User must control private storage and parent directories; concurrent hostile filesystem mutation remains outside this utility boundary. JSON/JSONL mapping, hashes, case isolation and SQLite behavior preserved; reports now require export outside store. At the time of this historical pre-rebase snapshot, no existing PR branch had been rewritten or pushed.
 
-## IR11-03 follow-up
+## Historical IR11-03 follow-up
 
-IR11-03 (high), src/azazel_mio/cli.py:27: existing hardlinked database
+IR11-03 (high): an existing hardlinked database
 paths allow SQLite initialization and case writes to mutate an outside inode.
 Before SQLite open, lstat now requires an existing database to be a regular file
 with exactly one link. Regression tests use an empty outside file hardlinked as
@@ -68,10 +68,10 @@ Alternatively create a new Python 3.12 virtual environment outside the checkout,
 install this checkout with `pip install -e .` and install pytest. No virtual
 environment or local test log is committed.
 
-## Current-main rebase candidate — 2026-11-05
+## Historical current-main rebase candidate — 2026-11-05 (superseded below)
 
-Hashes, code line references and 297/299 test totals in earlier sections are
-historical, not current-main evidence. Current MIO main is
+All hashes and test totals before this historical checkpoint are superseded.
+MIO main at that time was
 `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The PR #11-only diff is six files:
 `deploy/standalone-vm/README.md`, `docs/reviews/pr11-ir-refresh.md`,
 `examples/synthetic_ir_case/events.jsonl`, `pyproject.toml`,
@@ -79,7 +79,7 @@ historical, not current-main evidence. Current MIO main is
 are retained. The candidate registers the `mio-ir` console script and assigns
 a distinct development version in `pyproject.toml`.
 
-## Independent review findings and disposition
+## Historical independent review findings and disposition
 
 Claude Code Haiku/low's first review of `611e893` was incomplete because it did
 not read all of `cli.py`. A later review read all six changed files at
@@ -90,20 +90,19 @@ Low items, with no High/blocking finding. Their dispositions are:
 
 - F1 (`text.splitlines()` split valid JSONL strings containing U+2028/U+0085):
   now split only on LF and strip an optional CR, with regression cases
-  (`cli.py:133-148`, `test_jsonl_keeps_unicode_separators_inside_strings`).
+  (`parse_records`, `test_jsonl_keeps_unicode_separators_inside_strings`).
 - F2 (recursive `str()` on an object-valued summary could raise): non-scalar
-  summaries are rejected before string conversion (`cli.py:195-200`), covered
+  summaries are rejected before string conversion, covered
   by `test_nested_summary_is_a_clean_input_error`.
-- F3 (file mode bits were not checked): directory modes are enforced; internal
-  data files are checked for current owner, regular-file type and single link,
-  but their mode bits are not changed or rejected. They remain inside storage
-  directories with mode `0700`; this minimizes compatibility risk while keeping
-  them inaccessible to other users. The README and this document now state the
-  distinction accurately.
-- F4 (test totals were tied to an earlier commit): current executable source
-  and test commit is `599ff221dfc8f34df06adfc48d1788802fdc18cb`, tree
-  `2daa3e9bbe3a1627d7e556bbdbb6bcde37b02892`. This document is a following
-  documentation-only update; the PR description records the final PR head and
+- F3 (existing file mode bits were not checked): directory modes are enforced;
+  existing database, sidecar, and object mode bits remain unchecked and
+  unchanged; newly stored objects are created with mode `0400` inside the
+  private `0700` storage directory.
+- F4 (test totals were tied to an earlier commit): the then-current executable
+  source and test commit was `599ff221dfc8f34df06adfc48d1788802fdc18cb`, tree
+  `2daa3e9bbe3a1627d7e556bbdbb6bcde37b02892`; later sections supersede it. This
+  document was a following documentation-only update; the PR description then
+  recorded the final PR head and
   the tested source commit separately.
 - F5 (`report generate` returned success with invalid evidence): it writes
   the report, then exits 3 if any evidence failed verification. The regression
@@ -121,8 +120,8 @@ Low items, with no High/blocking finding. Their dispositions are:
 - The docs name all changed files, separate historical evidence, and contain no
   private `.git` log paths.
 
-Validation on source/test commit `599ff221dfc8f34df06adfc48d1788802fdc18cb`
-(tree above), based on current main: focused IR workflow **27 passed / 11
+Validation on the then-current source/test commit `599ff221dfc8f34df06adfc48d1788802fdc18cb`
+(tree above), based on the then-current main: focused IR workflow **27 passed / 11
 subtests passed**; full MIO suite **672 passed / 254 subtests passed**, CPython
 3.12.14, exit 0. The README offline editable-install procedure was exercised
 from the same source commit in a disposable Linux arm64 / Python 3.12 Docker
@@ -132,11 +131,11 @@ version was `0.1.0+git.c31c244`. No distributable wheel was published.
 This historical source snapshot was not the final refreshed candidate. Debian
 ARM64 guest acceptance remained separate and had not been run.
 
-## Independent review fixes and refreshed validation — 2026-11-05
+## Historical independent review fixes and validation — 2026-11-05 (superseded below)
 
 The earlier statement that final independent review was pending referred to the
 `599ff221` source snapshot and is superseded here. Claude Code Haiku/low reviewed
-that exact current-main candidate and raised the following findings:
+that then-current-main candidate and raised the following findings:
 
 - Medium: JSONL record limits were checked after `split()` allocated every line;
   JSON arrays were fully decoded before checking record count.
@@ -182,11 +181,12 @@ Validation for the exact source commit/tree above:
   used the writable ephemeral copy described above.
 
 Debian ARM64 guest acceptance remains outstanding. The refreshed candidate has
-not yet been pushed and remains a Draft PR candidate. The current-main base is
+not yet been pushed and remained a Draft PR candidate. The then-current main
+base was
 `5bb09c8d28c57604dc1c63903b98fed7587b49ea`; the former remote PR head is
 `a5b74ec256e21a8314ff378ab95f4d31dfb397a`.
 
-## Final-candidate independent review follow-up — 2026-11-05
+## Historical final-candidate independent review follow-up — 2026-11-05 (superseded below)
 
 Claude Code Haiku/low independently read the complete six-file candidate at
 `b62fdc853f2e7a0dd59005459b628f27312bb215`. No High or Medium finding was
@@ -207,9 +207,9 @@ checked against source and handled as follows:
   empty JSON/BOM rejection, per-import record numbering, and markdown line
   sanitization. It also documents that output paths are resolved, so an external
   symlink points to the destination replaced atomically.
-- Stale review references now identify current code locations; invalid evidence
-  is documented as exit 3; and the metadata description distinguishes the
-  development version from retained package exports.
+- Stale review references now identify code locations for that candidate; invalid evidence
+  is documented as exit 3; the review-record opening distinguishes retained
+  exports from the new command; `pyproject.toml` sets the candidate version.
 - Markdown summaries escape CommonMark punctuation as well as normalizing
   CR/LF. The CLI closes the SQLite connection after commit. The report hardlink
   regression confirms the object is invalid due to its link count before
@@ -233,7 +233,7 @@ Python 3.12; `mio-ir --help` succeeded, the installed version was
 
 The candidate has no cumulative per-case evidence or event count limit; timeline
 and report generation load all case events. Input bounds are per imported file.
-The latest read-only review found no High/Medium issue but led to the fixes
+That read-only review found no High/Medium issue but led to the fixes
 recorded above; it did not run tests or verify Git object identities.
 Debian ARM64 VMware guest acceptance remains pending and is independent of this
 Linux ARM64 container check.
@@ -251,7 +251,8 @@ reported no High/Medium issues and six Low items. Its findings and dispositions:
   tested source commit below uses the distinct `+ir11r3` development version;
   only the earlier `+ir11r2` artifact predates it. Both local artifacts remain
   in separate evidence directories with their own hashes and are historical
-  only. The current wheel uses the filename for `+ir11r3` and its hash below.
+  only. The then-current wheel uses the filename for `+ir11r3` and its hash
+  below.
 - The document opening now distinguishes retained exports from the new
   console-script and development-version metadata. The CLI module docstring now
   says event timestamps come from input records. Import/report timestamps are
@@ -287,7 +288,7 @@ The review of the prior `bc28645` candidate returned three Low items and
 informational notes. The escape set is now all ASCII punctuation via
 `string.punctuation`, with regressions for tilde, ampersand, colon, links, raw
 HTML, emphasis and code. Candidate version history now states that only the
-`+ir11r2` wheel preceded `+ir11r3`; the current `+ir11r4` identifies new source
+`+ir11r2` wheel preceded `+ir11r3`; the then-current `+ir11r4` identified new source
 content. The record removes the local absolute suite-lock path, corrects
 timezone wording, and documents missing Markdown timestamps as `unknown`.
 The `docs/versioning.md` scheme distinguishes an integration wheel built from
@@ -314,9 +315,9 @@ High/Medium issue and four Low findings. The record's prior `2f1818a` / `r3`
 section is historical and is not current evidence. Dispositions:
 
 - Rewrote the historical section heading to identify its source revision.
-- Documented that database, SQLite sidecar, and object file mode bits are not
-  checked or changed; the private directory and owner checks provide the stated
-  boundary.
+- Documented that newly created objects use mode `0400`, while existing
+  database, sidecar, and object modes are not checked or changed; access relies
+  on ownership and the `0700` storage directory.
 - JSONL now skips only empty, ASCII-space-only, or tab-only lines. Unicode
   whitespace-only lines are rejected by the JSON parser; regressions cover
   U+2028 and U+00A0. The guide says the same.
