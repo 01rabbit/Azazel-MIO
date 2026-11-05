@@ -29,8 +29,7 @@ or unrepresentable timestamps remain unknown. JSONL records are separated only
 by LF (with an optional preceding CR for CRLF); Unicode line-separator
 characters inside strings remain part of their record. Empty lines, spaces-only
 lines and tabs-only lines are skipped; other Unicode whitespace is rejected.
-Each input file is
-limited to 16 MiB and 10,000 records. There is no cumulative per-case event or
+Each input file is limited to 16 MiB and 10,000 records. There is no cumulative per-case event or
 evidence limit. `evidence
 verify` and `report generate` return exit code 3 when stored evidence fails
 integrity verification; argparse usage errors return 2.
@@ -46,7 +45,9 @@ This CLI is a separate local evidence utility; it does not call the MIO reasonin
 core or take production actions. Store evidence under a dedicated private
 `MIO_IR_HOME` directory. Symlinked storage entries are rejected; use a directory
 owned by the current user with no group or other access. A new storage directory
-is created with mode `0700`; an existing directory with unsafe ownership or
+only the final storage-directory component is created with mode `0700`; missing
+parent components use the default creation mode and must be trusted. An existing
+directory with unsafe ownership or
 permissions is refused without changing its mode. The database, SQLite sidecars,
 and content objects must be owned regular files with one link; symlinks,
 hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks

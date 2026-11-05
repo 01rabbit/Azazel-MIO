@@ -195,11 +195,12 @@ def parse_records(raw, fmt):
                 raise json.JSONDecodeError("Extra data", text, index)
         else:
             parsed = loads_bounded(text)
-            records = parsed if isinstance(parsed, list) else [parsed]
-            if len(records) > MAX_RECORDS:
-                raise ValueError("unsupported record count")
+            if not isinstance(parsed, dict):
+                raise ValueError("JSON input must be an object or array of objects")
+            records = [parsed]
     if any(not isinstance(r, dict) for r in records):
-        raise ValueError("unsupported record count or shape")
+        shape = "JSONL record" if fmt == "jsonl" else "JSON array record"
+        raise ValueError(f"each {shape} must be an object")
     result = []
     for n, rec in enumerate(records, 1):
         stamp = rec.get("timestamp")

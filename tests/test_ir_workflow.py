@@ -41,6 +41,9 @@ class IRWorkflowTests(unittest.TestCase):
     def test_import_verify_timeline_report(self):
         eid = import_file(self.db, self.root, self.case, self.source, "jsonl")
         self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        stored = self.root / "objects" / digest
+        self.assertEqual(stat.S_IMODE(stored.lstat().st_mode), 0o400)
         self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], eid)
         self.assertEqual(timeline(self.db, self.case)[0]["timestamp_utc"], "2026-10-01T01:00:00+00:00")
         self.assertEqual(report(self.db, self.root, self.case)["timeline"][0]["record"], 1)
@@ -178,6 +181,14 @@ class IRWorkflowTests(unittest.TestCase):
     def test_json_array_rejects_trailing_comma(self):
         with self.assertRaises(json.JSONDecodeError):
             parse_records(b"[{} ,]", "json")
+
+    def test_json_scalar_top_level_has_clear_error(self):
+        with self.assertRaisesRegex(ValueError, "JSON input must be an object or array"):
+            parse_records(b"5", "json")
+
+    def test_json_array_requires_object_records(self):
+        with self.assertRaisesRegex(ValueError, "each JSON array record must be an object"):
+            parse_records(b"[5]", "json")
 
     def test_jsonl_keeps_unicode_separators_inside_strings(self):
         for separator in ("\u2028", "\u0085"):
