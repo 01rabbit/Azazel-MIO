@@ -343,9 +343,9 @@ Independent review of exact candidate `e17c7129bafd223cb92a6502b5da38c8bf4e29cd`
 (base `5bb09c8d28c57604dc1c63903b98fed7587b49ea`) found two Medium and five
 Low findings, plus one Info. Both Medium findings were fixed:
 
-- IR-01: Three tests modified new `0400` objects without making them writable,
-  so root could mask a permission failure. The mutation tests now set `0600`
-  explicitly. Full tests were rerun as uid 1001.
+- IR-01: Three mutation tests identified by review modified new `0400` objects
+  without making them writable, so root could mask a permission failure. The
+  mutation tests now set `0600` explicitly. Full tests were rerun as uid 1001.
 - IR-02: Markdown summary rendering now replaces C0/C1 controls, line
   separators and bidi controls before escaping punctuation. Regression coverage
   includes ESC, NUL, bidi override and U+2028. README no longer claims this is a
@@ -362,9 +362,10 @@ Low findings were addressed or bounded:
   a broken sentence was fixed. `MIO_IR_HOME` is described accurately: expand
   `~`, require an absolute path, and do not canonicalize it.
 - IR-06: CLI JSON status output uses ASCII escapes so a non-ASCII local path
-  cannot make printing fail after an atomic report replacement.
-- IR-07: Remaining coverage gaps and POSIX assumptions are listed under review
-  limits; Debian ARM64 guest acceptance remains a separate requirement.
+  cannot make printing fail after an atomic report replacement. A regression
+  test checks an emoji path round-trip and escaped stdout.
+- IR-07: The review record now has an explicit `Review limits` section for
+  guest/hardware and downstream-renderer coverage boundaries.
 
 Current MIO main/base is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The final
 candidate changes seven files: `.gitignore`, `deploy/standalone-vm/README.md`,
@@ -373,14 +374,23 @@ candidate changes seven files: `.gitignore`, `deploy/standalone-vm/README.md`,
 Package source and metadata are fixed at commit
 `0cfb0fea08a1449d1041ea54a7124b2c5b5aa326` (tree
 `a469c0e69c79c3a2e7d5786a22da3d57d67cbdd6`), version
-`0.1.0.dev20261105+ir11r8`. The full validation tree is the same commit/tree.
-In a self-contained Git archive in Docker `python:3.12-arm64-c65`, CPython 3.12
-with `pytest==8.4.2`, the full suite passed as uid 1001: **702 passed, 1
+`0.1.0.dev20261105+ir11r8`. Full tests ran against commit
+`c7735c6c6fe93c384e0fdd68d9f14122b4f02b78` (tree
+`731473fa785cbd7e793026527b2425979eb3229d`). In a self-contained Git archive
+in Docker `python:3.12-arm64-c65`, CPython 3.12 with `pytest==8.4.2`, the full
+suite passed as uid 1001: **703 passed, 1
 skipped**, exit 0. The skipped test is specifically the case-alias test on the
 Linux case-sensitive filesystem; it passed separately on macOS with CPython
-3.14 using `unittest`. An ARM64 wheel was built and installed, and
+`3.14` using `unittest`. An ARM64 wheel was built and installed, and
 `mio-ir --help` succeeded. Wheel SHA-256:
-`f5e5984002565f9263e1ea4676791ad9e55cd2fb2fcf6629bf93e482d7517b2d`.
-The full suite did not test Debian VMware guest setup. No real evidence,
-credentials, deployment, or publication were used. Debian ARM64 VMware guest
-acceptance remains outstanding.
+`cc5cafad996d54c1cbd3b696d150db6f28925c65dc984754f1abeab8cbbbf5e3`.
+
+### Review limits
+
+The reviewers did not execute tests. The full test result above is from the
+separate recorded run. Debian VMware guest setup, real evidence, credentials,
+deployment, publication and hardware acceptance were not exercised. The
+case-alias test is conditional on filesystem behavior; Linux skipped it and
+macOS ran it directly. Markdown escaping covers the explicitly listed control,
+line-separator and bidi characters, not every possible display transformation
+in every downstream Markdown renderer.

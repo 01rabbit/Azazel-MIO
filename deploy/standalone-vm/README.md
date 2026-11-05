@@ -3,6 +3,7 @@
 Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands from the checkout root:
 
 ```sh
+(
 set -euo pipefail
 python3 -m venv .venv
 . .venv/bin/activate
@@ -18,6 +19,7 @@ mio-ir evidence verify --case "$CASE_ID"
 mio-ir timeline build --case "$CASE_ID"
 REPORT_DIR=$(mktemp -d "$HOME/mio-ir-reports.XXXXXX")
 mio-ir report generate --case "$CASE_ID" --format json --output "$REPORT_DIR/mio-ir-report.json"
+)
 ```
 
 Input summaries must be JSON scalars (string, finite number, boolean, or null).
