@@ -381,16 +381,46 @@ class IRAdversarialTests(unittest.TestCase):
 
     def test_directory_sync_failure_rolls_back_object_and_rows(self):
         source = self.stage(EVENTS)
-        original_sync_directory = cli.fsync_directory
+        original_fsync = os.fsync
+        object_directory_inode = None
 
-        def fail_directory_fsync(path):
-            if Path(path).name == "objects":
+        def fail_directory_fsync(fd):
+            nonlocal object_directory_inode
+            metadata = os.fstat(fd)
+            if stat.S_ISDIR(metadata.st_mode) and metadata.st_ino == object_directory_inode:
                 raise OSError(errno.EIO, "simulated directory sync failure")
+            return original_fsync(fd)
+
+        def record_objects_inode(path):
+            nonlocal object_directory_inode
+            if Path(path).name == "objects":
+                object_directory_inode = Path(path).stat().st_ino
             return original_sync_directory(path)
 
-        with patch.object(cli, "fsync_directory", side_effect=fail_directory_fsync):
-            with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
-                import_file(self.db, self.root, self.case, source, "jsonl")
+        original_sync_directory = cli.fsync_directory
+
+        with patch.object(cli, "fsync_directory", side_effect=record_objects_inode):
+            with patch.object(cli.os, "fsync", side_effect=fail_directory_fsync):
+                with self.assertRaisesRegex(ValueError, "filesystem cannot safely sync stored objects"):
+                    import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
+        self.assertEqual(self.objects(), [])
+
+    def test_cleanup_sync_error_does_not_mask_publish_error(self):
+        source = self.stage(EVENTS)
+        original_sync_directory = cli.fsync_directory
+
+        def fail_object_directory_sync(path):
+            if Path(path).name == "objects":
+                raise ValueError("cleanup sync failure")
+            return original_sync_directory(path)
+
+        with patch.object(cli.os, "link", side_effect=OSError(errno.EIO, "publish failure")):
+            with patch.object(cli, "fsync_directory", side_effect=fail_object_directory_sync):
+                with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
+                    import_file(self.db, self.root, self.case, source, "jsonl")
 
         self.assertEqual(self.count("evidence"), 0)
         self.assertEqual(self.count("events"), 0)
