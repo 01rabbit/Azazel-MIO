@@ -389,10 +389,11 @@ class IRWorkflowTests(unittest.TestCase):
 
     def test_connect_closes_database_when_schema_setup_fails(self):
         db = MagicMock()
-        db.executescript.side_effect = sqlite3.Error("schema failure")
-        with patch("azazel_mio.cli.sqlite3.connect", return_value=db):
+        with patch("azazel_mio.cli.sqlite3.connect", return_value=db), patch(
+                "azazel_mio.cli.migrate_schema", side_effect=sqlite3.Error("schema failure")) as migrate:
             with self.assertRaisesRegex(sqlite3.Error, "schema failure"):
                 connect(self.root)
+        migrate.assert_called_once_with(db)
         db.close.assert_called_once()
 
     def test_main_closes_database_after_successful_command(self):
