@@ -183,6 +183,51 @@ def existing_single_link_file(path, label):
         raise ValueError(f"unsafe {label}: expected an owned single-link regular file")
     return metadata
 
+def recover_interrupted_object_temp(path, destination):
+    """Remove only a reserved temp left by a crashed import while holding the DB write lock."""
+    try:
+        temporary = path.lstat()
+    except FileNotFoundError:
+        return
+    if (not stat.S_ISREG(temporary.st_mode) or not current_user_owns(temporary)
+            or stat.S_IMODE(temporary.st_mode) & 0o077):
+        raise ValueError("unsafe interrupted object temporary")
+    try:
+        published = destination.lstat()
+    except FileNotFoundError:
+        published = None
+    if temporary.st_nlink == 1:
+        # The process stopped before publishing. The reserved temp name is never a DB object.
+        os.unlink(path)
+    elif (temporary.st_nlink == 2 and published is not None
+          and (temporary.st_dev, temporary.st_ino) == (published.st_dev, published.st_ino)
+          and published.st_nlink == 2):
+        # The process stopped after link() but before removing the temp link.
+        os.unlink(path)
+    else:
+        raise ValueError("unsafe interrupted object temporary")
+
+def unlink_staged_object_if_ours(path, destination, identity):
+    if identity is None:
+        return
+    try:
+        temporary = path.lstat()
+    except FileNotFoundError:
+        return
+    if (temporary.st_dev, temporary.st_ino) != identity:
+        return
+    if temporary.st_nlink == 1:
+        os.unlink(path)
+        return
+    try:
+        published = destination.lstat()
+    except FileNotFoundError:
+        return
+    if (temporary.st_nlink == 2
+            and (temporary.st_dev, temporary.st_ino) == (published.st_dev, published.st_ino)
+            and published.st_nlink == 2):
+        os.unlink(path)
+
 def connect(root):
     ensure_private_directory(root, "storage path")
     database = root / "cases.sqlite3"
@@ -414,12 +459,15 @@ def import_file(db, root, case, filename, fmt):
     directory = root / "objects"
     ensure_private_directory(directory, "object directory")
     destination = directory / digest
+    staging = directory / f".mio-object-{digest}.tmp"
     # Take the SQLite write lock before publishing the object. Any other writer that could
     # reference this digest must wait until this import commits or rolls back, so cleanup
     # below never unlinks an object another transaction can see.
     db.execute("BEGIN IMMEDIATE")
     created_identity = None
+    staging_identity = None
     try:
+        recover_interrupted_object_temp(staging, destination)
         metadata = existing_single_link_file(destination, "stored object")
         if metadata is not None:
             if metadata.st_size > MAX_BYTES:
@@ -430,29 +478,38 @@ def import_file(db, root, case, filename, fmt):
                     or hashlib.sha256(stored).hexdigest() != digest):
                 raise ValueError("stored object corrupted")
         else:
-            fd, tmp = tempfile.mkstemp(dir=directory)
+            fd = os.open(
+                staging,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
             try:
+                staged = os.fstat(fd)
+                staging_identity = (staged.st_dev, staged.st_ino)
                 with os.fdopen(fd, "wb") as handle:
+                    fd = None
                     handle.write(raw)
                     handle.flush()
                     os.fsync(handle.fileno())
-                    staged = os.fstat(handle.fileno())
-                os.chmod(tmp, 0o400)
+                os.chmod(staging, 0o400)
                 # Publish atomically without replacing a path another writer created after
                 # the initial existence check. Keep the staged inode so failure cleanup can
                 # prove that the destination still names the file this call published. Set
                 # it before link() so an interrupt immediately after a successful link still
                 # leaves enough identity to clean up; a competing file has a different inode.
-                created_identity = (staged.st_dev, staged.st_ino)
+                created_identity = staging_identity
                 try:
-                    os.link(tmp, destination)
+                    os.link(staging, destination)
                 except FileExistsError:
                     pass
                 except OSError as exc:
                     raise ValueError("filesystem cannot safely publish stored objects") from exc
             finally:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
+                if fd is not None:
+                    os.close(fd)
+                unlink_staged_object_if_ours(staging, destination, staging_identity)
+                staging_identity = None
             metadata = existing_single_link_file(destination, "stored object")
             if metadata is None:
                 raise ValueError("stored object disappeared during import")
@@ -478,6 +535,11 @@ def import_file(db, root, case, filename, fmt):
         # Cleanup must never mask the original error or skip rollback. If the unlink fails, the
         # published object may remain as an orphan (no evidence row references it).
         try:
+            if staging_identity is not None:
+                try:
+                    unlink_staged_object_if_ours(staging, destination, staging_identity)
+                except OSError:
+                    pass
             if created_identity is not None and db.in_transaction:
                 try:
                     current = os.lstat(destination)

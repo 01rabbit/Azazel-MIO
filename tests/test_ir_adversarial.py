@@ -283,6 +283,40 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], evidence_id)
         self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
 
+    def test_restart_recovers_temp_left_before_object_publish(self):
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        directory = self.root / "objects"
+        directory.mkdir(mode=0o700)
+        staging = directory / f".mio-object-{digest}.tmp"
+        staging.write_bytes(source.read_bytes())
+        staging.chmod(0o400)
+
+        evidence_id = import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(self.objects(), [digest])
+        self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], evidence_id)
+        self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
+
+    def test_restart_recovers_temp_link_left_after_object_publish(self):
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        directory = self.root / "objects"
+        directory.mkdir(mode=0o700)
+        staging = directory / f".mio-object-{digest}.tmp"
+        destination = directory / digest
+        staging.write_bytes(source.read_bytes())
+        staging.chmod(0o400)
+        os.link(staging, destination)
+        self.assertEqual(staging.stat().st_nlink, 2)
+
+        evidence_id = import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(self.objects(), [digest])
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], evidence_id)
+        self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
+
     def test_unsupported_hardlink_publish_fails_closed_and_removes_temp(self):
         source = self.stage(EVENTS)
         with patch.object(cli.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
