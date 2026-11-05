@@ -3,7 +3,7 @@
 Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands from the checkout root:
 
 ```sh
-set -o pipefail
+set -euo pipefail
 python3 -m venv .venv
 . .venv/bin/activate
 # Point this at the already-provisioned offline wheelhouse in the guest.
@@ -65,8 +65,8 @@ Output paths are resolved before validation; an external output symlink therefor
 targets its resolved destination. Existing report files are replaced atomically
 with private files.
 
-`MIO_IR_HOME` must be non-empty and resolve to an absolute path after `~`
-expansion. If it is unset, `HOME` must be
+`MIO_IR_HOME` must be non-empty. After `~` expansion it must be an absolute
+path; the path is not canonicalized before use. If it is unset, `HOME` must be
 set and the default store is `$HOME/.local/share/azazel-mio`. The final storage
 directory and its entries are checked; parent path components must be trusted
 and are not independently inspected for symlinks. If an existing object at the
