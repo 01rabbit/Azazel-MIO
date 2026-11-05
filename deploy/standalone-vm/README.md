@@ -3,6 +3,7 @@
 Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands from the checkout root:
 
 ```sh
+set -o pipefail
 python3 -m venv .venv
 . .venv/bin/activate
 # Point this at the already-provisioned offline wheelhouse in the guest.
@@ -11,6 +12,7 @@ python -m pip install --no-index --find-links "$WHEELHOUSE" "setuptools>=77.0.3"
 python -m pip install --no-index --no-build-isolation --no-deps -e .
 export MIO_IR_HOME="$HOME/mio-ir-data"
 CASE_ID=$(mio-ir case create --name "Synthetic IR Case" | python -c 'import json,sys; print(json.load(sys.stdin)["case_id"])')
+test -n "$CASE_ID"
 mio-ir evidence import --case "$CASE_ID" --file examples/synthetic_ir_case/events.jsonl --format jsonl
 mio-ir evidence verify --case "$CASE_ID"
 mio-ir timeline build --case "$CASE_ID"
@@ -37,16 +39,18 @@ An empty JSONL file has no records; the empty JSON array `[]` is accepted and
 also has no records. Empty JSON input and UTF-8 BOM-prefixed input are rejected.
 Timeline `record` is the one-based event index within that import,
 not a physical source line number. Markdown reports show missing timestamps as
-`unknown`, replace CR and LF in summary text with spaces, and escape ASCII
-punctuation to keep untrusted summaries inert in rendered reports.
+`unknown`, replace control characters, line separators and bidirectional
+format controls in summaries with spaces, and escape ASCII punctuation in
+rendered Markdown. This reduces display spoofing; it is not a general-purpose
+sanitizer for arbitrary Markdown consumers.
 
 Run the commands inside the Debian ARM64 guest and record results. macOS tests do not establish guest verification. This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
 
 This CLI is a separate local evidence utility; it does not call the MIO reasoning
 core or take production actions. Store evidence under a dedicated private
 `MIO_IR_HOME` directory. Symlinked storage entries are rejected; use a directory
-owned by the current user with no group or other access. A new storage directory
-Only the final storage-directory component of a new store is created with mode
+owned by the current user with no group or other access. Only the final
+storage-directory component of a new store is created with mode
 `0700`; missing parent components use the default creation mode and must be
 trusted. An existing directory with unsafe ownership or
 permissions is refused without changing its mode. The database, SQLite sidecars,

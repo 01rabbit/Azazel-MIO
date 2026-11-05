@@ -59,6 +59,7 @@ class IRWorkflowTests(unittest.TestCase):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
         stored = self.root / "objects" / digest
+        stored.chmod(0o600)
         with stored.open("wb") as handle:
             handle.truncate(MAX_BYTES + 1)
         original_open = Path.open
@@ -78,6 +79,7 @@ class IRWorkflowTests(unittest.TestCase):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
         stored = self.root / "objects" / digest
+        stored.chmod(0o600)
         with stored.open("wb") as handle:
             handle.truncate(MAX_BYTES + 1)
         original_open = Path.open
@@ -355,9 +357,11 @@ class IRWorkflowTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(new_root.lstat().st_mode), 0o700)
 
     def test_new_storage_rejects_foreign_owner(self):
+        new_root = self.root / "new-foreign-store"
         with patch("azazel_mio.cli.current_user_owns", return_value=False):
             with self.assertRaisesRegex(ValueError, "owned private directory"):
-                connect(self.root)
+                connect(new_root)
+        self.assertFalse(new_root.exists())
 
     def test_storage_fails_closed_without_owner_identity(self):
         with patch("azazel_mio.cli.os.getuid", None):
@@ -472,6 +476,21 @@ class IRWorkflowTests(unittest.TestCase):
             for raw in ("[x]", "<img src=x>", "*bold*", "`code`", "~~gone~~"):
                 self.assertNotIn(raw, content)
 
+    def test_markdown_report_replaces_terminal_and_direction_controls(self):
+        source = self.root / "controls.jsonl"
+        source.write_text(
+            '{"summary":"left\\u001b[31mred\\u0000\\u202eRIGHT\\u2028next"}\n',
+            encoding="utf-8",
+        )
+        import_file(self.db, self.root, self.case, source, "jsonl")
+        with tempfile.TemporaryDirectory() as export:
+            output = Path(export) / "report.md"
+            self.assertEqual(self.run_report(output, "markdown"), 0)
+            content = output.read_text(encoding="utf-8")
+            unsafe = r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+            self.assertNotRegex(content, unsafe)
+            self.assertIn("left [31mred  RIGHT next", content)
+
     def test_markdown_report_labels_missing_timestamp_unknown(self):
         source = self.root / "naive-timestamp.jsonl"
         source.write_text('{"timestamp":"2026-10-01T10:00:00","summary":"event"}\n', encoding="utf-8")
@@ -518,7 +537,9 @@ class IRWorkflowTests(unittest.TestCase):
     def test_verify_command_uses_distinct_invalid_evidence_exit_code(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
-        (self.root / "objects" / digest).write_text("tampered", encoding="utf-8")
+        evidence = self.root / "objects" / digest
+        evidence.chmod(0o600)
+        evidence.write_text("tampered", encoding="utf-8")
         with patch.dict(os.environ, {"MIO_IR_HOME": str(self.root)}), patch(
             "sys.argv", ["mio-ir", "evidence", "verify", "--case", str(self.case)]
         ):

@@ -19,10 +19,16 @@ MAX_TIMESTAMP_CHARS = 256
 MAX_SUMMARY_CHARS = 2048
 EXIT_INVALID_EVIDENCE = 3
 MARKDOWN_ESCAPES = frozenset(string.punctuation)
+MARKDOWN_UNSAFE = frozenset(
+    map(chr, (*range(0x00, 0x20), 0x7f, *range(0x80, 0xa0),
+              0x061c, 0x200e, 0x200f, 0x2028, 0x2029,
+              *range(0x202a, 0x202f), *range(0x2066, 0x206a)))
+)
 
 def markdown_escape(value):
+    sanitized = "".join(" " if char in MARKDOWN_UNSAFE else char for char in value)
     return "".join("\\" + char if char in MARKDOWN_ESCAPES else char
-                   for char in value)
+                   for char in sanitized)
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -360,7 +366,7 @@ def main():
                     if os.path.exists(tmp):
                         os.unlink(tmp)
                 output = {"output": str(path)}
-        print(json.dumps(output, ensure_ascii=False))
+        print(json.dumps(output, ensure_ascii=True))
         if args.group == "evidence" and args.action == "verify" and not all(x["valid"] for x in output):
             return EXIT_INVALID_EVIDENCE
         if args.group == "report" and report_has_invalid_evidence:
