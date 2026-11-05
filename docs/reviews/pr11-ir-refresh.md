@@ -340,32 +340,42 @@ published. These tests do not establish Debian ARM64 VMware guest acceptance.
 ## Final candidate validation — 2026-11-05
 
 The review of candidate `0d1d1a6` found no High/Medium issue and five Low
-documentation/test-coverage/diagnostic items. Dispositions:
+documentation/test-coverage/diagnostic items. A later review of `35ea9be`
+found no High/Medium issue and repeated five Low findings; their dispositions
+are recorded below. This section describes the final r6 candidate.
 
 - Clarified the intermediate review section as historical; the r4 source and
   artifact are explicitly superseded by this final r6 section.
-- Added `.venv/` and `*.egg-info/` to `.gitignore`; the guide now says to run
-  commands from the checkout root, and the install artifacts do not appear as
-  untracked files.
+- Added `.venv/`, `*.egg-info/`, `build/`, and `dist/` to `.gitignore`; the
+  guide says to run commands from the checkout root, and generated artifacts
+  do not appear as untracked files.
 - Added a regression assertion that new content objects have mode `0400`.
 - Documented that only the final storage-directory component is created as
   `0700`; any missing parents use the default creation mode and must be trusted.
+- Documented that `MIO_IR_HOME` is tilde-expanded and resolved to an absolute
+  path, and that existing file modes are neither checked nor changed.
 - JSON scalar top-level input now has a dedicated error, and JSON array/JSONL
   scalar records report a clear object-shape error. The unreachable top-level
   list branch was removed and both errors have regression coverage.
+- Empty JSON arrays remain accepted as an empty import, while empty JSON files
+  and BOM-prefixed input are rejected; regression coverage records these cases.
 
 Current MIO main/base is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The final
 candidate changes seven files: `.gitignore`, `deploy/standalone-vm/README.md`,
 `docs/reviews/pr11-ir-refresh.md`, `examples/synthetic_ir_case/events.jsonl`,
 `pyproject.toml`, `src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`.
-Exact source/test commit `a048435abcc6d80a3f202de012d84480362c44e2` has tree
-`72c901c88457a788ab475df8af721294633759af` and version
-`0.1.0.dev20261105+ir11r6`. In the self-contained Git archive in Docker
-`python:3.12-arm64-c65`, CPython 3.12 with `pytest==8.4.2`, the full suite passed:
-**699 passed**, exit 0. The matching ARM64 wheel built and installed; `mio-ir
---help` succeeded. Wheel SHA-256:
+The package source and metadata commit is
+`a048435abcc6d80a3f202de012d84480362c44e2` (tree
+`72c901c88457a788ab475df8af721294633759af`), version
+`0.1.0.dev20261105+ir11r6`. It is unchanged in the final candidate. The final
+full validation tree is commit `1f574ea308ad474fc980b6cb926e77c5d1e8f919`
+(tree `93c32cecb333c5e7caff2d715c75ba92581b1316`). In a self-contained Git
+archive in Docker `python:3.12-arm64-c65`, CPython 3.12 with `pytest==8.4.2`, the
+full suite passed: **701 passed**, exit 0. The matching ARM64 wheel built from
+the package source/metadata commit installed; `mio-ir --help` succeeded. Wheel
+SHA-256:
 `e47a3997c038a1e28aaabe7cd1faec5d2b7dc2f2ff4952990d0bad2b5629e398`. The
 documented synthetic case-create/import/verify/timeline/report sequence passed
-using that installed wheel. These checks used no real evidence, credentials,
-deployment, or publication. Debian ARM64 VMware guest acceptance is separate
-and remains outstanding.
+using that installed wheel and the final README/source archive. These checks
+used no real evidence, credentials, deployment, or publication. Debian ARM64
+VMware guest acceptance is separate and remains outstanding.
