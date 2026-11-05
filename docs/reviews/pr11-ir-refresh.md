@@ -130,3 +130,56 @@ version was `0.1.0+git.c31c244`. No distributable wheel was published.
 
 The final independent review of this refreshed document and source commit is
 pending. Debian ARM64 guest acceptance remains separate and has not been run.
+
+## Independent review fixes and refreshed validation — 2026-11-05
+
+The earlier statement that final independent review was pending referred to the
+`599ff221` source snapshot and is superseded here. Claude Code Haiku/low reviewed
+that exact current-main candidate and raised the following findings:
+
+- Medium: JSONL record limits were checked after `split()` allocated every line;
+  JSON arrays were fully decoded before checking record count.
+- Low: timezone conversion could raise `OverflowError`; explicit null summary
+  rendered as `None`; storage path fallback accepted an empty/relative value;
+  object verification read the entire file; invalid UTF-8 fields could leave an
+  orphaned object; timestamps were not length-bounded; and invalid-evidence exit
+  status overlapped argparse usage errors.
+- Low: the hardlink report test did not first prove that its source evidence was
+  valid. The review also identified documentation overclaims about determinism
+  and imprecise summary semantics.
+
+The reviewed recommendations were applied in source commit
+`dc6eba670601bb12438504f8a875c8531bb96f8f` (tree
+`ec4da2199712ed8e3506707b2b9819636c4bbfb6`). Parsing now enforces the record
+limit incrementally; summaries and timestamps have explicit bounds and strict
+UTF-8 handling; null is represented as an empty summary while an omitted value
+keeps its default; overflow timestamps remain unknown; object reads are bounded;
+invalid evidence exits 3 while argparse usage errors retain 2; and empty,
+relative, or unavailable default storage paths fail clearly. Regression tests
+cover each disposition. The README describes these limits and fail-closed
+behavior. Candidate package metadata is now
+`0.1.0.dev20261105+ir11r2`, rather than reusing a version string from a
+previous local build.
+
+Validation for the exact source commit/tree above:
+
+- Self-contained Git archive, Docker `python:3.12-arm64-c65`, Python 3.12,
+  `pytest==8.4.2`, full suite: **687 passed**, exit 0. The archive was mounted
+  read-only and copied to the container's ephemeral `/tmp` because two existing
+  tests intentionally create `.codex-work` below the source root. Docker was
+  run with `--rm`; suite execution used `/Users/mao/azn-ci/suite-lock.sh`.
+- ARM64 wheel build from that archive, installed into the same disposable
+  container: `mio-ir --help` succeeded and metadata reported
+  `0.1.0.dev20261105+ir11r2`. Wheel SHA-256:
+  `e677241bc62bffe155f911142934163273c57240a1a5b424e620cdf11fc13663`.
+  This local test artifact is not published.
+- Two harness attempts are retained separately: the first lacked pytest in the
+  base image; the second exposed the read-only source assumption in two tests.
+  Neither result is counted as a passing test run. The successful third run
+  used the writable ephemeral copy described above.
+
+Debian ARM64 guest acceptance remains outstanding. The refreshed candidate has
+not yet received an independent review at its final commit, has not been pushed,
+and remains a Draft PR candidate. The current-main base is
+`5bb09c8d28c57604dc1c63903b98fed7587b49ea`; the former remote PR head is
+`a5b74ec256e21a8314ff378ab95f4d31dfb397a`.
