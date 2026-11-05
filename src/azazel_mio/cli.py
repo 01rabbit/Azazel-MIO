@@ -276,16 +276,37 @@ def parse_records(raw, fmt):
 def import_file(db, root, case, filename, fmt):
     check_case(db, case)
     source = Path(filename)
-    if source.is_symlink() or not source.is_file():
+    try:
+        metadata = source.lstat()
+    except OSError as exc:
+        raise ValueError("source must be a regular non-symlink file") from exc
+    if not stat.S_ISREG(metadata.st_mode):
         raise ValueError("source must be a regular non-symlink file")
     try:
         source.name.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise ValueError("source filename must be valid UTF-8") from exc
-    if source.stat().st_size > MAX_BYTES:
+    if metadata.st_size > MAX_BYTES:
         raise ValueError("file too large")
-    with source.open("rb") as handle:
-        raw = handle.read(MAX_BYTES + 1)
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        fd = os.open(source, flags)
+    except OSError as exc:
+        raise ValueError("source must be a regular non-symlink file") from exc
+    try:
+        opened = os.fstat(fd)
+        if (not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)):
+            raise ValueError("source must be a regular non-symlink file")
+        if opened.st_size > MAX_BYTES:
+            raise ValueError("file too large")
+        with os.fdopen(fd, "rb") as handle:
+            fd = None
+            raw = handle.read(MAX_BYTES + 1)
+    finally:
+        if fd is not None:
+            os.close(fd)
     if len(raw) > MAX_BYTES:
         raise ValueError("file too large")
     records = parse_records(raw, fmt)

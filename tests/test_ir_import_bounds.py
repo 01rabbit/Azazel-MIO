@@ -52,7 +52,7 @@ class ImportBoundsTests(unittest.TestCase):
     def test_one_byte_over_limit_rejected_before_staging_or_rows(self):
         source = self.root / "over.json"
         source.write_bytes(json_payload(TEST_LIMIT + 1))
-        with patch("azazel_mio.cli.Path.open", side_effect=AssertionError("oversize source opened")) as opener:
+        with patch("azazel_mio.cli.os.open", side_effect=AssertionError("oversize source opened")) as opener:
             with patch("azazel_mio.cli.tempfile.mkstemp") as mkstemp:
                 with self.assertRaisesRegex(ValueError, "file too large"):
                     import_file(self.db, self.root, self.case, source, "json")
@@ -65,19 +65,36 @@ class ImportBoundsTests(unittest.TestCase):
     def test_bounded_read_rejects_input_larger_than_reported_stat_size(self):
         source = self.root / "grew-after-stat.json"
         source.write_bytes(json_payload(TEST_LIMIT + 1))
-        original_stat = Path.stat
-        original_open = Path.open
+        original_lstat = Path.lstat
+        original_open = os.open
+        original_fstat = os.fstat
+        original_fdopen = os.fdopen
         actual_sizes = []
         reported_sizes = []
         read_sizes = []
+        source_fds = []
 
         def report_limit_for_source(path, *args, **kwargs):
-            result = original_stat(path, *args, **kwargs)
+            result = original_lstat(path, *args, **kwargs)
             if path == source:
                 actual_sizes.append(result.st_size)
                 fields = list(result)
                 fields[6] = TEST_LIMIT
                 reported_sizes.append(fields[6])
+                return os.stat_result(fields)
+            return result
+
+        def record_open(path, flags, *args, **kwargs):
+            fd = original_open(path, flags, *args, **kwargs)
+            if Path(path) == source:
+                source_fds.append(fd)
+            return fd
+
+        def report_open_limit(fd):
+            result = original_fstat(fd)
+            if fd in source_fds:
+                fields = list(result)
+                fields[6] = TEST_LIMIT
                 return os.stat_result(fields)
             return result
 
@@ -95,22 +112,62 @@ class ImportBoundsTests(unittest.TestCase):
                 read_sizes.append(size)
                 return self.handle.read(size)
 
-        def record_open_size(path, *args, **kwargs):
-            handle = original_open(path, *args, **kwargs)
-            return RecordingReader(handle) if path == source else handle
+        def record_fdopen(fd, mode="r", *args, **kwargs):
+            return RecordingReader(original_fdopen(fd, mode, *args, **kwargs))
 
-        with patch.object(Path, "stat", report_limit_for_source):
-            with patch.object(Path, "open", record_open_size):
-                with patch("azazel_mio.cli.tempfile.mkstemp") as mkstemp:
-                    with self.assertRaisesRegex(ValueError, "file too large"):
-                        import_file(self.db, self.root, self.case, source, "json")
-                    mkstemp.assert_not_called()
+        with patch.object(Path, "lstat", report_limit_for_source):
+            with patch("azazel_mio.cli.os.open", side_effect=record_open):
+                with patch("azazel_mio.cli.os.fstat", side_effect=report_open_limit):
+                    with patch("azazel_mio.cli.os.fdopen", side_effect=record_fdopen) as fdopen:
+                        with patch("azazel_mio.cli.tempfile.mkstemp") as mkstemp:
+                            with self.assertRaisesRegex(ValueError, "file too large"):
+                                import_file(self.db, self.root, self.case, source, "json")
+                            mkstemp.assert_not_called()
+                            self.assertEqual(fdopen.call_count, 1)
         self.assertTrue(actual_sizes)
         self.assertTrue(all(size == TEST_LIMIT + 1 for size in actual_sizes))
         self.assertTrue(reported_sizes)
         self.assertTrue(all(size == TEST_LIMIT for size in reported_sizes))
         self.assertEqual(read_sizes, [TEST_LIMIT + 1])
         self.assertFalse((self.root / "objects").exists())
+        self.assertEqual(self.evidence_count(), 0)
+        self.assertEqual(self.event_count(), 0)
+
+    def test_source_replaced_with_symlink_before_open_is_rejected(self):
+        source = self.root / "source.json"
+        target = self.root / "target.json"
+        source.write_bytes(json_payload(TEST_LIMIT))
+        target.write_bytes(json_payload(TEST_LIMIT))
+        original_open = os.open
+
+        def replace_with_symlink(path, flags, *args, **kwargs):
+            if Path(path) == source:
+                source.unlink()
+                source.symlink_to(target)
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch("azazel_mio.cli.os.open", side_effect=replace_with_symlink):
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                import_file(self.db, self.root, self.case, source, "json")
+        self.assertEqual(self.evidence_count(), 0)
+        self.assertEqual(self.event_count(), 0)
+
+    def test_source_replaced_with_fifo_before_open_is_rejected_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("platform has no FIFO support")
+        source = self.root / "source.json"
+        source.write_bytes(json_payload(TEST_LIMIT))
+        original_open = os.open
+
+        def replace_with_fifo(path, flags, *args, **kwargs):
+            if Path(path) == source:
+                source.unlink()
+                os.mkfifo(source)
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch("azazel_mio.cli.os.open", side_effect=replace_with_fifo):
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                import_file(self.db, self.root, self.case, source, "json")
         self.assertEqual(self.evidence_count(), 0)
         self.assertEqual(self.event_count(), 0)
 
