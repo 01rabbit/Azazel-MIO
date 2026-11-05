@@ -34,7 +34,9 @@ or unrepresentable timestamps remain unknown. JSONL records are separated only
 by LF (with an optional preceding CR for CRLF); Unicode line-separator
 characters inside strings remain part of their record. Empty lines, spaces-only
 lines and tabs-only lines are skipped; other Unicode whitespace is rejected.
-Each input file is limited to 16 MiB and 10,000 records. There is no cumulative per-case event or
+Each input file is limited to 16 MiB, 10,000 records and 256 levels of JSON
+nesting. Braces and brackets inside JSON strings do not count toward the depth
+limit. There is no cumulative per-case event or
 evidence limit. `evidence
 verify` and `report generate` return exit code 3 when stored evidence fails
 integrity verification; argparse usage errors return 2.

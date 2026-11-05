@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_RECORDS = 10000
+MAX_JSON_NESTING = 256
 MAX_TIMESTAMP_CHARS = 256
 MAX_SUMMARY_CHARS = 2048
 EXIT_INVALID_EVIDENCE = 3
@@ -154,6 +155,26 @@ def verify(db, root, case):
 
 def parse_records(raw, fmt):
     text = raw.decode("utf-8")
+    in_string = False
+    escaped = False
+    nesting = 0
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            nesting += 1
+            if nesting > MAX_JSON_NESTING:
+                raise ValueError("JSON nesting exceeds parser limit")
+        elif char in "]}":
+            nesting = max(0, nesting - 1)
+
     def loads_bounded(value):
         try:
             return json.loads(value)

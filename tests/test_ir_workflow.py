@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from azazel_mio.cli import (
     EXIT_INVALID_EVIDENCE,
     MAX_BYTES,
+    MAX_JSON_NESTING,
     MAX_RECORDS,
     MAX_TIMESTAMP_CHARS,
     connect,
@@ -169,6 +170,16 @@ class IRWorkflowTests(unittest.TestCase):
                 self.assertEqual(main(), 1)
         self.assertIn("error: JSON nesting exceeds parser limit", errors.getvalue())
         self.assertNotIn("Traceback", errors.getvalue())
+
+    def test_json_nesting_limit_accepts_boundary(self):
+        nested = (b'{"x":' * (MAX_JSON_NESTING - 1) + b"0"
+                  + b"}" * (MAX_JSON_NESTING - 1))
+        raw = b'{"summary":"bounded","nested":' + nested + b"}"
+        self.assertEqual(len(parse_records(raw, "json")), 1)
+
+    def test_json_nesting_limit_ignores_braces_inside_strings(self):
+        raw = json.dumps({"summary": "{" * (MAX_JSON_NESTING + 1) + "}" * (MAX_JSON_NESTING + 1)}).encode()
+        self.assertEqual(len(parse_records(raw, "json")), 1)
 
     def test_deep_jsonl_is_a_bounded_input_error(self):
         nested = b'{"x":' * 10000 + b"0" + b"}" * 10000
