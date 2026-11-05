@@ -229,19 +229,22 @@ def _json_list(name: str, value: object, limit: int) -> list[object]:
 
 def _parse_inputs(value: object) -> FastAssessmentInput:
     raw = _exact_keys("inputs", value, _INPUT_KEYS)
-    ports = []
-    for port in _json_list("ports", raw["ports"], _MAX_PORTS):
-        fields = _exact_keys("port", port, _PORT_KEYS)
-        ports.append(PortSignal(kind=fields["kind"], port=fields["port"]))
-    return FastAssessmentInput(
-        severity=raw["severity"],
-        classes=tuple(_json_list("classes", raw["classes"], _MAX_CLASSES)),
-        token_only=raw["token_only"],
-        ports=tuple(ports),
-        action=raw["action"],
-        deception_sid=raw["deception_sid"],
-        benign_classless=raw["benign_classless"],
-    )
+    try:
+        ports = []
+        for port in _json_list("ports", raw["ports"], _MAX_PORTS):
+            fields = _exact_keys("port", port, _PORT_KEYS)
+            ports.append(PortSignal(kind=fields["kind"], port=fields["port"]))
+        return FastAssessmentInput(
+            severity=raw["severity"],
+            classes=tuple(_json_list("classes", raw["classes"], _MAX_CLASSES)),
+            token_only=raw["token_only"],
+            ports=tuple(ports),
+            action=raw["action"],
+            deception_sid=raw["deception_sid"],
+            benign_classless=raw["benign_classless"],
+        )
+    except TypeError as exc:
+        raise ValueError("normalized input fields have invalid types") from exc
 
 
 def _parse_candidate(value: object) -> IRFastAssessmentCandidate:

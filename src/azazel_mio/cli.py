@@ -248,8 +248,7 @@ def verify(db, root, case):
         results.append({"case_id": case, "evidence_id": eid, "sha256": digest, "valid": valid})
     return results
 
-def parse_records(raw, fmt):
-    text = raw.decode("utf-8")
+def _check_json_nesting(text, message):
     in_string = False
     escaped = False
     nesting = 0
@@ -266,9 +265,13 @@ def parse_records(raw, fmt):
         elif char in "[{":
             nesting += 1
             if nesting > MAX_JSON_NESTING:
-                raise ValueError("JSON nesting exceeds parser limit")
+                raise ValueError(message)
         elif char in "]}":
             nesting = max(0, nesting - 1)
+
+def parse_records(raw, fmt):
+    text = raw.decode("utf-8")
+    _check_json_nesting(text, "JSON nesting exceeds parser limit")
 
     def loads_bounded(value):
         try:
@@ -482,7 +485,9 @@ def read_candidate_document(path):
     if len(raw) > MAX_INPUT_BYTES:
         raise ValueError("input too large")
     try:
-        return json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys,
+        text = raw.decode("utf-8")
+        _check_json_nesting(text, "input nesting too deep")
+        return json.loads(text, object_pairs_hook=_reject_duplicate_keys,
                           parse_constant=_reject_constant)
     except RecursionError as exc:
         raise ValueError("input nesting too deep") from exc
