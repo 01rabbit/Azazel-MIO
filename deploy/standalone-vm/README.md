@@ -1,6 +1,6 @@
 # Debian ARM64 VMware Fusion PoC
 
-Requires Python 3.12+; no LLM, Docker or network service at runtime. Install from a locally available checkout and dependencies:
+Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Install from a locally available checkout and dependencies:
 
 ```sh
 python3 -m venv .venv
@@ -19,7 +19,17 @@ Run the commands inside the Debian ARM64 guest and record results. macOS tests d
 This CLI is a separate local evidence utility; it does not call the MIO reasoning
 core or take production actions. Store evidence under a dedicated private
 `MIO_IR_HOME` directory. Symlinked storage entries are rejected; use a directory
-owned and controlled by the current user. Reports must be exported outside that
-directory, including SQLite journal paths. Existing report files are replaced
-atomically with private files. These checks do not defend against a concurrent
-writer with access to the storage directory or its parent directories.
+owned by the current user with no group or other access. A new storage directory
+is created with mode `0700`; an existing directory with unsafe ownership or
+permissions is refused without changing its mode. The database, SQLite sidecars,
+and content objects must be owned regular files with one link; symlinks,
+hardlinks, FIFOs, and other non-regular entries are refused. Reports must be
+exported outside the storage directory, including SQLite journal paths.
+Existing report files are replaced atomically with private files.
+
+Each evidence import invocation creates a distinct receipt and event set, even
+when the same bytes were imported before. The stored object bytes are deduplicated
+by SHA-256, while the separate receipt records each import action.
+
+These checks do not defend against a concurrent writer with access to the
+storage directory or its parent directories.

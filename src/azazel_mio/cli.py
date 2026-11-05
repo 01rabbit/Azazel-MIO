@@ -19,19 +19,38 @@ def utc_now():
 def root_path():
     return Path(os.environ.get("MIO_IR_HOME", str(Path.home() / ".local/share/azazel-mio"))).expanduser()
 
-def connect(root):
-    if root.is_symlink() or (root / "cases.sqlite3").is_symlink():
-        raise ValueError("unsafe storage path")
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(root, 0o700)
-    database = root / "cases.sqlite3"
+def current_user_owns(metadata):
+    getuid = getattr(os, "getuid", None)
+    return getuid is None or metadata.st_uid == getuid()
+
+def ensure_private_directory(path, label):
     try:
-        metadata = database.lstat()
+        path.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except FileExistsError:
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError as exc:
+            raise ValueError(f"unsafe {label}: path changed during validation") from exc
+        if (not stat.S_ISDIR(metadata.st_mode) or not current_user_owns(metadata)
+                or stat.S_IMODE(metadata.st_mode) & 0o077):
+            raise ValueError(f"unsafe {label}: expected an owned private directory")
+
+def existing_single_link_file(path, label):
+    try:
+        metadata = path.lstat()
     except FileNotFoundError:
-        pass
-    else:
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise ValueError("unsafe storage database: expected a single-link regular file")
+        return None
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+            or not current_user_owns(metadata)):
+        raise ValueError(f"unsafe {label}: expected an owned single-link regular file")
+    return metadata
+
+def connect(root):
+    ensure_private_directory(root, "storage path")
+    database = root / "cases.sqlite3"
+    existing_single_link_file(database, "storage database")
+    for suffix in ("-journal", "-wal", "-shm"):
+        existing_single_link_file(root / ("cases.sqlite3" + suffix), "SQLite sidecar")
     db = sqlite3.connect(database)
     db.execute("PRAGMA foreign_keys=ON")
     db.executescript("""
@@ -51,19 +70,38 @@ def verify(db, root, case):
     check_case(db, case)
     rows = db.execute("SELECT id,digest FROM evidence WHERE case_id=? ORDER BY id", (case,)).fetchall()
     results = []
+    directory = root / "objects"
+    try:
+        directory_metadata = directory.lstat()
+        directory_safe = (stat.S_ISDIR(directory_metadata.st_mode)
+                          and current_user_owns(directory_metadata))
+    except FileNotFoundError:
+        directory_safe = False
     for eid, digest in rows:
-        path = root / "objects" / digest
-        valid = (not (root / "objects").is_symlink() and path.is_file()
-                 and not path.is_symlink() and hashlib.sha256(path.read_bytes()).hexdigest() == digest)
+        path = directory / digest
+        valid = False
+        if directory_safe:
+            try:
+                metadata = existing_single_link_file(path, "stored object")
+            except ValueError:
+                metadata = None
+            if metadata is not None:
+                valid = hashlib.sha256(path.read_bytes()).hexdigest() == digest
         results.append({"evidence_id": eid, "sha256": digest, "valid": valid})
     return results
 
 def parse_records(raw, fmt):
     text = raw.decode("utf-8")
+    def loads_bounded(value):
+        try:
+            return json.loads(value)
+        except RecursionError as exc:
+            raise ValueError("JSON nesting exceeds parser limit") from exc
+
     if fmt == "jsonl":
-        records = [json.loads(line) for line in text.splitlines() if line.strip()]
+        records = [loads_bounded(line) for line in text.splitlines() if line.strip()]
     else:
-        parsed = json.loads(text)
+        parsed = loads_bounded(text)
         records = parsed if isinstance(parsed, list) else [parsed]
     if len(records) > MAX_RECORDS or any(not isinstance(r, dict) for r in records):
         raise ValueError("unsupported record count or shape")
@@ -96,13 +134,10 @@ def import_file(db, root, case, filename, fmt):
     records = parse_records(raw, fmt)
     digest = hashlib.sha256(raw).hexdigest()
     directory = root / "objects"
-    if directory.is_symlink():
-        raise ValueError("unsafe object directory")
-    directory.mkdir(mode=0o700, exist_ok=True)
+    ensure_private_directory(directory, "object directory")
     destination = directory / digest
-    if destination.is_symlink():
-        raise ValueError("unsafe object path")
-    if destination.exists():
+    metadata = existing_single_link_file(destination, "stored object")
+    if metadata is not None:
         if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
             raise ValueError("stored object corrupted")
     else:

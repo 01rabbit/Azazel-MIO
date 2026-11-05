@@ -66,3 +66,32 @@ Reviewer commands from this checkout, using the retained local environment:
 Alternatively create a new Python 3.12 virtual environment outside the checkout,
 install this checkout with pip install -e . and install pytest. No virtual
 environment is committed. Logs: .git/ir-refresh-evidence/ir11-03-*.log.
+
+## Current-main rebase candidate — 2026-11-05
+
+The historical hashes, code line references, and 297/299 test counts above
+describe the earlier refresh candidate; they are not evidence for the current
+main rebase. Current MIO main is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`.
+The PR #11-only diff remains the six IR files listed above, with current main's
+package metadata and exports retained and only the `mio-ir` script added.
+
+The independent Haiku/low review of candidate `611e89352c182d3525982ee3509489c1a27e17b3`
+found no High issue, but identified four Low/Medium items and documentation
+drift. Before syncing the rebased PR, the candidate addresses these as follows:
+
+- Existing storage directories are no longer chmodded. They must already be
+  owned by the invoking user and private; new roots are created mode `0700`.
+- The database, SQLite sidecars and existing content objects are checked with
+  `lstat`; symlinks, hardlinks, non-regular entries and foreign ownership are
+  refused before open/read. A FIFO object is covered by a regression test.
+- Excessive JSON nesting is converted to a bounded input error rather than a
+  traceback.
+- Re-importing identical bytes intentionally creates a distinct evidence
+  receipt/event set while content objects remain SHA-256 deduplicated. README
+  and regression coverage make this behavior explicit.
+- The Debian ARM64 guide now states the package's Python `>=3.11` requirement.
+
+The final candidate SHA, refreshed independent review, full test results,
+editable-install/CLI smoke, and updated code references must be recorded here
+after those checks complete. The Debian ARM64 guest remains a separate final
+acceptance gate.
