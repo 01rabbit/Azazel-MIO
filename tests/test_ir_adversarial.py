@@ -389,7 +389,7 @@ class IRAdversarialTests(unittest.TestCase):
             return original_fsync(fd)
 
         with patch.object(cli.os, "fsync", side_effect=fail_directory_fsync):
-            with self.assertRaisesRegex(ValueError, "filesystem cannot safely (publish|sync) stored objects"):
+            with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
                 import_file(self.db, self.root, self.case, source, "jsonl")
 
         self.assertEqual(self.count("evidence"), 0)

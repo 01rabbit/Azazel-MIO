@@ -193,7 +193,7 @@ def recover_interrupted_object_temp(path, destination):
         return
     if (not stat.S_ISREG(temporary.st_mode) or not current_user_owns(temporary)
             or stat.S_IMODE(temporary.st_mode) & 0o077):
-        raise ValueError("unsafe interrupted object temporary")
+        raise ValueError(f"unsafe interrupted object temporary: {path}")
     try:
         published = destination.lstat()
     except FileNotFoundError:
@@ -231,7 +231,7 @@ def unlink_staged_object_if_ours(path, destination, identity):
         os.unlink(path)
 
 def fsync_directory(path):
-    """Persist directory entry changes before their database references commit."""
+    """Request filesystem sync of directory entries before database references commit."""
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(path, flags)
@@ -525,10 +525,19 @@ def import_file(db, root, case, filename, fmt):
                 except OSError as exc:
                     raise ValueError("filesystem cannot safely publish stored objects") from exc
             finally:
+                pending_error = sys.exc_info()[0] is not None
                 if fd is not None:
                     os.close(fd)
-                unlink_staged_object_if_ours(staging, destination, staging_identity)
-                fsync_directory(directory)
+                try:
+                    unlink_staged_object_if_ours(staging, destination, staging_identity)
+                except OSError:
+                    if not pending_error:
+                        raise
+                try:
+                    fsync_directory(directory)
+                except ValueError:
+                    if not pending_error:
+                        raise
                 staging_identity = None
             metadata = existing_single_link_file(destination, "stored object")
             if metadata is None:

@@ -9,12 +9,14 @@ object safely, the import fails closed.
 
 After an ordinary process interruption, the next import can remove a
 single-link temporary left before publication or the extra link left directly
-after publication. If recovery reports `unsafe interrupted object temporary`,
-the store contains a state the importer cannot identify safely. Stop all
-writers and preserve a backup before investigating. Compare the temporary and
-digest object with `lstat` (file type, owner, mode, device, inode and link
-count). A temporary with one link and no published digest object is an
-unpublished temporary; a temporary and digest object with the same device and
+after publication. A one-link temporary is unpublished even if a digest-name
+object already exists; the importer verifies that digest object separately.
+If recovery reports `unsafe interrupted object temporary: <path>`, the store
+contains a state the importer cannot identify safely. Stop all writers and
+preserve a backup before investigating. Compare the temporary and digest
+object with `lstat` (file type, owner, mode, device, inode and link count). A
+temporary with one link is an unpublished temporary only when it is an owned,
+private regular file. A temporary and digest object with the same device and
 inode and exactly two links represent a redundant temporary name. Other states
 must be preserved for investigation. Do not remove or replace the digest
 object or force an import past this error.
