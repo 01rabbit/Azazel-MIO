@@ -21,7 +21,7 @@ def root_path():
 
 def current_user_owns(metadata):
     getuid = getattr(os, "getuid", None)
-    return getuid is None or metadata.st_uid == getuid()
+    return getuid is not None and metadata.st_uid == getuid()
 
 def ensure_private_directory(path, label):
     try:
@@ -31,6 +31,11 @@ def ensure_private_directory(path, label):
             metadata = path.lstat()
         except FileNotFoundError as exc:
             raise ValueError(f"unsafe {label}: path changed during validation") from exc
+        if (not stat.S_ISDIR(metadata.st_mode) or not current_user_owns(metadata)
+                or stat.S_IMODE(metadata.st_mode) & 0o077):
+            raise ValueError(f"unsafe {label}: expected an owned private directory")
+    else:
+        metadata = path.lstat()
         if (not stat.S_ISDIR(metadata.st_mode) or not current_user_owns(metadata)
                 or stat.S_IMODE(metadata.st_mode) & 0o077):
             raise ValueError(f"unsafe {label}: expected an owned private directory")
@@ -74,7 +79,8 @@ def verify(db, root, case):
     try:
         directory_metadata = directory.lstat()
         directory_safe = (stat.S_ISDIR(directory_metadata.st_mode)
-                          and current_user_owns(directory_metadata))
+                          and current_user_owns(directory_metadata)
+                          and not (stat.S_IMODE(directory_metadata.st_mode) & 0o077))
     except FileNotFoundError:
         directory_safe = False
     for eid, digest in rows:
