@@ -361,7 +361,8 @@ class IRWorkflowTests(unittest.TestCase):
         with patch("azazel_mio.cli.current_user_owns", return_value=False):
             with self.assertRaisesRegex(ValueError, "owned private directory"):
                 connect(new_root)
-        self.assertFalse(new_root.exists())
+        self.assertTrue(new_root.is_dir())
+        self.assertEqual(stat.S_IMODE(new_root.lstat().st_mode), 0o700)
 
     def test_storage_fails_closed_without_owner_identity(self):
         with patch("azazel_mio.cli.os.getuid", None):
@@ -487,9 +488,9 @@ class IRWorkflowTests(unittest.TestCase):
             output = Path(export) / "report.md"
             self.assertEqual(self.run_report(output, "markdown"), 0)
             content = output.read_text(encoding="utf-8")
-            unsafe = r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+            unsafe = r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
             self.assertNotRegex(content, unsafe)
-            self.assertIn("left [31mred  RIGHT next", content)
+            self.assertIn(r"left \[31mred  RIGHT next", content)
 
     def test_markdown_report_labels_missing_timestamp_unknown(self):
         source = self.root / "naive-timestamp.jsonl"
