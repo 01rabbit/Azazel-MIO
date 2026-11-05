@@ -163,6 +163,9 @@ def test_acceptance_deadline_fails_before_invoking_another_command():
 
 def test_parse_json_stdout_accepts_json():
     assert runner.parse_json_stdout("case.list", '[{"case_id": 1}]') == [{"case_id": 1}]
+    assert runner.parse_json_stdout("case.list", '{"text": "[[[[not nesting]]]]"}') == {
+        "text": "[[[[not nesting]]]]"
+    }
 
 
 def test_parse_json_stdout_rejects_invalid_and_deep_json():
@@ -170,6 +173,17 @@ def test_parse_json_stdout_rejects_invalid_and_deep_json():
         runner.parse_json_stdout("case.list", "x" * 5000)
     with pytest.raises(runner.AcceptanceError, match="stdout is not JSON"):
         runner.parse_json_stdout("case.list", "[" * 2000 + "0" + "]" * 2000)
+    depth = runner.MAX_JSON_DEPTH
+    assert runner.parse_json_stdout(
+        "case.list", "[" * depth + "0" + "]" * depth
+    ) == nested_list(depth)
+
+
+def nested_list(depth):
+    value = 0
+    for _ in range(depth):
+        value = [value]
+    return value
 
 
 def test_bounded_truncates_and_collapses_whitespace():

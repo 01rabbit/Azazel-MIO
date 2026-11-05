@@ -35,6 +35,7 @@ VERSION_CHECK_TIMEOUT_SECONDS = 5
 DIAG_LIMIT = 400
 MAX_COMMAND_OUTPUT_BYTES = 64 * 1024
 MAX_REPORT_BYTES = 4 * 1024 * 1024
+MAX_JSON_DEPTH = 64
 GUEST_ARCHES = frozenset({"aarch64", "arm64"})
 VM_DETECTOR_PATHS = (Path("/usr/bin/systemd-detect-virt"), Path("/bin/systemd-detect-virt"))
 EXIT_OK = 0
@@ -224,7 +225,33 @@ def run_mio(exe: str, args: list[str], env: dict[str, str],
     return run_captured([exe, *args], env, timeout, "mio-ir")
 
 
+def _json_nesting_exceeds_limit(text: str) -> bool:
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                return True
+        elif char in "]}":
+            depth -= 1
+    return False
+
+
 def parse_json_stdout(step: str, text: str) -> Any:
+    if _json_nesting_exceeds_limit(text):
+        raise AcceptanceError(step, "stdout is not JSON: maximum nesting depth exceeded")
     try:
         return json.loads(text)
     except (json.JSONDecodeError, RecursionError) as exc:
