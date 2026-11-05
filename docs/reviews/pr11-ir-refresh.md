@@ -343,6 +343,8 @@ Independent review of exact candidate `e17c7129bafd223cb92a6502b5da38c8bf4e29cd`
 (base `5bb09c8d28c57604dc1c63903b98fed7587b49ea`) found two Medium, five Low,
 and one Info finding. The fixes and dispositions are recorded below.
 
+### Medium findings
+
 - IR-01: Three mutation tests identified by review modified new `0400` objects
   without making them writable, so root could mask a permission failure. The
   mutation tests now set `0600` explicitly. Full tests were rerun as uid 1001.
@@ -351,7 +353,7 @@ and one Info finding. The fixes and dispositions are recorded below.
   includes ESC, NUL, bidi override and U+2028. README no longer claims this is a
   universal Markdown sanitizer.
 
-Low findings were addressed or bounded:
+### Low findings
 
 - IR-03: Output containment now walks ancestors with `samefile`, covering
   case-insensitive filesystem aliases. Its regression test passed on macOS;
@@ -359,22 +361,28 @@ Low findings were addressed or bounded:
 - IR-04: The foreign-owner test now uses a nonexistent path and exercises the
   new-directory branch, checking the created mode is `0700` before rejection.
 - IR-05: README gives Bash-only commands in an isolated subshell, checks the
-  case ID and prints the report path; it also documents venv activation scope.
-  A broken sentence was fixed. `MIO_IR_HOME` is described accurately: expand
-  `~`, require an absolute path, and do not canonicalize it.
+  case ID and prints the report path; it also documents that both venv and
+  `MIO_IR_HOME` activation must be repeated for later commands. A broken
+  sentence was fixed. `MIO_IR_HOME` expands `~`, requires an absolute path, and
+  is not canonicalized.
 - IR-06: CLI JSON status output uses ASCII escapes so a non-ASCII local path
   cannot make printing fail after an atomic report replacement. A regression
   test checks an emoji path round-trip and escaped stdout.
-- IR-07: The review record now has an explicit `Review limits` section for
-  guest/hardware and downstream-renderer coverage boundaries. The Info note's
-  untested CLI paths remain explicitly listed as limits, not accepted as tested.
 
-Independent follow-up on `59fb7785108b5ec00ae8ea6d8ba32ac6bae4c221` found no
-High/Medium findings. It requested clearer test/result provenance, artifact
-source linkage, and README shell behavior; the final records below address
-those documentation gaps.
+### Info finding
 
-Current MIO main/base is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The final
+- IR-07: The untested CLI paths are listed under `Review limits` and are not
+  represented as tested or accepted.
+
+The independent code follow-up on `59fb7785108b5ec00ae8ea6d8ba32ac6bae4c221`
+found no High/Medium findings. The independent document review on
+`c7a5e3f566ebbf4630347caef7f440eae295a830` also found no High/Medium findings
+and three Low items. The current candidate corrects its head/test-tree
+provenance, records the wheel source details, ties the report-creation review
+to its treatment, and clarifies README environment scope. Neither reviewer ran
+tests; the test evidence below is from separate commands.
+
+Current MIO main/base is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The
 candidate changes eight files: `CHANGELOG.md`, `.gitignore`,
 `deploy/standalone-vm/README.md`, `docs/reviews/pr11-ir-refresh.md`,
 `examples/synthetic_ir_case/events.jsonl`, `pyproject.toml`,
@@ -386,24 +394,29 @@ Package source and metadata are fixed at commit
 `c7735c6c6fe93c384e0fdd68d9f14122b4f02b78` (tree
 `731473fa785cbd7e793026527b2425979eb3229d`). In a self-contained Git archive
 in Docker `python:3.12-arm64-c65`, CPython 3.12 with `pytest==8.4.2`, the full
-suite passed as uid 1001: **703 passed, 1
-skipped**, exit 0. The skipped test is specifically the case-alias test on the
+suite command `PYTHONPATH=src python -m pytest -q -p no:cacheprovider` passed as
+uid 1001: **703 passed, 1 skipped**, exit 0, with no deselection. The skipped
+test is specifically the case-alias test on the
 Linux case-sensitive filesystem; it passed separately on macOS with CPython
 `3.14` using `unittest`. An ARM64 wheel was built and installed, and
 `mio-ir --help` succeeded. Wheel SHA-256:
 `cc5cafad996d54c1cbd3b696d150db6f28925c65dc984754f1abeab8cbbbf5e3`.
-The full-test wheel was built from the `c7735c6` archive; `src/` and
-`pyproject.toml` are identical to package-source commit `0cfb0fe` (the changes
-between those commits are tests and documentation). It was installed before
-the full suite. A second wheel was retained as
+The temporary full-test wheel was built from the `c7735c6` archive; `src/` and
+`pyproject.toml` are identical to package-source commit `0cfb0fe` (changes
+between them are tests/documentation). It was installed before the full suite
+and then discarded with its container; its SHA remains in the preserved run
+log. A second wheel was retained as
 `azazel_mio-0.1.0.dev20261105+ir11r8-py3-none-any.whl`, SHA-256
 `2904c0ba5e3c4417638ae602f2bf6f4a5b365c4d4f9ebf28e552f779c93489d4`, and was
 built from the exact `0cfb0fe` package-source archive. It installed in the
-isolated ARM64 container and `mio-ir --help` passed. The README's case-create,
-import, verify, timeline and report commands were separately run with an
-editable install of that same package source; five synthetic records produced
-five events and valid evidence. The two build hashes are tracked separately;
-neither replaced the other.
+isolated ARM64 container and `mio-ir --help` passed. The README's final Bash
+subshell command block was separately run from that package source using an
+editable install. Its offline wheelhouse contained setuptools 84.2.1, wheel
+0.48.0, packaging 26.3 and the retained candidate wheel; after provisioning,
+the documented pip commands used `--no-index`. Five synthetic records
+produced five events and valid evidence. The two wheel hashes are tracked
+against their distinct build archives; the temporary full-test wheel was not
+retained or substituted for the saved artifact.
 
 ### Review limits
 
@@ -412,14 +425,15 @@ separate recorded run. Debian VMware guest setup, real evidence, credentials,
 deployment, publication and hardware acceptance were not exercised. The
 case-alias test is conditional on filesystem behavior; Linux skipped it and
 macOS ran it directly against code from `0cfb0fea08a1449d1041ea54a7124b2c5b5aa326`.
-The final head adds documentation only to tested code/test tree `c7735c6`;
+After the test tree `c7735c6`, this candidate's commits changed only
+`CHANGELOG.md`, `deploy/standalone-vm/README.md`, and this review document;
 `src/`, `tests/`, and `pyproject.toml` are unchanged. Package source and
-metadata are unchanged from `0cfb0fe` through final head `c7a5e3f`. The README's
-final Bash subshell commands were executed with an editable install of the same
-package source; wheel installation and `mio-ir --help` were checked separately.
+metadata from `0cfb0fe` are unchanged through the current candidate.
 
 Known untested paths from the Info review note are `case list`, report output
 with a missing parent, an oversized source input, and output directly under the
 objects directory. Markdown escaping covers the explicitly listed control,
 line-separator and bidi characters, not every possible display transformation
-in every downstream Markdown renderer.
+in every downstream Markdown renderer. The final Bash README block was run
+from the exact current text; `MIO_IR_HOME` must be exported again when using
+later commands in the interactive shell.

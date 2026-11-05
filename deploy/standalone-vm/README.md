@@ -1,6 +1,6 @@
 # Debian ARM64 VMware Fusion PoC
 
-Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands in Bash from the checkout root. The block is a subshell, so its environment changes do not persist; activate `.venv` separately for later commands.
+Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands in Bash from the checkout root. The block is a subshell, so its environment changes do not persist; activate `.venv` and export `MIO_IR_HOME` again before later commands.
 
 ```bash
 (
