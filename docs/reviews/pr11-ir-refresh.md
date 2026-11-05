@@ -168,7 +168,9 @@ Validation for the exact source commit/tree above:
   `pytest==8.4.2`, full suite: **687 passed**, exit 0. The archive was mounted
   read-only and copied to the container's ephemeral `/tmp` because two existing
   tests intentionally create `.codex-work` below the source root. Docker was
-  run with `--rm`; suite execution used `/Users/mao/azn-ci/suite-lock.sh`.
+  run with `--rm`; suite execution used the workspace's existing serialized
+  test lock. The command inside the container was
+  `PYTHONPATH=src python -m pytest -q -p no:cacheprovider`.
 - ARM64 wheel build from that archive, installed into the same disposable
   container: `mio-ir --help` succeeded and metadata reported
   `0.1.0.dev20261105+ir11r2`. Wheel SHA-256:
@@ -247,9 +249,9 @@ reported no High/Medium issues and six Low items. Its findings and dispositions:
   emphasis/code syntax.
 - The candidate version was reused across wheels with different contents. The
   tested source commit below uses the distinct `+ir11r3` development version;
-  the earlier `+ir11r2` and `+ir11r3` local artifacts remain in separate evidence
-  directories with their own hashes and are historical only. The current wheel
-  uses the filename for `+ir11r3` and its hash below.
+  only the earlier `+ir11r2` artifact predates it. Both local artifacts remain
+  in separate evidence directories with their own hashes and are historical
+  only. The current wheel uses the filename for `+ir11r3` and its hash below.
 - The document opening now distinguishes retained exports from the new
   console-script and development-version metadata. The CLI module docstring now
   says event timestamps come from input records. Import/report timestamps are
@@ -279,6 +281,28 @@ verify evidence, build its timeline, and generate a nonempty JSON report. No
 real evidence or credentials were used; the wheel remains local and unpublished.
 
 The review did not run tests or validate commit identities. It did not report a
-High/Medium defect. Final review of the following documentation-only candidate
-head remains required before syncing PR #11. Debian ARM64 VMware guest
-acceptance remains outstanding.
+High/Medium defect. Debian ARM64 VMware guest acceptance remains outstanding.
+
+The review of the prior `bc28645` candidate returned three Low items and
+informational notes. The escape set is now all ASCII punctuation via
+`string.punctuation`, with regressions for tilde, ampersand, colon, links, raw
+HTML, emphasis and code. Candidate version history now states that only the
+`+ir11r2` wheel preceded `+ir11r3`; the current `+ir11r4` identifies new source
+content. The record removes the local absolute suite-lock path, corrects
+timezone wording, and documents missing Markdown timestamps as `unknown`.
+The `docs/versioning.md` scheme distinguishes an integration wheel built from
+an unchanged reviewed snapshot (`+git.<commit>`) from a development candidate
+that changes behavior; this candidate uses a PEP 440 `.dev` version with a
+unique local label. ARM64 wheel build/install confirms the metadata is accepted.
+
+Final source/test commit:
+`b3574603fd5be7a9ee5cb1fcb65fa89aa1956c15` (tree
+`9187f1bbfb891379afd2002fc6bb6bd577fc9f63`), version
+`0.1.0.dev20261105+ir11r4`. Self-contained Git archive, Docker
+`python:3.12-arm64-c65`, Python 3.12, pytest 8.4.2, full suite: **695 passed**,
+exit 0. The wheel was installed and `mio-ir --help` succeeded; SHA-256:
+`be2260d95df38db5aee3a59e45d45dc0d2e8efd6dd609daff9b2abb39351f9f7`. The
+documented five-record create/import/verify/timeline/report workflow also
+completed successfully with synthetic input. These results are for the exact
+source commit above; this record's final docs-only commit is not executable test
+input. Debian ARM64 VMware guest acceptance remains outstanding.

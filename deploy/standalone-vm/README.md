@@ -22,8 +22,8 @@ Input summaries must be JSON scalars (string, finite number, boolean, or null).
 An omitted summary becomes `No summary provided`; an explicit null becomes an
 empty summary. Summaries longer than 2,048 characters are truncated in timeline
 and report text; the original input remains available through the stored object.
-Only ISO-formatted string timestamps with an explicit UTC offset are mapped;
-other types and naive timestamps remain unknown.
+Only ISO-formatted string timestamps with an explicit timezone offset are
+normalized to UTC; other types and naive timestamps remain unknown.
 String timestamps longer than 256 characters are rejected; shorter unparseable
 or unrepresentable timestamps remain unknown. JSONL records are separated only
 by LF (with an optional preceding CR for CRLF); Unicode line-separator
@@ -34,9 +34,9 @@ verify` and `report generate` return exit code 3 when stored evidence fails
 integrity verification; argparse usage errors return 2.
 An empty JSONL file has no records; empty JSON input and UTF-8 BOM-prefixed input
 are rejected. Timeline `record` is the one-based event index within that import,
-not a physical source line number. Markdown reports replace CR and LF in summary
-text with spaces and escape Markdown punctuation to keep untrusted summaries
-inert in rendered reports.
+not a physical source line number. Markdown reports show missing timestamps as
+`unknown`, replace CR and LF in summary text with spaces, and escape ASCII
+punctuation to keep untrusted summaries inert in rendered reports.
 
 Run the commands inside the Debian ARM64 guest and record results. macOS tests do not establish guest verification. This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
 
