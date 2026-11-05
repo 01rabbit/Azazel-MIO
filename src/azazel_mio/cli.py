@@ -231,11 +231,14 @@ def unlink_staged_object_if_ours(path, destination, identity):
 def fsync_directory(path):
     """Persist directory entry changes before their database references commit."""
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
-    fd = os.open(path, flags)
     try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        fd = os.open(path, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise ValueError("filesystem cannot safely sync stored objects") from exc
 
 def connect(root):
     ensure_private_directory(root, "storage path")
