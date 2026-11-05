@@ -134,7 +134,7 @@ python -m pip install .
 
 **試験**
 
-`pyproject.toml` は試験ランナーを宣言していません。一部のテストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。`docs/assessment-baseline.md` はPython 3.12での記録で、パッケージは Python 3.11+ を要求しますが、3.11での試験実行は確認していません。
+`pyproject.toml` は試験ランナーを宣言していません。一部のテストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。`docs/assessment-baseline.md` の集中unittest手順は Python 3.12+ を要求します。一方、パッケージは Python 3.11+ を要求しますが、3.11での全試験実行は確認していません。
 
 ```sh
 python -m pip install pytest
