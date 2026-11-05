@@ -440,12 +440,16 @@ def import_file(db, root, case, filename, fmt):
                 os.chmod(tmp, 0o400)
                 # Publish atomically without replacing a path another writer created after
                 # the initial existence check. Keep the staged inode so failure cleanup can
-                # prove that the destination still names the file this call published.
+                # prove that the destination still names the file this call published. Set
+                # it before link() so an interrupt immediately after a successful link still
+                # leaves enough identity to clean up; a competing file has a different inode.
                 created_identity = (staged.st_dev, staged.st_ino)
                 try:
                     os.link(tmp, destination)
                 except FileExistsError:
                     pass
+                except OSError as exc:
+                    raise ValueError("filesystem cannot safely publish stored objects") from exc
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)

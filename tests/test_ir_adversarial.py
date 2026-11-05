@@ -5,6 +5,7 @@ Inputs are copied into a temporary directory before import so tests never write
 next to the fixtures.
 """
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -264,6 +265,33 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(destination.read_bytes(), raced_bytes)
         self.assertEqual(self.count("evidence"), 0)
         self.assertEqual(self.count("events"), 0)
+        self.assertEqual(self.objects(), [digest])
+
+    def test_import_reuses_identical_object_published_during_race(self):
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        destination = self.root / "objects" / digest
+
+        def publish_racing_object(_source, target):
+            Path(target).write_bytes(source.read_bytes())
+            raise FileExistsError("object path appeared before publish")
+
+        with patch.object(cli.os, "link", side_effect=publish_racing_object):
+            evidence_id = import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(self.objects(), [digest])
+        self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], evidence_id)
+        self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
+
+    def test_unsupported_hardlink_publish_fails_closed_and_removes_temp(self):
+        source = self.stage(EVENTS)
+        with patch.object(cli.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
+            with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
+                import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
+        self.assertEqual(self.objects(), [])
 
     def test_failed_import_does_not_unlink_replacement_object(self):
         self.install_event_failure()
@@ -297,6 +325,7 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(destination.read_bytes(), replacement_bytes)
         self.assertEqual(self.count("evidence"), 0)
         self.assertEqual(self.count("events"), 0)
+        self.assertEqual(self.objects(), [digest])
 
     def test_unknown_case_rejected_without_any_write(self):
         source = self.stage(EVENTS)
