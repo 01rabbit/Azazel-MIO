@@ -104,6 +104,19 @@ def connect(root):
         db.close()
         raise
 
+def output_is_inside_storage(root, path):
+    root = root.resolve()
+    candidate = path
+    while True:
+        try:
+            if candidate.samefile(root):
+                return True
+        except OSError:
+            pass
+        if candidate == candidate.parent:
+            return False
+        candidate = candidate.parent
+
 def check_case(db, case):
     if not db.execute("SELECT 1 FROM cases WHERE id=?", (case,)).fetchone():
         raise ValueError("unknown case")
@@ -344,7 +357,7 @@ def main():
                     not item["valid"] for item in output["evidence"]
                 )
                 path = Path(args.output).resolve()
-                if path == root.resolve() or root.resolve() in path.parents:
+                if output_is_inside_storage(root, path):
                     raise ValueError("output may not overwrite internal storage")
                 if args.format == "markdown":
                     content = "# IR Case " + str(args.case) + "\n\n" + "\n".join(

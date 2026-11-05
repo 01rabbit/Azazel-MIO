@@ -509,6 +509,18 @@ class IRWorkflowTests(unittest.TestCase):
             self.assertEqual(self.run_report(output), 1)
         self.assertIn("output may not overwrite internal storage", errors.getvalue())
 
+    def test_report_rejects_case_alias_of_internal_storage(self):
+        alternate_spelling = Path(str(self.root).swapcase())
+        if not alternate_spelling.exists():
+            self.skipTest("filesystem treats path case as significant")
+        import_file(self.db, self.root, self.case, self.source, "jsonl")
+        output = alternate_spelling / "objects" / "report.md"
+        errors = StringIO()
+        with redirect_stderr(errors):
+            self.assertEqual(self.run_report(output), 1)
+        self.assertFalse(output.exists())
+        self.assertIn("output may not overwrite internal storage", errors.getvalue())
+
     def test_report_hardlink_does_not_truncate_evidence(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
