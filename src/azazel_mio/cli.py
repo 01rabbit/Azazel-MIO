@@ -418,7 +418,7 @@ def import_file(db, root, case, filename, fmt):
     # reference this digest must wait until this import commits or rolls back, so cleanup
     # below never unlinks an object another transaction can see.
     db.execute("BEGIN IMMEDIATE")
-    created = False
+    created_identity = None
     try:
         metadata = existing_single_link_file(destination, "stored object")
         if metadata is not None:
@@ -436,12 +436,29 @@ def import_file(db, root, case, filename, fmt):
                     handle.write(raw)
                     handle.flush()
                     os.fsync(handle.fileno())
+                    staged = os.fstat(handle.fileno())
                 os.chmod(tmp, 0o400)
-                os.replace(tmp, destination)
-                created = True
+                # Publish atomically without replacing a path another writer created after
+                # the initial existence check. Keep the staged inode so failure cleanup can
+                # prove that the destination still names the file this call published.
+                created_identity = (staged.st_dev, staged.st_ino)
+                try:
+                    os.link(tmp, destination)
+                except FileExistsError:
+                    pass
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+            metadata = existing_single_link_file(destination, "stored object")
+            if metadata is None:
+                raise ValueError("stored object disappeared during import")
+            if metadata.st_size > MAX_BYTES:
+                raise ValueError("stored object corrupted or too large")
+            with destination.open("rb") as handle:
+                stored = handle.read(MAX_BYTES + 1)
+            if (len(stored) > MAX_BYTES
+                    or hashlib.sha256(stored).hexdigest() != digest):
+                raise ValueError("stored object corrupted")
         cur = db.execute("INSERT INTO evidence(case_id,filename,digest,format,imported) VALUES(?,?,?,?,?)",
                          (case, source.name, digest, fmt, utc_now()))
         eid = cur.lastrowid
@@ -449,7 +466,7 @@ def import_file(db, root, case, filename, fmt):
                        [(eid, *record) for record in records])
         db.commit()
         # The object is now referenced by committed evidence; a later exception must not unlink it.
-        created = False
+        created_identity = None
     except BaseException:
         # Ordinary exceptions and KeyboardInterrupt both land here. Unlink only an object this
         # call published AND whose transaction is still active; if a commit already completed,
@@ -457,8 +474,15 @@ def import_file(db, root, case, filename, fmt):
         # Cleanup must never mask the original error or skip rollback. If the unlink fails, the
         # published object may remain as an orphan (no evidence row references it).
         try:
-            if created and db.in_transaction and os.path.lexists(destination):
-                os.unlink(destination)
+            if created_identity is not None and db.in_transaction:
+                try:
+                    current = os.lstat(destination)
+                except FileNotFoundError:
+                    current = None
+                if (current is not None
+                        and (current.st_dev, current.st_ino) == created_identity
+                        and current.st_nlink == 1):
+                    os.unlink(destination)
         except OSError:
             pass
         finally:

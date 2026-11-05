@@ -5,6 +5,7 @@ Inputs are copied into a temporary directory before import so tests never write
 next to the fixtures.
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -246,6 +247,57 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(len(b_events), 5)
         self.assertTrue({r["evidence_id"] for r in a_events}.isdisjoint({r["evidence_id"] for r in b_events}))
 
+    def test_import_does_not_replace_object_published_after_existence_check(self):
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        destination = self.root / "objects" / digest
+        raced_bytes = b"object published by another writer"
+
+        def publish_racing_object(_source, target):
+            Path(target).write_bytes(raced_bytes)
+            raise FileExistsError("object path appeared before publish")
+
+        with patch.object(cli.os, "link", side_effect=publish_racing_object):
+            with self.assertRaisesRegex(ValueError, "stored object corrupted"):
+                import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(destination.read_bytes(), raced_bytes)
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
+
+    def test_failed_import_does_not_unlink_replacement_object(self):
+        self.install_event_failure()
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        destination = self.root / "objects" / digest
+        replacement = self.root / "objects" / "replacement"
+        replacement_bytes = b"replacement from another writer"
+        connection = self.db
+
+        class ReplacingConnection:
+            @property
+            def in_transaction(self):
+                return connection.in_transaction
+
+            def execute(self, *args, **kwargs):
+                return connection.execute(*args, **kwargs)
+
+            def executemany(self, sql, parameters):
+                if sql.startswith("INSERT INTO events"):
+                    replacement.write_bytes(replacement_bytes)
+                    os.replace(replacement, destination)
+                return connection.executemany(sql, parameters)
+
+            def __getattr__(self, name):
+                return getattr(connection, name)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            import_file(ReplacingConnection(), self.root, self.case, source, "jsonl")
+
+        self.assertEqual(destination.read_bytes(), replacement_bytes)
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
+
     def test_unknown_case_rejected_without_any_write(self):
         source = self.stage(EVENTS)
         with self.assertRaisesRegex(ValueError, "unknown case"):
@@ -290,10 +342,19 @@ class IRAdversarialTests(unittest.TestCase):
         # the original IntegrityError must still propagate and the transaction must end.
         source = self.stage(EVENTS)
         self.install_event_failure()
-        with patch.object(cli.os, "unlink", side_effect=OSError("forced unlink failure")) as unlink_mock:
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        destination = self.root / "objects" / digest
+        real_unlink = os.unlink
+
+        def fail_object_unlink(path):
+            if os.fspath(path) == os.fspath(destination):
+                raise OSError("forced object cleanup failure")
+            return real_unlink(path)
+
+        with patch.object(cli.os, "unlink", side_effect=fail_object_unlink) as unlink_mock:
             with self.assertRaises(sqlite3.IntegrityError):
                 import_file(self.db, self.root, self.case, source, "jsonl")
-        unlink_mock.assert_called_once()
+        self.assertIn(os.fspath(destination), [os.fspath(call.args[0]) for call in unlink_mock.call_args_list])
         self.assertFalse(self.db.in_transaction)
         self.assertEqual(self.count("evidence"), 0)
         self.assertEqual(self.count("events"), 0)
