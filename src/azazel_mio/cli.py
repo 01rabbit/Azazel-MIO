@@ -475,10 +475,12 @@ def import_file(db, root, case, filename, fmt):
     # Take the SQLite write lock before publishing the object. Any other writer that could
     # reference this digest must wait until this import commits or rolls back, so cleanup
     # below never unlinks an object another transaction can see.
-    db.execute("BEGIN IMMEDIATE")
+    had_transaction = db.in_transaction
     created_identity = None
     staging_identity = None
+    commit_attempted = False
     try:
+        db.execute("BEGIN IMMEDIATE")
         recover_interrupted_object_temp(staging, destination)
         metadata = existing_single_link_file(destination, "stored object")
         if metadata is not None:
@@ -539,13 +541,14 @@ def import_file(db, root, case, filename, fmt):
         eid = cur.lastrowid
         db.executemany("INSERT INTO events(evidence_id,record_number,timestamp,original_timestamp,summary) VALUES(?,?,?,?,?)",
                        [(eid, *record) for record in records])
+        commit_attempted = True
         db.commit()
         # The object is now referenced by committed evidence; a later exception must not unlink it.
         created_identity = None
     except BaseException:
         # Ordinary exceptions and KeyboardInterrupt both land here. Unlink only an object this
-        # call published AND whose transaction is still active; if a commit already completed,
-        # the object is referenced by committed evidence and must be kept.
+        # call published before invoking commit(). Once commit was attempted, its outcome can be
+        # ambiguous and preserving an unreferenced orphan is safer than deleting committed data.
         # Cleanup must never mask the original error or skip rollback. If the unlink fails, the
         # published object may remain as an orphan (no evidence row references it).
         try:
@@ -554,7 +557,8 @@ def import_file(db, root, case, filename, fmt):
                     unlink_staged_object_if_ours(staging, destination, staging_identity)
                 except OSError:
                     pass
-            if created_identity is not None and db.in_transaction:
+            if (created_identity is not None and not commit_attempted
+                    and not had_transaction and db.in_transaction):
                 try:
                     current = os.lstat(destination)
                 except FileNotFoundError:
@@ -566,7 +570,8 @@ def import_file(db, root, case, filename, fmt):
         except OSError:
             pass
         finally:
-            db.rollback()
+            if not had_transaction and db.in_transaction:
+                db.rollback()
         raise
     return eid
 

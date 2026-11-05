@@ -321,12 +321,46 @@ class IRAdversarialTests(unittest.TestCase):
     def test_unsupported_hardlink_publish_fails_closed_and_removes_temp(self):
         source = self.stage(EVENTS)
         with patch.object(cli.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
-            with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
+            with self.assertRaisesRegex(ValueError, "filesystem cannot safely (publish|sync) stored objects"):
                 import_file(self.db, self.root, self.case, source, "jsonl")
 
         self.assertEqual(self.count("evidence"), 0)
         self.assertEqual(self.count("events"), 0)
         self.assertEqual(self.objects(), [])
+
+    def test_ambiguous_commit_failure_keeps_published_object(self):
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        destination = self.root / "objects" / digest
+        connection = self.db
+
+        class CommitFailingConnection:
+            @property
+            def in_transaction(self):
+                return connection.in_transaction
+
+            def commit(self):
+                raise sqlite3.OperationalError("simulated ambiguous commit failure")
+
+            def execute(self, *args, **kwargs):
+                return connection.execute(*args, **kwargs)
+
+            def executemany(self, *args, **kwargs):
+                return connection.executemany(*args, **kwargs)
+
+            def rollback(self):
+                return connection.rollback()
+
+            def __getattr__(self, name):
+                return getattr(connection, name)
+
+        with self.assertRaisesRegex(sqlite3.OperationalError, "ambiguous commit"):
+            import_file(CommitFailingConnection(), self.root, self.case, source, "jsonl")
+
+        self.assertEqual(destination.read_bytes(), source.read_bytes())
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
 
     def test_object_directory_is_synced_before_database_commit(self):
         source = self.stage(EVENTS)
@@ -355,7 +389,7 @@ class IRAdversarialTests(unittest.TestCase):
             return original_fsync(fd)
 
         with patch.object(cli.os, "fsync", side_effect=fail_directory_fsync):
-            with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
+            with self.assertRaisesRegex(ValueError, "filesystem cannot safely (publish|sync) stored objects"):
                 import_file(self.db, self.root, self.case, source, "jsonl")
 
         self.assertEqual(self.count("evidence"), 0)
