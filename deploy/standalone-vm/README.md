@@ -33,8 +33,9 @@ Each input file is limited to 16 MiB and 10,000 records. There is no cumulative 
 evidence limit. `evidence
 verify` and `report generate` return exit code 3 when stored evidence fails
 integrity verification; argparse usage errors return 2.
-An empty JSONL file has no records; empty JSON input and UTF-8 BOM-prefixed input
-are rejected. Timeline `record` is the one-based event index within that import,
+An empty JSONL file has no records; the empty JSON array `[]` is accepted and
+also has no records. Empty JSON input and UTF-8 BOM-prefixed input are rejected.
+Timeline `record` is the one-based event index within that import,
 not a physical source line number. Markdown reports show missing timestamps as
 `unknown`, replace CR and LF in summary text with spaces, and escape ASCII
 punctuation to keep untrusted summaries inert in rendered reports.
@@ -45,9 +46,9 @@ This CLI is a separate local evidence utility; it does not call the MIO reasonin
 core or take production actions. Store evidence under a dedicated private
 `MIO_IR_HOME` directory. Symlinked storage entries are rejected; use a directory
 owned by the current user with no group or other access. A new storage directory
-only the final storage-directory component is created with mode `0700`; missing
-parent components use the default creation mode and must be trusted. An existing
-directory with unsafe ownership or
+Only the final storage-directory component of a new store is created with mode
+`0700`; missing parent components use the default creation mode and must be
+trusted. An existing directory with unsafe ownership or
 permissions is refused without changing its mode. The database, SQLite sidecars,
 and content objects must be owned regular files with one link; symlinks,
 hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks
@@ -60,7 +61,8 @@ Output paths are resolved before validation; an external output symlink therefor
 targets its resolved destination. Existing report files are replaced atomically
 with private files.
 
-`MIO_IR_HOME` must be a non-empty absolute path. If it is unset, `HOME` must be
+`MIO_IR_HOME` must be non-empty and resolve to an absolute path after `~`
+expansion. If it is unset, `HOME` must be
 set and the default store is `$HOME/.local/share/azazel-mio`. The final storage
 directory and its entries are checked; parent path components must be trusted
 and are not independently inspected for symlinks. If an existing object at the

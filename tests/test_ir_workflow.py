@@ -137,7 +137,11 @@ class IRWorkflowTests(unittest.TestCase):
 
     def test_verify_marks_foreign_owned_object_invalid(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
-        with patch("azazel_mio.cli.current_user_owns", return_value=False):
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        def owner_check(path):
+            return Path(path).name != digest
+
+        with patch("azazel_mio.cli.current_user_owns", side_effect=owner_check):
             self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
 
     def test_import_refuses_shared_objects_directory_without_chmod(self):
@@ -182,6 +186,9 @@ class IRWorkflowTests(unittest.TestCase):
         with self.assertRaises(json.JSONDecodeError):
             parse_records(b"[{} ,]", "json")
 
+    def test_empty_json_array_has_zero_records(self):
+        self.assertEqual(parse_records(b"[]", "json"), [])
+
     def test_json_scalar_top_level_has_clear_error(self):
         with self.assertRaisesRegex(ValueError, "JSON input must be an object or array"):
             parse_records(b"5", "json")
@@ -189,6 +196,10 @@ class IRWorkflowTests(unittest.TestCase):
     def test_json_array_requires_object_records(self):
         with self.assertRaisesRegex(ValueError, "each JSON array record must be an object"):
             parse_records(b"[5]", "json")
+
+    def test_jsonl_scalar_record_has_clear_error(self):
+        with self.assertRaisesRegex(ValueError, "each JSONL record must be an object"):
+            parse_records(b"5\n", "jsonl")
 
     def test_jsonl_keeps_unicode_separators_inside_strings(self):
         for separator in ("\u2028", "\u0085"):
