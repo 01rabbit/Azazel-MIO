@@ -152,7 +152,7 @@ def parse_records(raw, fmt):
             start = end + 1 if end < len(text) else len(text)
             if line.endswith("\r"):
                 line = line[:-1]
-            if not line.strip():
+            if not line.strip(" \t"):
                 continue
             if len(records) >= MAX_RECORDS:
                 raise ValueError("unsupported record count")

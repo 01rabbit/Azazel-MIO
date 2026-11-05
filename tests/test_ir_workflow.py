@@ -188,6 +188,11 @@ class IRWorkflowTests(unittest.TestCase):
                 records = parse_records(raw, "jsonl")
                 self.assertEqual(records[0][3], "left" + separator + "right")
 
+    def test_jsonl_rejects_unicode_whitespace_only_lines(self):
+        for separator in ("\u2028", "\u00a0"):
+            with self.subTest(separator=hex(ord(separator))), self.assertRaises(json.JSONDecodeError):
+                parse_records((separator + "\n{}").encode("utf-8"), "jsonl")
+
     def test_nested_summary_is_a_clean_input_error(self):
         source = self.root / "nested-summary.json"
         source.write_text('{"summary":{"nested":[{"value":1}]}}', encoding="utf-8")
@@ -343,6 +348,18 @@ class IRWorkflowTests(unittest.TestCase):
                 connect(self.root)
         db.close.assert_called_once()
 
+    def test_main_closes_database_after_successful_command(self):
+        db = sqlite3.connect(self.root / "cases.sqlite3")
+        output = StringIO()
+        with patch("azazel_mio.cli.sqlite3.connect", return_value=db), patch.dict(
+            os.environ, {"MIO_IR_HOME": str(self.root)}
+        ), patch("sys.argv", ["mio-ir", "case", "create", "--name", "created"]):
+            with redirect_stdout(output):
+                self.assertEqual(main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["case_id"], 2)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute("SELECT 1")
+
     def test_sqlite_sidecars_reject_links_before_open(self):
         for suffix in ("-journal", "-wal", "-shm"):
             for kind in ("symlink", "hardlink"):
@@ -428,6 +445,8 @@ class IRWorkflowTests(unittest.TestCase):
             for escaped in (r"\[x\]", r"\(", r"\<img", r"\*bold\*", r"\`code\`",
                             r"\~\~gone\~\~", r"\&", r"\:"):
                 self.assertIn(escaped, content)
+            for raw in ("[x]", "<img", "*bold*", "`code`", "~~gone~~"):
+                self.assertNotIn(raw, content)
 
     def test_markdown_report_labels_missing_timestamp_unknown(self):
         source = self.root / "naive-timestamp.jsonl"
