@@ -318,6 +318,29 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(timeline(self.db, self.case)[0]["evidence_id"], evidence_id)
         self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
 
+    def test_unrecognized_interrupted_temp_is_preserved_and_fails_closed(self):
+        source = self.stage(EVENTS)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        directory = self.root / "objects"
+        directory.mkdir(mode=0o700)
+        staging = directory / f".mio-object-{digest}.tmp"
+        destination = directory / digest
+        extra = directory / "extra-link"
+        staging.write_bytes(source.read_bytes())
+        staging.chmod(0o400)
+        os.link(staging, destination)
+        os.link(staging, extra)
+        self.assertEqual(staging.stat().st_nlink, 3)
+
+        with self.assertRaisesRegex(ValueError, "unsafe interrupted object temporary"):
+            import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertTrue(staging.exists())
+        self.assertTrue(destination.exists())
+        self.assertTrue(extra.exists())
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
+
     def test_unsupported_hardlink_publish_fails_closed_and_removes_temp(self):
         source = self.stage(EVENTS)
         with patch.object(cli.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
@@ -328,7 +351,7 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(self.count("events"), 0)
         self.assertEqual(self.objects(), [])
 
-    def test_ambiguous_commit_failure_keeps_published_object(self):
+    def test_failed_commit_keeps_unreferenced_object(self):
         source = self.stage(EVENTS)
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         destination = self.root / "objects" / digest
@@ -340,7 +363,7 @@ class IRAdversarialTests(unittest.TestCase):
                 return connection.in_transaction
 
             def commit(self):
-                raise sqlite3.OperationalError("simulated ambiguous commit failure")
+                raise sqlite3.OperationalError("simulated commit failure")
 
             def execute(self, *args, **kwargs):
                 return connection.execute(*args, **kwargs)
@@ -354,30 +377,37 @@ class IRAdversarialTests(unittest.TestCase):
             def __getattr__(self, name):
                 return getattr(connection, name)
 
-        with self.assertRaisesRegex(sqlite3.OperationalError, "ambiguous commit"):
+        with self.assertRaisesRegex(sqlite3.OperationalError, "commit failure"):
             import_file(CommitFailingConnection(), self.root, self.case, source, "jsonl")
 
         self.assertEqual(destination.read_bytes(), source.read_bytes())
         self.assertEqual(destination.stat().st_nlink, 1)
         self.assertEqual(self.count("evidence"), 0)
         self.assertEqual(self.count("events"), 0)
+        self.assertFalse(self.db.in_transaction)
 
     def test_object_directory_is_synced_before_database_commit(self):
         source = self.stage(EVENTS)
-        original_sync_directory = cli.fsync_directory
-        directory_syncs = []
+        original_fsync = os.fsync
+        sync_events = []
 
-        def record_directory_sync(path):
-            directory_syncs.append((Path(path).name, self.db.in_transaction))
-            return original_sync_directory(path)
+        def record_fsync(fd):
+            metadata = os.fstat(fd)
+            if stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode):
+                kind = "file" if stat.S_ISREG(metadata.st_mode) else "directory"
+                sync_events.append((kind, self.db.in_transaction))
+            return original_fsync(fd)
 
-        with patch.object(cli, "fsync_directory", side_effect=record_directory_sync):
+        with patch.object(cli.os, "fsync", side_effect=record_fsync):
             import_file(self.db, self.root, self.case, source, "jsonl")
 
-        object_syncs = [in_transaction for name, in_transaction in directory_syncs if name == "objects"]
-        self.assertGreaterEqual(len(object_syncs), 2)
-        self.assertTrue(all(object_syncs))
-        self.assertIn((self.root.name, False), directory_syncs)
+        file_syncs = [i for i, (kind, active) in enumerate(sync_events) if kind == "file" and active]
+        object_dir_syncs = [i for i, (kind, active) in enumerate(sync_events)
+                            if kind == "directory" and active]
+        self.assertTrue(file_syncs)
+        self.assertGreaterEqual(len(object_dir_syncs), 2)
+        self.assertLess(file_syncs[0], object_dir_syncs[0])
+        self.assertTrue(all(sync_events[i][1] for i in object_dir_syncs))
 
     def test_directory_sync_failure_rolls_back_object_and_rows(self):
         source = self.stage(EVENTS)
