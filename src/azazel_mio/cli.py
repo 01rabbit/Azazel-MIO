@@ -228,6 +228,15 @@ def unlink_staged_object_if_ours(path, destination, identity):
             and published.st_nlink == 2):
         os.unlink(path)
 
+def fsync_directory(path):
+    """Persist directory entry changes before their database references commit."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def connect(root):
     ensure_private_directory(root, "storage path")
     database = root / "cases.sqlite3"
@@ -501,6 +510,7 @@ def import_file(db, root, case, filename, fmt):
                 created_identity = staging_identity
                 try:
                     os.link(staging, destination)
+                    fsync_directory(directory)
                 except FileExistsError:
                     pass
                 except OSError as exc:
@@ -509,6 +519,7 @@ def import_file(db, root, case, filename, fmt):
                 if fd is not None:
                     os.close(fd)
                 unlink_staged_object_if_ours(staging, destination, staging_identity)
+                fsync_directory(directory)
                 staging_identity = None
             metadata = existing_single_link_file(destination, "stored object")
             if metadata is None:

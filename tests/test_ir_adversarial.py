@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -320,6 +321,40 @@ class IRAdversarialTests(unittest.TestCase):
     def test_unsupported_hardlink_publish_fails_closed_and_removes_temp(self):
         source = self.stage(EVENTS)
         with patch.object(cli.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
+            with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
+                import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertEqual(self.count("evidence"), 0)
+        self.assertEqual(self.count("events"), 0)
+        self.assertEqual(self.objects(), [])
+
+    def test_object_directory_is_synced_before_database_commit(self):
+        source = self.stage(EVENTS)
+        original_fsync = os.fsync
+        directory_syncs = []
+
+        def record_fsync(fd):
+            metadata = os.fstat(fd)
+            if stat.S_ISDIR(metadata.st_mode):
+                directory_syncs.append((metadata.st_dev, metadata.st_ino, self.db.in_transaction))
+            return original_fsync(fd)
+
+        with patch.object(cli.os, "fsync", side_effect=record_fsync):
+            import_file(self.db, self.root, self.case, source, "jsonl")
+
+        self.assertGreaterEqual(len(directory_syncs), 2)
+        self.assertTrue(all(in_transaction for _, _, in_transaction in directory_syncs))
+
+    def test_directory_sync_failure_rolls_back_object_and_rows(self):
+        source = self.stage(EVENTS)
+        original_fsync = os.fsync
+
+        def fail_directory_fsync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(errno.EIO, "simulated directory sync failure")
+            return original_fsync(fd)
+
+        with patch.object(cli.os, "fsync", side_effect=fail_directory_fsync):
             with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
                 import_file(self.db, self.root, self.case, source, "jsonl")
 
