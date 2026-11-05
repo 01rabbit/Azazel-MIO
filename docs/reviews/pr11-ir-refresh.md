@@ -75,8 +75,9 @@ historical, not current-main evidence. Current MIO main is
 `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The PR #11-only diff is six files:
 `deploy/standalone-vm/README.md`, `docs/reviews/pr11-ir-refresh.md`,
 `examples/synthetic_ir_case/events.jsonl`, `pyproject.toml`,
-`src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`. Current main package
-metadata and exports are retained; only the `mio-ir` console script is added.
+`src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`. Current main exports
+are retained. The candidate registers the `mio-ir` console script and assigns
+a distinct development version in `pyproject.toml`.
 
 ## Independent review findings and disposition
 
@@ -89,9 +90,9 @@ Low items, with no High/blocking finding. Their dispositions are:
 
 - F1 (`text.splitlines()` split valid JSONL strings containing U+2028/U+0085):
   now split only on LF and strip an optional CR, with regression cases
-  (`cli.py:107-109`, `test_jsonl_keeps_unicode_separators_inside_strings`).
+  (`cli.py:133-148`, `test_jsonl_keeps_unicode_separators_inside_strings`).
 - F2 (recursive `str()` on an object-valued summary could raise): non-scalar
-  summaries are rejected before string conversion (`cli.py:116-118`), covered
+  summaries are rejected before string conversion (`cli.py:195-200`), covered
   by `test_nested_summary_is_a_clean_input_error`.
 - F3 (file mode bits were not checked): directory modes are enforced; internal
   data files are checked for current owner, regular-file type and single link,
@@ -104,8 +105,8 @@ Low items, with no High/blocking finding. Their dispositions are:
   `2daa3e9bbe3a1627d7e556bbdbb6bcde37b02892`. This document is a following
   documentation-only update; the PR description records the final PR head and
   the tested source commit separately.
-- F5 (`report generate` returned success with invalid evidence): it now writes
-  the report, then exits 2 if any evidence failed verification. The regression
+- F5 (`report generate` returned success with invalid evidence): it writes
+  the report, then exits 3 if any evidence failed verification. The regression
   verifies the JSON result and exit code.
 - Prior storage findings remain fixed: existing directories are never chmodded;
   DB and SQLite sidecars are checked before open; imported and verified objects
@@ -128,8 +129,8 @@ from the same source commit in a disposable Linux arm64 / Python 3.12 Docker
 container (`--rm --network=none`): `mio-ir --help` succeeded and installed
 version was `0.1.0+git.c31c244`. No distributable wheel was published.
 
-The final independent review of this refreshed document and source commit is
-pending. Debian ARM64 guest acceptance remains separate and has not been run.
+This historical source snapshot was not the final refreshed candidate. Debian
+ARM64 guest acceptance remained separate and had not been run.
 
 ## Independent review fixes and refreshed validation — 2026-11-05
 
@@ -179,7 +180,47 @@ Validation for the exact source commit/tree above:
   used the writable ephemeral copy described above.
 
 Debian ARM64 guest acceptance remains outstanding. The refreshed candidate has
-not yet received an independent review at its final commit, has not been pushed,
-and remains a Draft PR candidate. The current-main base is
+not yet been pushed and remains a Draft PR candidate. The current-main base is
 `5bb09c8d28c57604dc1c63903b98fed7587b49ea`; the former remote PR head is
 `a5b74ec256e21a8314ff378ab95f4d31dfb397a`.
+
+## Final-candidate independent review follow-up — 2026-11-05
+
+Claude Code Haiku/low independently read the complete six-file candidate at
+`b62fdc853f2e7a0dd59005459b628f27312bb215`. No High or Medium finding was
+reported. The reviewer could not verify Git object identity because it had only
+read tools; this coordinator verified the base, HEAD, tree, parent, and changed
+file list locally. No reviewer tests were run. The returned low findings were
+checked against source and handled as follows:
+
+- Markdown report summaries now replace both CR and LF with spaces; a CLI
+  regression covers a CR followed by heading syntax.
+- The offline-size tests now intercept `Path.open` and assert the oversized
+  object path is never opened (rather than patching the unused `read_bytes`).
+- The guide captures the created `case_id` from JSON and uses it for later
+  commands, so an existing store cannot redirect the example into case 1.
+- The guide now documents summary truncation (with original bytes retained),
+  ISO string-only timestamps, rejection of overlong timestamps, empty JSONL,
+  empty JSON/BOM rejection, per-import record numbering, and markdown line
+  sanitization. It also documents that output paths are resolved, so an external
+  symlink points to the destination replaced atomically.
+- Stale review references now identify current code locations; invalid evidence
+  is documented as exit 3; and the metadata description distinguishes the
+  development version from retained package exports.
+- Added regression cases for summary truncation with raw-object preservation,
+  empty JSONL versus empty JSON, and BOM rejection.
+
+The refreshed source/test commit is
+`24579a1b566dc05644de8aa2b780b9136b1dc1d7` (tree
+`1b5aa8e777ff67dc18c96c583fd3dcad0059fd5d`). Exact-source validation used a
+self-contained Git archive copied into a disposable Docker `python:3.12-arm64-c65`
+container, `pytest==8.4.2`, and the serialized suite lock: **691 passed**, exit
+0. A wheel built from the same archive installed successfully in Linux ARM64 /
+Python 3.12; `mio-ir --help` succeeded, the installed version was
+`0.1.0.dev20261105+ir11r2`, and the wheel SHA-256 was
+`7ee17dc0206250f6ac9e2b319934f2f4c61960bc9d8f7143fefcbbdbb0e84fe8`.
+
+This section is evidence for source commit `24579a1`; the final review of a
+following documentation-only commit is still required before synchronization.
+Debian ARM64 VMware guest acceptance remains pending and is independent of this
+Linux ARM64 container check.

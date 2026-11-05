@@ -10,23 +10,30 @@ python3 -m venv .venv
 python -m pip install --no-index --find-links "$WHEELHOUSE" "setuptools>=77.0.3" wheel
 python -m pip install --no-index --no-build-isolation --no-deps -e .
 export MIO_IR_HOME="$HOME/mio-ir-data"
-mio-ir case create --name "Synthetic IR Case"
-mio-ir evidence import --case 1 --file examples/synthetic_ir_case/events.jsonl --format jsonl
-mio-ir evidence verify --case 1
-mio-ir timeline build --case 1
+CASE_ID=$(mio-ir case create --name "Synthetic IR Case" | python -c 'import json,sys; print(json.load(sys.stdin)["case_id"])')
+mio-ir evidence import --case "$CASE_ID" --file examples/synthetic_ir_case/events.jsonl --format jsonl
+mio-ir evidence verify --case "$CASE_ID"
+mio-ir timeline build --case "$CASE_ID"
 REPORT_DIR=$(mktemp -d "$HOME/mio-ir-reports.XXXXXX")
-mio-ir report generate --case 1 --format json --output "$REPORT_DIR/mio-ir-report.json"
+mio-ir report generate --case "$CASE_ID" --format json --output "$REPORT_DIR/mio-ir-report.json"
 ```
 
 Input summaries must be JSON scalars (string, finite number, boolean, or null).
 An omitted summary becomes `No summary provided`; an explicit null becomes an
-empty summary. Summaries are limited to 2,048 characters. String timestamps are
-limited to 256 characters; unparseable or unrepresentable timestamps remain
-unknown. JSONL records are separated only by LF (with an optional preceding CR
-for CRLF); Unicode line-separator characters inside strings remain part of
-their record. Each input is limited to 16 MiB and 10,000 records. `evidence
+empty summary. Summaries longer than 2,048 characters are truncated in timeline
+and report text; the original input remains available through the stored object.
+Only ISO-formatted string timestamps are mapped; other types remain unknown.
+String timestamps longer than 256 characters are rejected; shorter unparseable
+or unrepresentable timestamps remain unknown. JSONL records are separated only
+by LF (with an optional preceding CR for CRLF); Unicode line-separator
+characters inside strings remain part of their record. Each input is limited to
+16 MiB and 10,000 records. `evidence
 verify` and `report generate` return exit code 3 when stored evidence fails
 integrity verification; argparse usage errors return 2.
+An empty JSONL file has no records; empty JSON input and UTF-8 BOM-prefixed input
+are rejected. Timeline `record` is the one-based event index within that import,
+not a physical source line number. Markdown reports replace CR and LF in summary
+text with spaces to keep each event on one line.
 
 Run the commands inside the Debian ARM64 guest and record results. macOS tests do not establish guest verification. This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
 
@@ -40,7 +47,9 @@ and content objects must be owned regular files with one link; symlinks,
 hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks
 require POSIX user-ID reporting; unsupported platforms fail closed. Reports
 must be exported outside the storage directory, including SQLite journal paths.
-Existing report files are replaced atomically with private files.
+Output paths are resolved before validation; an external output symlink therefore
+targets its resolved destination. Existing report files are replaced atomically
+with private files.
 
 `MIO_IR_HOME` must be a non-empty absolute path. If it is unset, `HOME` must be
 set and the default store is `$HOME/.local/share/azazel-mio`. The final storage
