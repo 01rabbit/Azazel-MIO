@@ -73,7 +73,7 @@ M.I.O.は、通信制御、デコイの起動・露出、権限変更を直接�
 - 外部モデルへの送信は、明示的な許可、情報分類、送信先認可、最小化を前提とする。
 - ラボでの成功を、本番の認可、実機性能、安全性の証明へ読み替えない。
 
-現行coreにはKnowledge LiteとContext responseを渡す型付きのin-process入力があります。どちらも`reported_unverified`の助言receiptで、source claimを検証済み事実へ昇格させません。これはKnowledgeへのnetwork接続、認証・TLS、フルノード連携を提供しません。詳細は[API境界](docs/api-v1.md)を参照してください。
+現行coreにはKnowledge LiteとContext responseを渡す型付きのin-process入力があります。どちらも`reported_unverified`の助言receiptで、出典が報告する内容を検証済み事実へ昇格させません。このcoreはKnowledgeへのfull-node通信経路を持ちません。networking・認証・TLSは製品adapterの責務で、MIOには未実装です。詳細は[API境界](docs/api-v1.md)を参照してください。
 
 ## 最初に通す経路
 
@@ -153,6 +153,6 @@ PYTHONPATH=src python -m pytest -q
 
 **任意・評価用の機能（既定の試験には含まれません）**
 
-- 実モデル確認: POSIX環境と、ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成の助言フレームで最大3回の順序固定リクエストを行います。指定tagが未導入なら失敗終了します。別途、同じフレームをモデルなしで実行して、決定論的フォールバックと`MODEL_NOT_AVAILABLE`を確認します。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
+- 実モデル確認: POSIX環境と、ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成の助言フレームで最大3回の順序固定モデル呼出しを行います。指定tagが未導入なら失敗終了します。モデル実行の後、同じコマンド内で同じフレームをモデルなしで実行し、決定論的フォールバックと`MODEL_NOT_AVAILABLE`を確認します。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
 - オフラインplaybook ranking: 評価マイルストーンです。モデルの有効化、自動学習、認可、実行は含みません（[offline ranking](docs/offline-playbook-ranking.md)）。
 - Assessment baseline: experimentalです（[assessment baseline](docs/assessment-baseline.md)）。
