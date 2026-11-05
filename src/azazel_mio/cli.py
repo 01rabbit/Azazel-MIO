@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import string
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ MAX_RECORDS = 10000
 MAX_TIMESTAMP_CHARS = 256
 MAX_SUMMARY_CHARS = 2048
 EXIT_INVALID_EVIDENCE = 3
-MARKDOWN_ESCAPES = frozenset("\\`*_{}[]()#+-.!|><")
+MARKDOWN_ESCAPES = frozenset(string.punctuation)
 
 def markdown_escape(value):
     return "".join("\\" + char if char in MARKDOWN_ESCAPES else char
@@ -83,15 +84,19 @@ def connect(root):
     for suffix in ("-journal", "-wal", "-shm"):
         existing_single_link_file(root / ("cases.sqlite3" + suffix), "SQLite sidecar")
     db = sqlite3.connect(database)
-    db.execute("PRAGMA foreign_keys=ON")
-    db.executescript("""
-    CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS evidence(id INTEGER PRIMARY KEY, case_id INTEGER NOT NULL REFERENCES cases(id),
-      filename TEXT NOT NULL, digest TEXT NOT NULL, format TEXT NOT NULL, imported TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, evidence_id INTEGER NOT NULL REFERENCES evidence(id),
-      record_number INTEGER NOT NULL, timestamp TEXT, original_timestamp TEXT, summary TEXT NOT NULL);
-    """)
-    return db
+    try:
+        db.execute("PRAGMA foreign_keys=ON")
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS evidence(id INTEGER PRIMARY KEY, case_id INTEGER NOT NULL REFERENCES cases(id),
+          filename TEXT NOT NULL, digest TEXT NOT NULL, format TEXT NOT NULL, imported TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, evidence_id INTEGER NOT NULL REFERENCES evidence(id),
+          record_number INTEGER NOT NULL, timestamp TEXT, original_timestamp TEXT, summary TEXT NOT NULL);
+        """)
+        return db
+    except BaseException:
+        db.close()
+        raise
 
 def check_case(db, case):
     if not db.execute("SELECT 1 FROM cases WHERE id=?", (case,)).fetchone():
@@ -336,7 +341,7 @@ def main():
                     raise ValueError("output may not overwrite internal storage")
                 if args.format == "markdown":
                     content = "# IR Case " + str(args.case) + "\n\n" + "\n".join(
-                        "- " + str(x["timestamp_utc"]) + " | evidence " + str(x["evidence_id"]) +
+                        "- " + str(x["timestamp_utc"] or "unknown") + " | evidence " + str(x["evidence_id"]) +
                         " record " + str(x["record"]) + ": " + markdown_escape(
                             x["summary"].replace("\r", " ").replace("\n", " ")
                         )

@@ -2,12 +2,13 @@ import json
 import hashlib
 import os
 from pathlib import Path
+import sqlite3
 import stat
 import tempfile
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from azazel_mio.cli import (
     EXIT_INVALID_EVIDENCE,
@@ -334,6 +335,14 @@ class IRWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "owned private directory"):
                 connect(self.root)
 
+    def test_connect_closes_database_when_schema_setup_fails(self):
+        db = MagicMock()
+        db.executescript.side_effect = sqlite3.Error("schema failure")
+        with patch("azazel_mio.cli.sqlite3.connect", return_value=db):
+            with self.assertRaisesRegex(sqlite3.Error, "schema failure"):
+                connect(self.root)
+        db.close.assert_called_once()
+
     def test_sqlite_sidecars_reject_links_before_open(self):
         for suffix in ("-journal", "-wal", "-shm"):
             for kind in ("symlink", "hardlink"):
@@ -408,7 +417,7 @@ class IRWorkflowTests(unittest.TestCase):
     def test_markdown_report_escapes_untrusted_markup(self):
         source = self.root / "markdown.jsonl"
         source.write_text(
-            '{"summary":"[x](https://example.invalid) <img src=x> *bold* `code`"}\n',
+            '{"summary":"[x](https://example.invalid) <img src=x> *bold* `code` ~~gone~~ & :"}\n',
             encoding="utf-8",
         )
         import_file(self.db, self.root, self.case, source, "jsonl")
@@ -416,8 +425,18 @@ class IRWorkflowTests(unittest.TestCase):
             output = Path(export) / "report.md"
             self.assertEqual(self.run_report(output, "markdown"), 0)
             content = output.read_text(encoding="utf-8")
-            for escaped in (r"\[x\]", r"\(", r"\<img", r"\*bold\*", r"\`code\`"):
+            for escaped in (r"\[x\]", r"\(", r"\<img", r"\*bold\*", r"\`code\`",
+                            r"\~\~gone\~\~", r"\&", r"\:"):
                 self.assertIn(escaped, content)
+
+    def test_markdown_report_labels_missing_timestamp_unknown(self):
+        source = self.root / "naive-timestamp.jsonl"
+        source.write_text('{"timestamp":"2026-10-01T10:00:00","summary":"event"}\n', encoding="utf-8")
+        import_file(self.db, self.root, self.case, source, "jsonl")
+        with tempfile.TemporaryDirectory() as export:
+            output = Path(export) / "report.md"
+            self.assertEqual(self.run_report(output, "markdown"), 0)
+            self.assertIn("- unknown | evidence 1 record 1: event", output.read_text(encoding="utf-8"))
 
     def test_report_cannot_overwrite_internal_journal(self):
         output = self.root / "cases.sqlite3-wal"
