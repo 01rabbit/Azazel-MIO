@@ -340,13 +340,8 @@ published. These tests do not establish Debian ARM64 VMware guest acceptance.
 ## Final candidate validation — 2026-11-05
 
 Independent review of exact candidate `e17c7129bafd223cb92a6502b5da38c8bf4e29cd`
-(base `5bb09c8d28c57604dc1c63903b98fed7587b49ea`) found two Medium and five
-Low findings, plus one Info. Both Medium findings were fixed:
-
-The independent follow-up on `59fb7785108b5ec00ae8ea6d8ba32ac6bae4c221`
-found no High/Medium findings. It noted remaining low-level coverage and
-wording gaps; the final review-limit section, emoji-path regression test and
-subshell-wrapped README commands address those points.
+(base `5bb09c8d28c57604dc1c63903b98fed7587b49ea`) found two Medium, five Low,
+and one Info finding. The fixes and dispositions are recorded below.
 
 - IR-01: Three mutation tests identified by review modified new `0400` objects
   without making them writable, so root could mask a permission failure. The
@@ -363,19 +358,27 @@ Low findings were addressed or bounded:
   it is skipped on a case-sensitive filesystem.
 - IR-04: The foreign-owner test now uses a nonexistent path and exercises the
   new-directory branch, checking the created mode is `0700` before rejection.
-- IR-05: README shell setup now uses `set -euo pipefail` and checks the case ID;
-  a broken sentence was fixed. `MIO_IR_HOME` is described accurately: expand
+- IR-05: README gives Bash-only commands in an isolated subshell, checks the
+  case ID and prints the report path; it also documents venv activation scope.
+  A broken sentence was fixed. `MIO_IR_HOME` is described accurately: expand
   `~`, require an absolute path, and do not canonicalize it.
 - IR-06: CLI JSON status output uses ASCII escapes so a non-ASCII local path
   cannot make printing fail after an atomic report replacement. A regression
   test checks an emoji path round-trip and escaped stdout.
 - IR-07: The review record now has an explicit `Review limits` section for
-  guest/hardware and downstream-renderer coverage boundaries.
+  guest/hardware and downstream-renderer coverage boundaries. The Info note's
+  untested CLI paths remain explicitly listed as limits, not accepted as tested.
+
+Independent follow-up on `59fb7785108b5ec00ae8ea6d8ba32ac6bae4c221` found no
+High/Medium findings. It requested clearer test/result provenance, artifact
+source linkage, and README shell behavior; the final records below address
+those documentation gaps.
 
 Current MIO main/base is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The final
-candidate changes seven files: `.gitignore`, `deploy/standalone-vm/README.md`,
-`docs/reviews/pr11-ir-refresh.md`, `examples/synthetic_ir_case/events.jsonl`,
-`pyproject.toml`, `src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`.
+candidate changes eight files: `CHANGELOG.md`, `.gitignore`,
+`deploy/standalone-vm/README.md`, `docs/reviews/pr11-ir-refresh.md`,
+`examples/synthetic_ir_case/events.jsonl`, `pyproject.toml`,
+`src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`.
 Package source and metadata are fixed at commit
 `0cfb0fea08a1449d1041ea54a7124b2c5b5aa326` (tree
 `a469c0e69c79c3a2e7d5786a22da3d57d67cbdd6`), version
@@ -389,14 +392,18 @@ Linux case-sensitive filesystem; it passed separately on macOS with CPython
 `3.14` using `unittest`. An ARM64 wheel was built and installed, and
 `mio-ir --help` succeeded. Wheel SHA-256:
 `cc5cafad996d54c1cbd3b696d150db6f28925c65dc984754f1abeab8cbbbf5e3`.
-The exact package-source wheel was retained at
-`/Users/mao/CodexWork/mio-ir11-rebase-evidence-20261105/final-84fb89/artifacts/azazel_mio-0.1.0.dev20261105+ir11r8-py3-none-any.whl`
-with SHA-256 `2904c0ba5e3c4417638ae602f2bf6f4a5b365c4d4f9ebf28e552f779c93489d4`.
-It installed in the isolated ARM64 container and the README's case-create,
-import, verify, timeline and report commands passed with five synthetic
-records; the output contained five events and valid evidence. Both wheel
-builds use the same package source/metadata commit and version; their distinct
-build hashes are recorded rather than substituting one for the other.
+The full-test wheel was built from the `c7735c6` archive; `src/` and
+`pyproject.toml` are identical to package-source commit `0cfb0fe` (the changes
+between those commits are tests and documentation). It was installed before
+the full suite. A second wheel was retained as
+`azazel_mio-0.1.0.dev20261105+ir11r8-py3-none-any.whl`, SHA-256
+`2904c0ba5e3c4417638ae602f2bf6f4a5b365c4d4f9ebf28e552f779c93489d4`, and was
+built from the exact `0cfb0fe` package-source archive. It installed in the
+isolated ARM64 container and `mio-ir --help` passed. The README's case-create,
+import, verify, timeline and report commands were separately run with an
+editable install of that same package source; five synthetic records produced
+five events and valid evidence. The two build hashes are tracked separately;
+neither replaced the other.
 
 ### Review limits
 
@@ -404,6 +411,15 @@ The reviewers did not execute tests. The full test result above is from the
 separate recorded run. Debian VMware guest setup, real evidence, credentials,
 deployment, publication and hardware acceptance were not exercised. The
 case-alias test is conditional on filesystem behavior; Linux skipped it and
-macOS ran it directly. Markdown escaping covers the explicitly listed control,
+macOS ran it directly against code from `0cfb0fea08a1449d1041ea54a7124b2c5b5aa326`.
+The final head adds documentation only to tested code/test tree `c7735c6`;
+`src/`, `tests/`, and `pyproject.toml` are unchanged. Package source and
+metadata are unchanged from `0cfb0fe` through final head `c7a5e3f`. The README's
+final Bash subshell commands were executed with an editable install of the same
+package source; wheel installation and `mio-ir --help` were checked separately.
+
+Known untested paths from the Info review note are `case list`, report output
+with a missing parent, an oversized source input, and output directly under the
+objects directory. Markdown escaping covers the explicitly listed control,
 line-separator and bidi characters, not every possible display transformation
 in every downstream Markdown renderer.
