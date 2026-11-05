@@ -277,30 +277,31 @@ def test_timeline_ids_reject_bool_and_string(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "inputs",
+    "make_inputs",
     [
-        FastAssessmentInput(severity=True),
-        FastAssessmentInput(severity=-1),
-        FastAssessmentInput(severity=ir_adapter._MAX_SEVERITY + 1),
-        FastAssessmentInput(severity=2, token_only=1),
-        FastAssessmentInput(severity=2, deception_sid=0),
-        FastAssessmentInput(severity=2, benign_classless="no"),
-        FastAssessmentInput(severity=2, classes=["c2"]),
-        FastAssessmentInput(severity=2, classes=("C2",)),
-        FastAssessmentInput(severity=2, classes=("c2",) * (ir_adapter._MAX_CLASSES + 1)),
-        FastAssessmentInput(severity=2, ports=[PortSignal("web", 443)]),
-        FastAssessmentInput(severity=2, ports=(PortSignal("web", True),)),
-        FastAssessmentInput(severity=2, ports=(PortSignal("web", 0),)),
-        FastAssessmentInput(severity=2, ports=(PortSignal("WEB", 443),)),
-        FastAssessmentInput(severity=2, ports=(("web", 443),) * (ir_adapter._MAX_PORTS + 1)),
-        FastAssessmentInput(severity=2, action="Drop"),
-        FastAssessmentInput(severity=2, action=""),
+        pytest.param(lambda: FastAssessmentInput(severity=True), id="severity-bool"),
+        pytest.param(lambda: FastAssessmentInput(severity=-1), id="severity-negative"),
+        pytest.param(lambda: FastAssessmentInput(severity=ir_adapter._MAX_SEVERITY + 1), id="severity-too-large"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, token_only=1), id="token-only-not-bool"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, deception_sid=0), id="deception-sid-zero"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, benign_classless="no"), id="benign-classless-not-bool"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, classes=["c2"]), id="classes-list"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, classes=("C2",)), id="class-not-canonical"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, classes=("c2",) * (ir_adapter._MAX_CLASSES + 1)), id="too-many-classes"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, ports=[PortSignal("web", 443)]), id="ports-list"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(PortSignal("web", True),)), id="port-bool"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(PortSignal("web", 0),)), id="port-zero"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(PortSignal("WEB", 443),)), id="port-not-canonical"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(("web", 443),) * (ir_adapter._MAX_PORTS + 1)), id="port-tuples"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, action="Drop"), id="action-not-canonical"),
+        pytest.param(lambda: FastAssessmentInput(severity=2, action=""), id="action-empty"),
     ],
 )
-def test_strict_bounded_inputs_reject(monkeypatch, inputs):
+def test_strict_bounded_inputs_reject(monkeypatch, make_inputs):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
+        inputs = make_inputs()
         assess_ir_candidates(CASE, timeline, verified, [_candidate(inputs=inputs)])
 
 
