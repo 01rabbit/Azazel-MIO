@@ -166,76 +166,82 @@ def test_only_non_conflicted_candidates_reach_core_exactly_once(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "timeline, verified, candidates",
+    "timeline, verified, candidates, error",
     [
         # unverified evidence referenced by the candidate
-        (_timeline((1, 101, 5)), _verified((101, False)), [_candidate()]),
+        (_timeline((1, 101, 5)), _verified((101, False)), [_candidate()], "candidate evidence is not verified in this case"),
         # referenced evidence absent from verified rows
-        (_timeline((1, 101, 5)), _verified((999, True)), [_candidate()]),
+        (_timeline((1, 101, 5)), _verified((999, True)), [_candidate()], "candidate evidence is not verified in this case"),
         # event absent from timeline
-        (_timeline((9, 101, 5)), _verified((101, True)), [_candidate()]),
+        (_timeline((9, 101, 5)), _verified((101, True)), [_candidate()], "candidate does not match timeline linkage"),
         # evidence mismatch against the timeline row
-        (_timeline((1, 102, 5)), _verified((101, True), (102, True)), [_candidate()]),
+        (_timeline((1, 102, 5)), _verified((101, True), (102, True)), [_candidate()], "candidate does not match timeline linkage"),
         # record mismatch against the timeline row
-        (_timeline((1, 101, 6)), _verified((101, True)), [_candidate()]),
+        (_timeline((1, 101, 6)), _verified((101, True)), [_candidate()], "candidate does not match timeline linkage"),
         # verified evidence belongs to another case
         (
             _timeline((1, 101, 5)),
             [{"case_id": CASE + 1, "evidence_id": 101, "valid": True}],
             [_candidate()],
+            "verified evidence belongs to another case",
         ),
         # timeline row belongs to another case
         (
             [{"case_id": CASE + 1, "event_id": 1, "evidence_id": 101, "record": 5}],
             _verified((101, True)),
             [_candidate()],
+            "timeline row belongs to another case",
         ),
         # conflict references unverified evidence
         (
             _timeline((1, 101, 5)),
             _verified((101, True), (103, False)),
             [_candidate(conflict_evidence_ids=(103,))],
+            "conflict evidence is not verified in this case",
         ),
         # conflict references evidence absent from the case
         (
             _timeline((1, 101, 5)),
             _verified((101, True)),
             [_candidate(conflict_evidence_ids=(555,))],
+            "conflict evidence is not verified in this case",
         ),
         # legacy record_number key is no longer the timeline contract
         (
             [{"case_id": CASE, "event_id": 1, "evidence_id": 101, "record_number": 5}],
             _verified((101, True)),
             [_candidate()],
+            "timeline row has malformed ids",
         ),
         # timeline row without case_id cannot be isolated to the selected case
         (
             [{"event_id": 1, "evidence_id": 101, "record": 5}],
             _verified((101, True)),
             [_candidate()],
+            "timeline row has malformed ids",
         ),
     ],
 )
-def test_bad_references_fail_closed(monkeypatch, timeline, verified, candidates):
+def test_bad_references_fail_closed(monkeypatch, timeline, verified, candidates, error):
     _no_core(monkeypatch)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=error):
         assess_ir_candidates(CASE, timeline, verified, candidates)
 
 
 def test_duplicate_candidate_event_rejects(monkeypatch):
     timeline, verified = _base()
     _no_core(monkeypatch)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="candidate event_id is malformed or duplicated"):
         assess_ir_candidates(CASE, timeline, verified, [_candidate(), _candidate()])
 
 
 def test_duplicate_timeline_and_verified_rows_reject(monkeypatch):
     _no_core(monkeypatch)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="duplicate timeline event"):
         assess_ir_candidates(
             CASE, _timeline((1, 101, 5), (1, 102, 6)), _verified((101, True)), [_candidate()]
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="duplicate verified evidence"):
         assess_ir_candidates(
             CASE, _timeline((1, 101, 5)), _verified((101, True), (101, True)), [_candidate()]
         )
@@ -245,7 +251,7 @@ def test_one_malformed_candidate_stops_before_any_core_call(monkeypatch):
     timeline, verified = _base()
     _no_core(monkeypatch)
     bad = _candidate(event_id=2, evidence_id=102, record_number=6, normalizer_version="bad version ")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="normalizer_version must be bounded canonical text"):
         assess_ir_candidates(CASE, timeline, verified, [_candidate(), bad])
 
 
@@ -256,13 +262,13 @@ def test_one_malformed_candidate_stops_before_any_core_call(monkeypatch):
 def test_case_id_must_be_strict_positive_int(monkeypatch, case_id):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid case_id"):
         assess_ir_candidates(case_id, timeline, verified, [_candidate()])
 
 
 def test_verified_valid_must_be_strict_bool(monkeypatch):
     _no_core(monkeypatch)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="verified evidence row is malformed"):
         assess_ir_candidates(CASE, _timeline((1, 101, 5)), _verified((101, 1)), [_candidate()])
 
 
@@ -285,7 +291,7 @@ def test_timeline_ids_reject_malformed_fields(monkeypatch, field, value):
 
 @pytest.mark.parametrize(
     "field,value",
-    [("case_id", True), ("case_id", "7")],
+    [("case_id", True), ("case_id", "7"), ("evidence_id", True), ("evidence_id", "101")],
 )
 def test_verified_rows_reject_malformed_case_id(monkeypatch, field, value):
     _no_core(monkeypatch)
@@ -352,7 +358,7 @@ def test_strict_bounded_inputs_reject(monkeypatch, make_inputs, error):
 def test_non_dataclass_inputs_reject(monkeypatch):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="inputs must be FastAssessmentInput"):
         assess_ir_candidates(CASE, timeline, verified, [_candidate(inputs={"severity": 2})])
 
 
@@ -363,19 +369,25 @@ def test_non_dataclass_inputs_reject(monkeypatch):
 def test_normalizer_version_must_be_bounded_canonical(monkeypatch, version):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="normalizer_version must be bounded canonical text"):
         assess_ir_candidates(CASE, timeline, verified, [_candidate(normalizer_version=version)])
 
 
 @pytest.mark.parametrize(
-    "conflicts",
-    [[103], (True,), (103, 103), (103, "104"), (103,) * (ir_adapter._MAX_CONFLICTS + 1)],
+    "conflicts,error",
+    [
+        ([103], "conflict_evidence_ids must be a bounded tuple"),
+        ((True,), "conflict evidence is not verified in this case"),
+        ((103, 103), "conflict_evidence_ids must be unique"),
+        ((103, "104"), "conflict evidence is not verified in this case"),
+        ((103,) * (ir_adapter._MAX_CONFLICTS + 1), "conflict_evidence_ids must be a bounded tuple"),
+    ],
 )
-def test_conflict_tuple_must_be_strict_bounded_unique(monkeypatch, conflicts):
+def test_conflict_tuple_must_be_strict_bounded_unique(monkeypatch, conflicts, error):
     _no_core(monkeypatch)
     timeline, verified = _base()
     verified = verified + _verified((104, True))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=error):
         assess_ir_candidates(CASE, timeline, verified, [_candidate(conflict_evidence_ids=conflicts)])
 
 
@@ -392,14 +404,14 @@ def test_candidate_count_is_bounded(monkeypatch):
     _no_core(monkeypatch)
     timeline, verified = _base()
     too_many = [_candidate(event_id=i + 1) for i in range(ir_adapter._MAX_CANDIDATES + 1)]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="candidates exceeds bound"):
         assess_ir_candidates(CASE, timeline, verified, too_many)
 
 
 def test_plain_mapping_candidate_rejects(monkeypatch):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="candidate must be IRFastAssessmentCandidate"):
         assess_ir_candidates(CASE, timeline, verified, [{"event_id": 1}])
 
 
