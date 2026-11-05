@@ -105,7 +105,8 @@ def parse_records(raw, fmt):
             raise ValueError("JSON nesting exceeds parser limit") from exc
 
     if fmt == "jsonl":
-        records = [loads_bounded(line) for line in text.splitlines() if line.strip()]
+        lines = (line[:-1] if line.endswith("\r") else line for line in text.split("\n"))
+        records = [loads_bounded(line) for line in lines if line.strip()]
     else:
         parsed = loads_bounded(text)
         records = parsed if isinstance(parsed, list) else [parsed]
@@ -114,6 +115,9 @@ def parse_records(raw, fmt):
     result = []
     for n, rec in enumerate(records, 1):
         stamp = rec.get("timestamp")
+        summary = rec.get("summary", "No summary provided")
+        if not isinstance(summary, (str, int, float, bool)) and summary is not None:
+            raise ValueError("summary must be a JSON scalar")
         normalized = None
         if isinstance(stamp, str):
             try:
@@ -123,7 +127,7 @@ def parse_records(raw, fmt):
             except ValueError:
                 pass
         result.append((n, normalized, stamp if isinstance(stamp, str) else None,
-                       str(rec.get("summary", "No summary provided"))[:2048]))
+                       str(summary)[:2048]))
     return result
 
 def import_file(db, root, case, filename, fmt):
@@ -218,6 +222,9 @@ def main():
                 output = timeline(db, args.case)
             else:
                 output = report(db, root, args.case)
+                report_has_invalid_evidence = any(
+                    not item["valid"] for item in output["evidence"]
+                )
                 path = Path(args.output).resolve()
                 if path == root.resolve() or root.resolve() in path.parents:
                     raise ValueError("output may not overwrite internal storage")
@@ -241,6 +248,8 @@ def main():
                 output = {"output": str(path)}
         print(json.dumps(output, ensure_ascii=False))
         if args.group == "evidence" and args.action == "verify" and not all(x["valid"] for x in output):
+            return 2
+        if args.group == "report" and report_has_invalid_evidence:
             return 2
         return 0
     except (ValueError, OSError, sqlite3.Error, UnicodeError, json.JSONDecodeError) as exc:

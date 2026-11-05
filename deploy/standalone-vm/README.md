@@ -18,6 +18,12 @@ REPORT_DIR=$(mktemp -d "$HOME/mio-ir-reports.XXXXXX")
 mio-ir report generate --case 1 --format json --output "$REPORT_DIR/mio-ir-report.json"
 ```
 
+Input summaries must be JSON scalars (string, number, boolean, or null). JSONL records are separated only by LF
+(with an optional preceding CR for CRLF); Unicode line-separator characters
+inside strings remain part of their record. `evidence verify` and
+`report generate` return exit code 2 when any stored evidence fails integrity
+verification.
+
 Run the commands inside the Debian ARM64 guest and record results. macOS tests do not establish guest verification. This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
 
 This CLI is a separate local evidence utility; it does not call the MIO reasoning

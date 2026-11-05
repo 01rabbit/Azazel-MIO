@@ -112,6 +112,28 @@ class IRWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "JSON nesting exceeds parser limit"):
             parse_records(raw, "jsonl")
 
+    def test_jsonl_keeps_unicode_separators_inside_strings(self):
+        for separator in ("\u2028", "\u0085"):
+            with self.subTest(separator=hex(ord(separator))):
+                raw = json.dumps(
+                    {"summary": "left" + separator + "right"}, ensure_ascii=False
+                ).encode("utf-8") + b"\r\n"
+                records = parse_records(raw, "jsonl")
+                self.assertEqual(records[0][3], "left" + separator + "right")
+
+    def test_nested_summary_is_a_clean_input_error(self):
+        source = self.root / "nested-summary.json"
+        source.write_text('{"summary":{"nested":[{"value":1}]}}', encoding="utf-8")
+        with patch.dict(os.environ, {"MIO_IR_HOME": str(self.root)}), patch(
+            "sys.argv", ["mio-ir", "evidence", "import", "--case", str(self.case),
+                         "--file", str(source), "--format", "json"]
+        ):
+            errors = StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(main(), 1)
+        self.assertIn("error: summary must be a JSON scalar", errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
+
     def test_reimport_creates_distinct_receipts_but_deduplicates_object(self):
         first = import_file(self.db, self.root, self.case, self.source, "jsonl")
         second = import_file(self.db, self.root, self.case, self.source, "jsonl")
@@ -243,9 +265,21 @@ class IRWorkflowTests(unittest.TestCase):
             output = Path(export) / "report.json"
             output.hardlink_to(evidence)
             original = evidence.read_bytes()
-            self.assertEqual(self.run_report(output), 0)
+            self.assertEqual(self.run_report(output), 2)
             self.assertEqual(evidence.read_bytes(), original)
             self.assertEqual(json.loads(output.read_text())["case_id"], self.case)
+            self.assertFalse(json.loads(output.read_text())["evidence"][0]["valid"])
+
+    def test_report_exit_code_is_nonzero_when_evidence_is_invalid(self):
+        import_file(self.db, self.root, self.case, self.source, "jsonl")
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        evidence = self.root / "objects" / digest
+        evidence.chmod(0o600)
+        evidence.write_text("tampered", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as export:
+            output = Path(export) / "report.json"
+            self.assertEqual(self.run_report(output), 2)
+            self.assertFalse(json.loads(output.read_text())["evidence"][0]["valid"])
 
     def test_cross_case_isolation(self):
         other = self.db.execute("INSERT INTO cases(name,created) VALUES('other','now')").lastrowid
