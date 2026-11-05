@@ -6,7 +6,7 @@ import sqlite3
 import stat
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
@@ -445,7 +445,7 @@ class IRWorkflowTests(unittest.TestCase):
             for escaped in (r"\[x\]", r"\(", r"\<img", r"\*bold\*", r"\`code\`",
                             r"\~\~gone\~\~", r"\&", r"\:"):
                 self.assertIn(escaped, content)
-            for raw in ("[x]", "<img", "*bold*", "`code`", "~~gone~~"):
+            for raw in ("[x]", "<img src=x>", "*bold*", "`code`", "~~gone~~"):
                 self.assertNotIn(raw, content)
 
     def test_markdown_report_labels_missing_timestamp_unknown(self):
