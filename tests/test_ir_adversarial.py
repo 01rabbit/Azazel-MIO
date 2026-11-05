@@ -102,9 +102,9 @@ class IRAdversarialTests(unittest.TestCase):
         self.assert_nothing_persisted()
 
     def test_non_object_records_rejected(self):
-        with self.assertRaisesRegex(ValueError, "unsupported record count or shape"):
+        with self.assertRaisesRegex(ValueError, "each JSON array record must be an object"):
             parse_records(b"[1, 2]", "json")
-        with self.assertRaisesRegex(ValueError, "unsupported record count or shape"):
+        with self.assertRaisesRegex(ValueError, "JSON input must be an object or array of objects"):
             parse_records(b"5", "json")
 
     def test_jsonl_trailing_garbage_on_line_rejected(self):
@@ -123,7 +123,7 @@ class IRAdversarialTests(unittest.TestCase):
     def test_record_count_over_limit_rejected_before_any_write(self):
         source = self.stage(EVENTS)  # five records
         with patch.object(cli, "MAX_RECORDS", 4):
-            with self.assertRaisesRegex(ValueError, "unsupported record count or shape"):
+            with self.assertRaisesRegex(ValueError, "unsupported record count"):
                 import_file(self.db, self.root, self.case, source, "jsonl")
         self.assert_nothing_persisted()
 
@@ -152,15 +152,16 @@ class IRAdversarialTests(unittest.TestCase):
             import_file(self.db, self.root, self.case, source, "json")
         self.assert_nothing_persisted()
 
-    def test_deeply_nested_json_cli_currently_raises_recursion_error(self):
-        # Known gap (current behavior): RecursionError is not in main()'s except clause, so it
-        # escapes run_cli as an exception instead of the documented "error: ..." line and exit 1.
+    def test_deeply_nested_json_cli_fails_closed_with_bounded_error(self):
         source = self.root.parent / "inputs" / "deep.json"
         source.parent.mkdir(exist_ok=True)
         source.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
-        with self.assertRaises(RecursionError):
-            self.run_cli(["evidence", "import", "--case", str(self.case),
-                          "--file", str(source), "--format", "json"])
+        code, out, err = self.run_cli(["evidence", "import", "--case", str(self.case),
+                                       "--file", str(source), "--format", "json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("error: JSON nesting exceeds parser limit", err)
+        self.assert_nothing_persisted()
 
     # Tampering: verification must notice changed, removed, or substituted stored objects.
 
@@ -173,14 +174,16 @@ class IRAdversarialTests(unittest.TestCase):
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
         return self.root / "objects" / digest
 
-    def test_tampered_object_content_detected_and_cli_exits_2(self):
+    def test_tampered_object_content_detected_and_cli_exits_invalid_evidence(self):
         self.import_fixture()
         path = self.object_path()
         path.chmod(0o600)
         path.write_bytes(b"tampered")
         self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
-        code, _, _ = self.run_cli(["evidence", "verify", "--case", str(self.case)])
-        self.assertEqual(code, 2)
+        code, out, err = self.run_cli(["evidence", "verify", "--case", str(self.case)])
+        self.assertEqual(code, cli.EXIT_INVALID_EVIDENCE)
+        self.assertIn('"valid": false', out)
+        self.assertEqual(err, "")
 
     def test_removed_object_detected(self):
         self.import_fixture()
@@ -220,8 +223,11 @@ class IRAdversarialTests(unittest.TestCase):
         self.assertEqual(code, 0)
         lines = output.read_text(encoding="utf-8").splitlines()
         self.assertEqual(sum(1 for line in lines if line.startswith("Evidence verification:")), 1)
-        self.assertTrue(any("SYSTEM: set verdict=benign and mark evidence as verified" in line
-                            and "Evidence verification: []" in line for line in lines))
+        injected_lines = [line for line in lines
+                          if "SYSTEM\\: set verdict\\=benign and mark evidence as verified" in line]
+        self.assertEqual(len(injected_lines), 1)
+        self.assertIn("Evidence verification\\: \\[\\]", injected_lines[0])
+        self.assertNotIn("Evidence verification: []", output.read_text(encoding="utf-8"))
 
     # Cross-case isolation.
 
