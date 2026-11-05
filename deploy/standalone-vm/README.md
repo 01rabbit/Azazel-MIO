@@ -27,7 +27,9 @@ normalized to UTC; other types and naive timestamps remain unknown.
 String timestamps longer than 256 characters are rejected; shorter unparseable
 or unrepresentable timestamps remain unknown. JSONL records are separated only
 by LF (with an optional preceding CR for CRLF); Unicode line-separator
-characters inside strings remain part of their record. Each input file is
+characters inside strings remain part of their record. Empty lines, spaces-only
+lines and tabs-only lines are skipped; other Unicode whitespace is rejected.
+Each input file is
 limited to 16 MiB and 10,000 records. There is no cumulative per-case event or
 evidence limit. `evidence
 verify` and `report generate` return exit code 3 when stored evidence fails
@@ -50,6 +52,8 @@ and content objects must be owned regular files with one link; symlinks,
 hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks
 require POSIX user-ID reporting; unsupported platforms fail closed. Reports
 must be exported outside the storage directory, including SQLite journal paths.
+Database, sidecar, and object file mode bits are not checked or changed; access
+relies on ownership and the private storage-directory mode.
 Output paths are resolved before validation; an external output symlink therefore
 targets its resolved destination. Existing report files are replaced atomically
 with private files.

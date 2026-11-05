@@ -238,7 +238,7 @@ recorded above; it did not run tests or verify Git object identities.
 Debian ARM64 VMware guest acceptance remains pending and is independent of this
 Linux ARM64 container check.
 
-## Post-review refinements and current exact-source validation — 2026-11-05
+## Prior review refinements and validation (source 2f1818a; historical)
 
 A second Claude Code Haiku/low read-only review of the then-current candidate
 reported no High/Medium issues and six Low items. Its findings and dispositions:
@@ -306,3 +306,31 @@ documented five-record create/import/verify/timeline/report workflow also
 completed successfully with synthetic input. These results are for the exact
 source commit above; this record's final docs-only commit is not executable test
 input. Debian ARM64 VMware guest acceptance remains outstanding.
+
+## Latest review findings and final source validation — 2026-11-05
+
+Claude Code Haiku/low's read-only review of candidate `e050cf4` reported no
+High/Medium issue and four Low findings. The record's prior `2f1818a` / `r3`
+section is historical and is not current evidence. Dispositions:
+
+- Rewrote the historical section heading to identify its source revision.
+- Documented that database, SQLite sidecar, and object file mode bits are not
+  checked or changed; the private directory and owner checks provide the stated
+  boundary.
+- JSONL now skips only empty, ASCII-space-only, or tab-only lines. Unicode
+  whitespace-only lines are rejected by the JSON parser; regressions cover
+  U+2028 and U+00A0. The guide says the same.
+- The successful `main()` connection close is now tested; schema setup failure
+  continues to close the connection as well.
+
+The final source/test commit is
+`d69cbbe061ef4ea486f2fc7811d22346d3700aeb` (tree
+`52db1cf1c2150ba06a0c90d0cf765fbe234ab7b9`), version
+`0.1.0.dev20261105+ir11r5`. On the self-contained Git archive in Docker
+`python:3.12-arm64-c65`, CPython 3.12 and pytest 8.4.2, the full suite passed:
+**697 passed**, exit 0. The matching ARM64 wheel built and installed, and
+`mio-ir --help` succeeded. Wheel SHA-256:
+`ef72995953528290ebc1192593fa59a0c210d2372dd9937f82f91f6a8ac21ef1`.
+The documented synthetic create/import/verify/timeline/report workflow passed
+on that installed wheel. No real evidence was used and no artifact was
+published. These tests do not establish Debian ARM64 VMware guest acceptance.
