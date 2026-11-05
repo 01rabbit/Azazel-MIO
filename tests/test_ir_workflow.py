@@ -521,6 +521,15 @@ class IRWorkflowTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertIn("output may not overwrite internal storage", errors.getvalue())
 
+    def test_report_status_json_escapes_non_ascii_path(self):
+        with tempfile.TemporaryDirectory() as export:
+            output = Path(export) / "rapport-📄.json"
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(self.run_report(output), 0)
+            self.assertIn(r"rapport-\ud83d\udcc4.json", stdout.getvalue())
+            self.assertEqual(json.loads(stdout.getvalue()), {"output": str(output.resolve())})
+
     def test_report_hardlink_does_not_truncate_evidence(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
