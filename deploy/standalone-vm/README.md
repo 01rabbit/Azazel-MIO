@@ -7,7 +7,7 @@ set -euo pipefail
 python3 -m venv .venv
 . .venv/bin/activate
 # Point this at the already-provisioned offline wheelhouse in the guest.
-: "${WHEELHOUSE:?set WHEELHOUSE to the guest's offline wheelhouse}"
+: "${WHEELHOUSE:?set WHEELHOUSE to the guest offline wheelhouse}"
 python -m pip install --no-index --find-links "$WHEELHOUSE" "setuptools>=77.0.3" wheel
 python -m pip install --no-index --no-build-isolation --no-deps -e .
 export MIO_IR_HOME="$HOME/mio-ir-data"
