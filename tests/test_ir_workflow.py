@@ -233,6 +233,10 @@ class IRWorkflowTests(unittest.TestCase):
         record = b'{"timestamp":"0001-01-01T00:00:00+09:00"}'
         self.assertIsNone(parse_records(record, "json")[0][1])
 
+    def test_timestamp_without_explicit_offset_is_unknown(self):
+        record = b'{"timestamp":"2026-10-01T10:00:00"}'
+        self.assertIsNone(parse_records(record, "json")[0][1])
+
     def test_timestamp_length_is_bounded(self):
         oversized = "x" * (MAX_TIMESTAMP_CHARS + 1)
         raw = json.dumps({"timestamp": oversized}).encode("utf-8")
@@ -399,8 +403,21 @@ class IRWorkflowTests(unittest.TestCase):
             self.assertEqual(self.run_report(output, "markdown"), 0)
             content = output.read_text(encoding="utf-8")
             self.assertNotIn("\r", content)
-            self.assertIn("safe # injected heading", content)
-            self.assertNotIn("\n# injected heading", content)
+            self.assertIn(r"safe\# injected heading", content)
+
+    def test_markdown_report_escapes_untrusted_markup(self):
+        source = self.root / "markdown.jsonl"
+        source.write_text(
+            '{"summary":"[x](https://example.invalid) <img src=x> *bold* `code`"}\n',
+            encoding="utf-8",
+        )
+        import_file(self.db, self.root, self.case, source, "jsonl")
+        with tempfile.TemporaryDirectory() as export:
+            output = Path(export) / "report.md"
+            self.assertEqual(self.run_report(output, "markdown"), 0)
+            content = output.read_text(encoding="utf-8")
+            for escaped in (r"\[x\]", r"\(", r"\<img", r"\*bold\*", r"\`code\`"):
+                self.assertIn(escaped, content)
 
     def test_report_cannot_overwrite_internal_journal(self):
         output = self.root / "cases.sqlite3-wal"
@@ -416,6 +433,7 @@ class IRWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as export:
             output = Path(export) / "report.json"
             output.hardlink_to(evidence)
+            self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
             original = evidence.read_bytes()
             self.assertEqual(self.run_report(output), EXIT_INVALID_EVIDENCE)
             self.assertEqual(evidence.read_bytes(), original)

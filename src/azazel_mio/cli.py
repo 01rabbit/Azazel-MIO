@@ -1,5 +1,6 @@
-"""Offline IR evidence workflow; timestamps reflect processing time."""
+"""Offline IR evidence workflow; event timestamps come from input records."""
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import math
@@ -16,6 +17,11 @@ MAX_RECORDS = 10000
 MAX_TIMESTAMP_CHARS = 256
 MAX_SUMMARY_CHARS = 2048
 EXIT_INVALID_EVIDENCE = 3
+MARKDOWN_ESCAPES = frozenset("\\`*_{}[]()#+-.!|><")
+
+def markdown_escape(value):
+    return "".join("\\" + char if char in MARKDOWN_ESCAPES else char
+                   for char in value)
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -213,7 +219,7 @@ def parse_records(raw, fmt):
         if isinstance(stamp, str):
             try:
                 dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-                if dt.tzinfo is not None:
+                if dt.tzinfo is not None and dt.utcoffset() is not None:
                     normalized = dt.astimezone(timezone.utc).isoformat()
             except (ValueError, OverflowError):
                 pass
@@ -309,7 +315,7 @@ def main():
     args = parser.parse_args()
     try:
         root = root_path()
-        with connect(root) as db:
+        with closing(connect(root)) as db, db:
             if args.group == "case":
                 if args.action == "create":
                     cur = db.execute("INSERT INTO cases(name,created) VALUES(?,?)", (args.name, utc_now()))
@@ -331,7 +337,9 @@ def main():
                 if args.format == "markdown":
                     content = "# IR Case " + str(args.case) + "\n\n" + "\n".join(
                         "- " + str(x["timestamp_utc"]) + " | evidence " + str(x["evidence_id"]) +
-                        " record " + str(x["record"]) + ": " + x["summary"].replace("\r", " ").replace("\n", " ")
+                        " record " + str(x["record"]) + ": " + markdown_escape(
+                            x["summary"].replace("\r", " ").replace("\n", " ")
+                        )
                         for x in output["timeline"]) + "\n\nEvidence verification: " + json.dumps(output["evidence"]) + "\n"
                 else:
                     content = json.dumps(output, indent=2, ensure_ascii=False)
