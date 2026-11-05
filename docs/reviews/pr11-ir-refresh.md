@@ -31,7 +31,8 @@ Restore standalone slice, fix above concrete issues, run focused tests then full
 - .venv/bin/mio-ir --help: exit 0.
 - git diff --check and git diff --cached --check: exit 0.
 
-No pytest skips/warnings reported. Logs retained locally in .git/ir-refresh-evidence. Synthetic evidence only.
+No pytest skips/warnings reported for this historical candidate. Validation logs
+were kept outside the repository and are not part of this PR. Synthetic evidence only.
 
 ## Limitations
 
@@ -56,16 +57,16 @@ regression to an evidence hardlink, focused tests exited 0 (11 passed); full
 suite exited 0 (299 passed, 36 subtests passed), with no warnings or skips.
 Both git diff --check and staged diff check exited 0.
 
-Reviewer commands from this checkout, using the retained local environment:
+Reviewer commands from an environment with this checkout installed and pytest available:
 
 ```sh
-.git/ir-refresh-evidence/venv/bin/python -m pytest tests/test_ir_workflow.py -q
-.git/ir-refresh-evidence/venv/bin/python -m pytest -q
+python -m pytest tests/test_ir_workflow.py -q
+python -m pytest -q
 ```
 
 Alternatively create a new Python 3.12 virtual environment outside the checkout,
-install this checkout with pip install -e . and install pytest. No virtual
-environment is committed. Logs: .git/ir-refresh-evidence/ir11-03-*.log.
+install this checkout with `pip install -e .` and install pytest. No virtual
+environment or local test log is committed.
 
 ## Current-main rebase candidate — 2026-11-05
 
@@ -91,7 +92,39 @@ drift. Before syncing the rebased PR, the candidate addresses these as follows:
   and regression coverage make this behavior explicit.
 - The Debian ARM64 guide now states the package's Python `>=3.11` requirement.
 
-The final candidate SHA, refreshed independent review, full test results,
-editable-install/CLI smoke, and updated code references must be recorded here
-after those checks complete. The Debian ARM64 guest remains a separate final
-acceptance gate.
+The rebased code candidate before this security follow-up was
+`611e89352c182d3525982ee3509489c1a27e17b3`. Claude Haiku/low reviewed its six
+changed files and found no High issue, but the review was incomplete for full
+acceptance: it had not read all of `cli.py` and did not verify the checkout
+head. Findings and disposition:
+
+- `cli.py:25-26`, existing directory mode mutation: fixed by refusing an
+  existing directory unless it is owned by the invoking user and already
+  private; no existing directory is chmodded (`cli.py:26-36`).
+- `cli.py:23-33`, SQLite sidecars and non-regular content objects: fixed by
+  `lstat` checks for the database, `-journal`, `-wal`, `-shm`, and existing
+  digest objects (`cli.py:38-45`, `48-53`, `137-140`). Symlinks, hardlinks,
+  FIFOs, non-regular entries and foreign-owned files are rejected. Verification
+  reports unsafe/missing objects invalid (`cli.py:69-87`).
+- `cli.py:61-66`, deeply nested JSON parser exception: fixed by translating
+  `RecursionError` to a bounded input `ValueError` (`cli.py:93-105`).
+- Re-import duplication: retained as separate import receipts so each invocation
+  and its source filename/time remain visible; the object bytes are content
+  deduplicated. README wording and `test_reimport_creates_distinct_receipts_but_deduplicates_object`
+  make this behavior explicit.
+- Documentation now states Python `>=3.11`, matching package metadata. The
+  hashes and 297/299 test totals in the earlier sections are historical results
+  for the earlier tree, not current-main rebase evidence.
+
+Candidate after these changes: commit `5fa161a1626c64088b338eed9f7aec0bac7a7360`,
+tree `6dc00dd00dd1a4c04901114b5b8fd5b7e8722366`, based on current MIO main
+`5bb09c8d28c57604dc1c63903b98fed7587b49ea`. Validation on that tree: focused
+IR workflow **18 passed / 6 subtests passed**; complete MIO suite **663 passed /
+249 subtests passed**, Python 3.12.14, exit 0; `git diff --check` passed. A
+read-only isolated Docker editable install on Linux arm64 / Python 3.12 also
+passed: `mio-ir --help` showed the four command groups and installed package
+version was `0.1.0+git.c31c244`. The temporary container used `--rm` and
+`--network=none`; no distributable wheel was published or retained.
+
+The final independent review of the corrected current-head candidate is still
+required. Debian ARM64 guest validation remains a separate acceptance gate.
