@@ -401,11 +401,12 @@ Linux case-sensitive filesystem; it passed separately on macOS with CPython
 `3.14` using `unittest`. An ARM64 wheel was built and installed, and
 `mio-ir --help` succeeded. Wheel SHA-256:
 `cc5cafad996d54c1cbd3b696d150db6f28925c65dc984754f1abeab8cbbbf5e3`.
-The temporary full-test wheel was built from the `c7735c6` archive; `src/` and
+The temporary full-test wheel (discarded after testing) was built from the
+`c7735c6` archive; `src/` and
 `pyproject.toml` are identical to package-source commit `0cfb0fe` (changes
 between them are tests/documentation). It was installed before the full suite
-and then discarded with its container; its SHA remains in the preserved run
-log. A second wheel was retained as
+and then discarded with its container; its SHA is recorded in the local test
+record. A second wheel was retained as
 `azazel_mio-0.1.0.dev20261105+ir11r8-py3-none-any.whl`, SHA-256
 `2904c0ba5e3c4417638ae602f2bf6f4a5b365c4d4f9ebf28e552f779c93489d4`, and was
 built from the exact `0cfb0fe` package-source archive. It installed in the
@@ -430,10 +431,10 @@ After the test tree `c7735c6`, this candidate's commits changed only
 `src/`, `tests/`, and `pyproject.toml` are unchanged. Package source and
 metadata from `0cfb0fe` are unchanged through the current candidate.
 
-Known untested paths from the Info review note are `case list`, report output
+The README command block executed in the smoke test is unchanged; its prose now
+also says to re-export `MIO_IR_HOME` for later interactive commands. Known
+untested paths from the Info review note are `case list`, report output
 with a missing parent, an oversized source input, and output directly under the
 objects directory. Markdown escaping covers the explicitly listed control,
 line-separator and bidi characters, not every possible display transformation
-in every downstream Markdown renderer. The final Bash README block was run
-from the exact current text; `MIO_IR_HOME` must be exported again when using
-later commands in the interactive shell.
+in every downstream Markdown renderer.
