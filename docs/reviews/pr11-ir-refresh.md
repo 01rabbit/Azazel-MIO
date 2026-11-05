@@ -396,17 +396,14 @@ Package source and metadata are fixed at commit
 in Docker `python:3.12-arm64-c65`, CPython 3.12 with `pytest==8.4.2`, the full
 suite command `PYTHONPATH=src python -m pytest -q -p no:cacheprovider` passed as
 uid 1001: **703 passed, 1 skipped**, exit 0, with no deselection. The skipped
-test is specifically the case-alias test on the
-Linux case-sensitive filesystem; it passed separately on macOS with CPython
-`3.14` using `unittest`. An ARM64 wheel was built and installed, and
-`mio-ir --help` succeeded. Wheel SHA-256:
+test is specifically the case-alias test on the Linux case-sensitive
+filesystem; it passed separately on macOS with CPython `3.14` using
+`unittest`. The temporary full-test ARM64 wheel had SHA-256
 `cc5cafad996d54c1cbd3b696d150db6f28925c65dc984754f1abeab8cbbbf5e3`.
-The temporary full-test wheel (discarded after testing) was built from the
-`c7735c6` archive; `src/` and
+It was built from the `c7735c6` archive; `src/` and
 `pyproject.toml` are identical to package-source commit `0cfb0fe` (changes
 between them are tests/documentation). It was installed before the full suite
-and then discarded with its container; its SHA is recorded in the local test
-record. A second wheel was retained as
+and then discarded with its container. A second wheel was retained as
 `azazel_mio-0.1.0.dev20261105+ir11r8-py3-none-any.whl`, SHA-256
 `2904c0ba5e3c4417638ae602f2bf6f4a5b365c4d4f9ebf28e552f779c93489d4`, and was
 built from the exact `0cfb0fe` package-source archive. It installed in the
