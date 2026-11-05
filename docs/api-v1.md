@@ -101,7 +101,7 @@ MIO bounds and checks all fields again, rejects expired/future/malformed context
 and preserves facts and inferences separately. A context grants no authority.
 `now` is mandatory, timezone-aware ISO 8601, supplied by the product clock.
 
-`KnowledgeLiteAdvisory(technique_id, name, summary, claim_id, bundle_digest,
+`KnowledgeLiteAdvisory(technique_id, name, summary: str | None, claim_id, bundle_digest,
 freshness, generation, as_of, citation, revocation_status, trust_check="verified",
 expires_at=None, source_citation=None)` is accepted through `explain(...,
 knowledge_lite_advisories=(...), now=...)`. It is projected as
@@ -109,6 +109,16 @@ knowledge_lite_advisories=(...), now=...)`. It is projected as
 `claim_status=reported_unverified`. Its summary remains only a reported claim:
 it is not placed in observations or VerifiedKnowledgeContext facts/inferences.
 `summary` may be empty and is preserved exactly, with no fabricated fallback.
+Static-reference exception: a producer that supplies `summary=None` (no summary at
+all) is accepted only when every other check passes, `freshness` is `static`,
+`revocation_status` is `clear`, `expires_at` is absent, and `technique_id` matches
+`T[0-9]{4}(\.[0-9]{3})?` (format only; catalogue membership is not checked). MIO then projects the advisory with `summary: ""` and
+never synthesizes replacement prose. It stays `reported_unverified`, `unverified_advisory_only`,
+and advisory-only: no observation, known fact, evidence, truth, or authority is
+created. Any other `None` summary (including `current`, `unknown`/`revoked`
+revocation, a supplied expiry, a malformed technique ID, or failed bindings)
+is rejected. Blank or whitespace-only names are rejected, and names must contain
+only printable characters.
 `citation` remains the canonical identifier; adapters mapping a KnowledgeRef use
 its `claim_id` for this field, not its human-readable dataset citation.
 The optional trailing `source_citation` carries that source's dataset citation

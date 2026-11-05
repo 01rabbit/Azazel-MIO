@@ -314,10 +314,52 @@ def test_knowledge_lite_advisory_stays_unverified_in_prompt_and_output():
     {'summary': 'x' * 1201}, {'summary': None},
     {'source_citation': 'Source', 'revocation_status': 'revoked'},
     {'source_citation': 'Source', 'trust_check': 'skipped'},
+    {'name': '   '}, {'name': '\t'}, {'name': 'Bad\x7fname'}, {'name': 'Bad‮name'},
 ])
 def test_invalid_knowledge_lite_advisory_is_rejected(change):
     out = AssistantCore().explain(frame(), now=NOW,
         knowledge_lite_advisories=(lite_advisory(**change),)).to_dict()
+    assert out['knowledge'] == []
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in out['unknowns']
+
+
+@pytest.mark.parametrize('technique_id', ['T1059', 'T1059.001', 'T0001'])
+def test_static_knowledge_lite_reference_without_summary_is_empty_unverified_advisory(technique_id):
+    advisory = lite_advisory(summary=None, technique_id=technique_id, freshness='static',
+                             revocation_status='clear', citation='kn:attack:' + technique_id)
+    out = AssistantCore().explain(frame(), now=NOW, knowledge_lite_advisories=(advisory,)).to_dict()
+    item, = [item for item in out['knowledge'] if item['kind'] == 'knowledge_lite_advisory']
+    assert item['summary'] == ''
+    assert item['technique_id'] == technique_id
+    assert item['freshness'] == 'static' and item['temporal_validity'] == 'static'
+    assert item['expires_at'] is None and item['claim_status'] == 'reported_unverified'
+    assert item['trust'] == 'unverified_advisory_only'
+    assert out['dependency_outcome']['knowledge'] == 'available'
+    assert out['observations'] == ['AUTH_FAILURES_OBSERVED']
+    assert not any('facts' in entry or 'inferences' in entry for entry in out['knowledge'])
+
+
+@pytest.mark.parametrize('change', [
+    {'freshness': 'current'},
+    {'freshness': 'static', 'revocation_status': 'unknown'},
+    {'freshness': 'static', 'revocation_status': 'revoked'},
+    {'freshness': 'static', 'expires_at': '2026-10-31T01:00:00Z'},
+    {'freshness': 'static', 'technique_id': 'attack-1'},
+    {'freshness': 'static', 'technique_id': 'T1059.1'},
+    {'freshness': 'static', 'technique_id': 'T1059 '},
+    {'freshness': 'static', 'trust_check': 'skipped'},
+    {'freshness': 'static', 'bundle_digest': 'sha256:bad'},
+    {'freshness': 'static', 'name': ' '},
+    {'freshness': 'static', 'citation': 'bad citation'},
+    {'freshness': 'static', 'citation': 'kn:attack:T1059\n'},
+    {'freshness': 'static', 'as_of': '2026-11-02T00:00:00Z'},
+    {'freshness': 'static', 'generation': ''},
+    {'freshness': 'static', 'claim_id': None},
+])
+def test_summary_free_knowledge_lite_reference_rejects_outside_static_exception(change):
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(**{'summary': None, **change}),)).to_dict()
     assert out['knowledge'] == []
     assert out['dependency_outcome']['knowledge'] == 'rejected'
     assert 'KNOWLEDGE_CONTEXT_REJECTED' in out['unknowns']

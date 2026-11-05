@@ -82,11 +82,13 @@ class KnowledgeLiteAdvisory:
     recheck it against their clock before reuse because Knowledge Lite has no
     per-claim expiry. `expires_at` is optional and is never inferred.
     `citation` identifies the claim; optional `source_citation` is separate,
-    untrusted dataset display text. An empty summary stays empty.
+    untrusted dataset display text. An empty summary stays empty. `None` is
+    accepted only for clear, non-expiring static references with an ATT&CK-format
+    technique ID, and is projected as an empty summary.
     """
     technique_id: str
     name: str
-    summary: str
+    summary: str | None
     claim_id: str
     bundle_digest: str
     freshness: str
@@ -263,6 +265,7 @@ def _reported_context(value: Any, now: datetime) -> dict[str, Any] | None:
 
 _KNOWLEDGE_LITE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
 _KNOWLEDGE_LITE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_ATTACK_TECHNIQUE_ID = re.compile(r"T[0-9]{4}(?:\.[0-9]{3})?")
 
 
 def _source_citation_ok(value: Any) -> bool:
@@ -295,10 +298,20 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
     if value.revocation_status == "revoked":
         return None
     if (type(value.name) is not str or not 0 < len(value.name) <= 160 or
-            any(ord(c) < 32 for c in value.name)):
+            not value.name.strip() or any(not c.isprintable() for c in value.name)):
         return None
-    if (type(value.summary) is not str or len(value.summary) > 1200 or
-            any(ord(c) < 32 and c not in "\n\t" for c in value.summary)):
+    summary = value.summary
+    if summary is None:
+        # Static-reference exception: a producer with no summary may be kept as
+        # an empty-summary advisory only for a clear, non-expiring static claim
+        # with an ATT&CK-format technique ID. The summary is never synthesized.
+        if not (value.freshness == "static" and value.revocation_status == "clear" and
+                value.expires_at is None and type(value.technique_id) is str and
+                _ATTACK_TECHNIQUE_ID.fullmatch(value.technique_id)):
+            return None
+        summary = ""
+    if (type(summary) is not str or len(summary) > 1200 or
+            any(ord(c) < 32 and c not in "\n\t" for c in summary)):
         return None
     if type(value.citation) is not str or not _KNOWLEDGE_LITE_ID.fullmatch(value.citation):
         return None
@@ -320,7 +333,7 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
     projection = {
         "kind": "knowledge_lite_advisory", "source_kind": "knowledge_lite",
         "claim_status": "reported_unverified", "technique_id": value.technique_id,
-        "name": value.name, "summary": value.summary, "claim_id": value.claim_id,
+        "name": value.name, "summary": summary, "claim_id": value.claim_id,
         "bundle_digest": value.bundle_digest, "freshness": value.freshness,
         "temporal_validity": "current_at_lookup" if value.freshness == "current" else "static",
         "generation": value.generation, "as_of": value.as_of,
