@@ -73,7 +73,7 @@ M.I.O.は、通信制御、デコイの起動・露出、権限変更を直接�
 - 外部モデルへの送信は、明示的な許可、情報分類、送信先認可、最小化を前提とする。
 - ラボでの成功を、本番の認可、実機性能、安全性の証明へ読み替えない。
 
-現行coreにはKnowledge LiteとContext responseを渡す型付きのin-process入力があります。どちらも`reported_unverified`の助言receiptで、出典が報告する内容を検証済み事実へ昇格させません。このcoreはKnowledgeへのfull-node通信経路を持ちません。networking・認証・TLSは製品adapterの責務で、MIOには未実装です。詳細は[API境界](docs/api-v1.md)を参照してください。
+現行coreにはKnowledge LiteとContext responseを渡す型付きのin-process入力があります。どちらも`reported_unverified`の助言receiptで、出典が報告する内容を検証済み事実へ昇格させません。これらはKnowledgeへのnetwork接続ではありません。通信・認証・TLSは製品adapterの責務で、MIOには未実装です。詳細は[API境界](docs/api-v1.md)を参照してください。
 
 ## 最初に通す経路
 
