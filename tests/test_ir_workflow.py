@@ -57,8 +57,18 @@ class IRWorkflowTests(unittest.TestCase):
         stored = self.root / "objects" / digest
         with stored.open("wb") as handle:
             handle.truncate(MAX_BYTES + 1)
-        with patch("pathlib.Path.read_bytes", side_effect=AssertionError("unbounded read")):
+        original_open = Path.open
+        opened = []
+
+        def track_open(path, *args, **kwargs):
+            opened.append(path)
+            if path == stored:
+                raise AssertionError("oversized object must not be opened")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", autospec=True, side_effect=track_open):
             self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
+        self.assertNotIn(stored, opened)
 
     def test_import_refuses_oversized_existing_object_without_reading_it(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
@@ -66,9 +76,19 @@ class IRWorkflowTests(unittest.TestCase):
         stored = self.root / "objects" / digest
         with stored.open("wb") as handle:
             handle.truncate(MAX_BYTES + 1)
-        with patch("pathlib.Path.read_bytes", side_effect=AssertionError("unbounded read")):
+        original_open = Path.open
+        opened = []
+
+        def track_open(path, *args, **kwargs):
+            opened.append(path)
+            if path == stored:
+                raise AssertionError("oversized object must not be opened")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", autospec=True, side_effect=track_open):
             with self.assertRaisesRegex(ValueError, "stored object corrupted or too large"):
                 import_file(self.db, self.root, self.case, self.source, "jsonl")
+        self.assertNotIn(stored, opened)
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO support required")
     def test_existing_fifo_object_is_rejected_without_reading(self):
@@ -219,6 +239,26 @@ class IRWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "timestamp exceeds length limit"):
             parse_records(raw, "json")
 
+    def test_summary_truncation_preserves_original_object(self):
+        long_summary = "x" * 2050
+        source = self.root / "long-summary.json"
+        original = json.dumps({"summary": long_summary}).encode("utf-8")
+        source.write_bytes(original)
+        import_file(self.db, self.root, self.case, source, "json")
+        self.assertEqual(len(timeline(self.db, self.case)[0]["summary"]), 2048)
+        digest = hashlib.sha256(original).hexdigest()
+        self.assertEqual((self.root / "objects" / digest).read_bytes(), original)
+
+    def test_empty_jsonl_is_empty_but_empty_json_is_rejected(self):
+        self.assertEqual(parse_records(b"", "jsonl"), [])
+        with self.assertRaises(json.JSONDecodeError):
+            parse_records(b"", "json")
+
+    def test_utf8_bom_is_rejected_for_json_and_jsonl(self):
+        for fmt in ("json", "jsonl"):
+            with self.subTest(fmt=fmt), self.assertRaises(json.JSONDecodeError):
+                parse_records(b"\xef\xbb\xbf{}", fmt)
+
     def test_empty_mio_ir_home_is_rejected(self):
         with patch.dict(os.environ, {"MIO_IR_HOME": ""}):
             with self.assertRaisesRegex(ValueError, "MIO_IR_HOME must not be empty"):
@@ -343,12 +383,24 @@ class IRWorkflowTests(unittest.TestCase):
                 connect(other)
             sqlite_connect.assert_not_called()
 
-    def run_report(self, output):
+    def run_report(self, output, fmt="json"):
         with patch.dict(os.environ, {"MIO_IR_HOME": str(self.root)}), patch(
             "sys.argv", ["mio-ir", "report", "generate", "--case", str(self.case),
-                         "--format", "json", "--output", str(output)]
+                         "--format", fmt, "--output", str(output)]
         ):
             return main()
+
+    def test_markdown_report_keeps_carriage_return_inside_summary_line(self):
+        source = self.root / "carriage-return.jsonl"
+        source.write_text('{"summary":"safe\\r# injected heading"}\n', encoding="utf-8")
+        import_file(self.db, self.root, self.case, source, "jsonl")
+        with tempfile.TemporaryDirectory() as export:
+            output = Path(export) / "report.md"
+            self.assertEqual(self.run_report(output, "markdown"), 0)
+            content = output.read_text(encoding="utf-8")
+            self.assertNotIn("\r", content)
+            self.assertIn("safe # injected heading", content)
+            self.assertNotIn("\n# injected heading", content)
 
     def test_report_cannot_overwrite_internal_journal(self):
         output = self.root / "cases.sqlite3-wal"

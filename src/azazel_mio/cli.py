@@ -331,7 +331,7 @@ def main():
                 if args.format == "markdown":
                     content = "# IR Case " + str(args.case) + "\n\n" + "\n".join(
                         "- " + str(x["timestamp_utc"]) + " | evidence " + str(x["evidence_id"]) +
-                        " record " + str(x["record"]) + ": " + x["summary"].replace("\n", " ")
+                        " record " + str(x["record"]) + ": " + x["summary"].replace("\r", " ").replace("\n", " ")
                         for x in output["timeline"]) + "\n\nEvidence verification: " + json.dumps(output["evidence"]) + "\n"
                 else:
                     content = json.dumps(output, indent=2, ensure_ascii=False)
