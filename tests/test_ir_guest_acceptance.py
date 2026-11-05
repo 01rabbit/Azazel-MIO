@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from azazel_mio.cli import EXIT_INVALID_EVIDENCE
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "ir_guest_acceptance.py"
 _spec = importlib.util.spec_from_file_location("ir_guest_acceptance", SCRIPT)
@@ -163,9 +164,8 @@ def test_acceptance_deadline_fails_before_invoking_another_command():
 
 def test_parse_json_stdout_accepts_json():
     assert runner.parse_json_stdout("case.list", '[{"case_id": 1}]') == [{"case_id": 1}]
-    assert runner.parse_json_stdout("case.list", '{"text": "[[[[not nesting]]]]"}') == {
-        "text": "[[[[not nesting]]]]"
-    }
+    string_values = {"text": 'quote: " [[[[not nesting]]]]', "backslash": "\\"}
+    assert runner.parse_json_stdout("case.list", json.dumps(string_values)) == string_values
 
 
 def test_parse_json_stdout_rejects_invalid_and_deep_json():
@@ -177,6 +177,16 @@ def test_parse_json_stdout_rejects_invalid_and_deep_json():
     assert runner.parse_json_stdout(
         "case.list", "[" * depth + "0" + "]" * depth
     ) == nested_list(depth)
+
+
+def test_parse_json_stdout_wraps_integer_limit_value_error():
+    with mock.patch.object(runner.json, "loads", side_effect=ValueError("integer limit")):
+        with pytest.raises(runner.AcceptanceError, match="stdout is not JSON"):
+            runner.parse_json_stdout("case.list", "1" * 5000)
+
+
+def test_verify_invalid_exit_matches_mio_cli_contract():
+    assert runner.VERIFY_INVALID_EXIT == EXIT_INVALID_EVIDENCE
 
 
 def nested_list(depth):

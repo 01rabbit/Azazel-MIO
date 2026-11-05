@@ -41,7 +41,7 @@ VM_DETECTOR_PATHS = (Path("/usr/bin/systemd-detect-virt"), Path("/bin/systemd-de
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_REFUSED = 3
-VERIFY_INVALID_EXIT = 2  # mio-ir evidence verify returns 2 when any object is invalid
+VERIFY_INVALID_EXIT = 3  # src/azazel_mio/cli.py: EXIT_INVALID_EVIDENCE
 
 SYNTHETIC_RECORDS = [
     {"timestamp": "2026-01-01T00:00:02Z", "summary": "synthetic alert A"},
@@ -254,7 +254,7 @@ def parse_json_stdout(step: str, text: str) -> Any:
         raise AcceptanceError(step, "stdout is not JSON: maximum nesting depth exceeded")
     try:
         return json.loads(text)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise AcceptanceError(step, "stdout is not JSON: " + bounded(text)) from exc
 
 
