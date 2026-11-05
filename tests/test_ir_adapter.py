@@ -186,7 +186,7 @@ def test_only_non_conflicted_candidates_reach_core_exactly_once(monkeypatch):
         ),
         # timeline row belongs to another case
         (
-            [{"case_id": CASE + 1, "event_id": 1, "evidence_id": 101, "record_number": 5}],
+            [{"case_id": CASE + 1, "event_id": 1, "evidence_id": 101, "record": 5}],
             _verified((101, True)),
             [_candidate()],
         ),
@@ -268,39 +268,54 @@ def test_verified_valid_must_be_strict_bool(monkeypatch):
 
 def test_timeline_ids_reject_bool_and_string(monkeypatch):
     _no_core(monkeypatch)
-    rows = [{"case_id": CASE, "event_id": True, "evidence_id": 101, "record_number": 5}]
+    rows = [{"case_id": CASE, "event_id": True, "evidence_id": 101, "record": 5}]
     with pytest.raises(ValueError):
         assess_ir_candidates(CASE, rows, _verified((101, True)), [_candidate()])
-    rows = [{"case_id": CASE, "event_id": 1, "evidence_id": "101", "record_number": 5}]
+    rows = [{"case_id": CASE, "event_id": 1, "evidence_id": "101", "record": 5}]
     with pytest.raises(ValueError):
         assess_ir_candidates(CASE, rows, _verified((101, True)), [_candidate()])
+
+
+def _unchecked_inputs(**changes):
+    inputs = FastAssessmentInput(severity=2)
+    for name, value in changes.items():
+        object.__setattr__(inputs, name, value)
+    return inputs
+
+
+def _unchecked_port(**changes):
+    port = PortSignal("web", 443)
+    for name, value in changes.items():
+        object.__setattr__(port, name, value)
+    return port
 
 
 @pytest.mark.parametrize(
     "make_inputs",
     [
-        pytest.param(lambda: FastAssessmentInput(severity=True), id="severity-bool"),
-        pytest.param(lambda: FastAssessmentInput(severity=-1), id="severity-negative"),
-        pytest.param(lambda: FastAssessmentInput(severity=ir_adapter._MAX_SEVERITY + 1), id="severity-too-large"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, token_only=1), id="token-only-not-bool"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, deception_sid=0), id="deception-sid-zero"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, benign_classless="no"), id="benign-classless-not-bool"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, classes=["c2"]), id="classes-list"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, classes=("C2",)), id="class-not-canonical"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, classes=("c2",) * (ir_adapter._MAX_CLASSES + 1)), id="too-many-classes"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, ports=[PortSignal("web", 443)]), id="ports-list"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(PortSignal("web", True),)), id="port-bool"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(PortSignal("web", 0),)), id="port-zero"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(PortSignal("WEB", 443),)), id="port-not-canonical"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, ports=(("web", 443),) * (ir_adapter._MAX_PORTS + 1)), id="port-tuples"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, action="Drop"), id="action-not-canonical"),
-        pytest.param(lambda: FastAssessmentInput(severity=2, action=""), id="action-empty"),
+        pytest.param(lambda: _unchecked_inputs(severity=True), id="severity-bool"),
+        pytest.param(lambda: _unchecked_inputs(severity=-1), id="severity-negative"),
+        pytest.param(lambda: _unchecked_inputs(severity=ir_adapter._MAX_SEVERITY + 1), id="severity-too-large"),
+        pytest.param(lambda: _unchecked_inputs(token_only=1), id="token-only-not-bool"),
+        pytest.param(lambda: _unchecked_inputs(deception_sid=0), id="deception-sid-zero"),
+        pytest.param(lambda: _unchecked_inputs(benign_classless="no"), id="benign-classless-not-bool"),
+        pytest.param(lambda: _unchecked_inputs(classes=["c2"]), id="classes-list"),
+        pytest.param(lambda: _unchecked_inputs(classes=("C2",)), id="class-not-canonical"),
+        pytest.param(lambda: _unchecked_inputs(classes=("c2",) * (ir_adapter._MAX_CLASSES + 1)), id="too-many-classes"),
+        pytest.param(lambda: _unchecked_inputs(ports=[PortSignal("web", 443)]), id="ports-list"),
+        pytest.param(lambda: _unchecked_inputs(ports=(("web", 443),)), id="port-not-signal"),
+        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(port=True),)), id="port-bool"),
+        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(port=0),)), id="port-zero"),
+        pytest.param(lambda: _unchecked_inputs(ports=(_unchecked_port(kind="WEB"),)), id="port-not-canonical"),
+        pytest.param(lambda: _unchecked_inputs(ports=(PortSignal("web", 443),) * (ir_adapter._MAX_PORTS + 1)), id="too-many-ports"),
+        pytest.param(lambda: _unchecked_inputs(action="Drop"), id="action-not-canonical"),
+        pytest.param(lambda: _unchecked_inputs(action=""), id="action-empty"),
     ],
 )
 def test_strict_bounded_inputs_reject(monkeypatch, make_inputs):
     _no_core(monkeypatch)
     timeline, verified = _base()
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(ValueError):
         inputs = make_inputs()
         assess_ir_candidates(CASE, timeline, verified, [_candidate(inputs=inputs)])
 
