@@ -1,6 +1,6 @@
 # M.I.O. internal API v1
 
-`azazel_mio.assistant.AssistantCore(model=None).explain(frame, *, knowledge=(), now: str, knowledge_attempted: bool = True, cancel_check=None, stale_check=None) -> Assistance`
+`azazel_mio.assistant.AssistantCore(model=None, *, coordinator=None).explain(frame, *, knowledge=(), references=(), reported_knowledge=(), now: str, knowledge_lite_advisories=(), knowledge_attempted: bool = True, knowledge_context_response=None, fabric_knowledge_context_response=None, cancel_check=None, stale_check=None) -> Assistance`
 
 `frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
 `AssistantCore(model, coordinator=...)` may opt into product-neutral request lifecycle
