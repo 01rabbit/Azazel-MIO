@@ -1,7 +1,8 @@
-"""Offline, deterministic IR evidence workflow."""
+"""Offline IR evidence workflow; timestamps reflect processing time."""
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -12,12 +13,31 @@ from datetime import datetime, timezone
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_RECORDS = 10000
+MAX_TIMESTAMP_CHARS = 256
+MAX_SUMMARY_CHARS = 2048
+EXIT_INVALID_EVIDENCE = 3
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 def root_path():
-    return Path(os.environ.get("MIO_IR_HOME", str(Path.home() / ".local/share/azazel-mio"))).expanduser()
+    configured = os.environ.get("MIO_IR_HOME")
+    if configured is not None:
+        if not configured.strip():
+            raise ValueError("MIO_IR_HOME must not be empty")
+        candidate = Path(configured)
+    else:
+        home = os.environ.get("HOME")
+        if not home:
+            raise ValueError("HOME is required when MIO_IR_HOME is unset")
+        candidate = Path(home) / ".local/share/azazel-mio"
+    try:
+        path = candidate.expanduser()
+    except (KeyError, RuntimeError) as exc:
+        raise ValueError("storage path cannot be expanded") from exc
+    if not path.is_absolute():
+        raise ValueError("storage path must be absolute")
+    return path
 
 def current_user_owns(metadata):
     getuid = getattr(os, "getuid", None)
@@ -91,8 +111,14 @@ def verify(db, root, case):
                 metadata = existing_single_link_file(path, "stored object")
             except ValueError:
                 metadata = None
-            if metadata is not None:
-                valid = hashlib.sha256(path.read_bytes()).hexdigest() == digest
+            if metadata is not None and metadata.st_size <= MAX_BYTES:
+                try:
+                    with path.open("rb") as handle:
+                        raw = handle.read(MAX_BYTES + 1)
+                    valid = (len(raw) <= MAX_BYTES
+                             and hashlib.sha256(raw).hexdigest() == digest)
+                except OSError:
+                    valid = False
         results.append({"evidence_id": eid, "sha256": digest, "valid": valid})
     return results
 
@@ -105,12 +131,63 @@ def parse_records(raw, fmt):
             raise ValueError("JSON nesting exceeds parser limit") from exc
 
     if fmt == "jsonl":
-        lines = (line[:-1] if line.endswith("\r") else line for line in text.split("\n"))
-        records = [loads_bounded(line) for line in lines if line.strip()]
+        records = []
+        start = 0
+        while start < len(text):
+            end = text.find("\n", start)
+            if end < 0:
+                end = len(text)
+            line = text[start:end]
+            start = end + 1 if end < len(text) else len(text)
+            if line.endswith("\r"):
+                line = line[:-1]
+            if not line.strip():
+                continue
+            if len(records) >= MAX_RECORDS:
+                raise ValueError("unsupported record count")
+            records.append(loads_bounded(line))
     else:
-        parsed = loads_bounded(text)
-        records = parsed if isinstance(parsed, list) else [parsed]
-    if len(records) > MAX_RECORDS or any(not isinstance(r, dict) for r in records):
+        first = 0
+        while first < len(text) and text[first] in " \t\r\n":
+            first += 1
+        if first < len(text) and text[first] == "[":
+            decoder = json.JSONDecoder()
+            records = []
+            index = first + 1
+            while True:
+                while index < len(text) and text[index] in " \t\r\n":
+                    index += 1
+                if index < len(text) and text[index] == "]":
+                    if records:
+                        raise json.JSONDecodeError("Expecting value", text, index)
+                    index += 1
+                    break
+                if len(records) >= MAX_RECORDS:
+                    raise ValueError("unsupported record count")
+                try:
+                    record, index = decoder.raw_decode(text, index)
+                except RecursionError as exc:
+                    raise ValueError("JSON nesting exceeds parser limit") from exc
+                records.append(record)
+                while index < len(text) and text[index] in " \t\r\n":
+                    index += 1
+                if index < len(text) and text[index] == ",":
+                    index += 1
+                    continue
+                if index < len(text) and text[index] == "]":
+                    index += 1
+                    break
+                raise json.JSONDecodeError("Expecting ',' or ']'", text, index)
+            while index < len(text) and text[index] in " \t\r\n":
+                index += 1
+            if index != len(text):
+                raise json.JSONDecodeError("Extra data", text, index)
+        else:
+            parsed = loads_bounded(text)
+            records = parsed if isinstance(parsed, list) else [parsed]
+            if len(records) > MAX_RECORDS:
+                raise ValueError("unsupported record count")
+    if any(not isinstance(r, dict) for r in records):
         raise ValueError("unsupported record count or shape")
     result = []
     for n, rec in enumerate(records, 1):
@@ -118,16 +195,30 @@ def parse_records(raw, fmt):
         summary = rec.get("summary", "No summary provided")
         if not isinstance(summary, (str, int, float, bool)) and summary is not None:
             raise ValueError("summary must be a JSON scalar")
+        if isinstance(summary, float) and not math.isfinite(summary):
+            raise ValueError("summary must be a finite JSON scalar")
+        summary_text = "" if summary is None else str(summary)
+        try:
+            summary_text.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("summary must be valid UTF-8") from exc
+        if isinstance(stamp, str):
+            if len(stamp) > MAX_TIMESTAMP_CHARS:
+                raise ValueError("timestamp exceeds length limit")
+            try:
+                stamp.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("timestamp must be valid UTF-8") from exc
         normalized = None
         if isinstance(stamp, str):
             try:
                 dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
                 if dt.tzinfo is not None:
                     normalized = dt.astimezone(timezone.utc).isoformat()
-            except ValueError:
+            except (ValueError, OverflowError):
                 pass
         result.append((n, normalized, stamp if isinstance(stamp, str) else None,
-                       str(summary)[:2048]))
+                       summary_text[:MAX_SUMMARY_CHARS]))
     return result
 
 def import_file(db, root, case, filename, fmt):
@@ -135,6 +226,10 @@ def import_file(db, root, case, filename, fmt):
     source = Path(filename)
     if source.is_symlink() or not source.is_file():
         raise ValueError("source must be a regular non-symlink file")
+    try:
+        source.name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("source filename must be valid UTF-8") from exc
     if source.stat().st_size > MAX_BYTES:
         raise ValueError("file too large")
     with source.open("rb") as handle:
@@ -148,7 +243,12 @@ def import_file(db, root, case, filename, fmt):
     destination = directory / digest
     metadata = existing_single_link_file(destination, "stored object")
     if metadata is not None:
-        if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+        if metadata.st_size > MAX_BYTES:
+            raise ValueError("stored object corrupted or too large")
+        with destination.open("rb") as handle:
+            stored = handle.read(MAX_BYTES + 1)
+        if (len(stored) > MAX_BYTES
+                or hashlib.sha256(stored).hexdigest() != digest):
             raise ValueError("stored object corrupted")
     else:
         fd, tmp = tempfile.mkstemp(dir=directory)
@@ -207,8 +307,8 @@ def main():
     gen = rs.add_parser("generate"); gen.add_argument("--case", type=int, required=True)
     gen.add_argument("--format", choices=["json", "markdown"], required=True); gen.add_argument("--output", required=True)
     args = parser.parse_args()
-    root = root_path()
     try:
+        root = root_path()
         with connect(root) as db:
             if args.group == "case":
                 if args.action == "create":
@@ -248,11 +348,12 @@ def main():
                 output = {"output": str(path)}
         print(json.dumps(output, ensure_ascii=False))
         if args.group == "evidence" and args.action == "verify" and not all(x["valid"] for x in output):
-            return 2
+            return EXIT_INVALID_EVIDENCE
         if args.group == "report" and report_has_invalid_evidence:
-            return 2
+            return EXIT_INVALID_EVIDENCE
         return 0
-    except (ValueError, OSError, sqlite3.Error, UnicodeError, json.JSONDecodeError) as exc:
+    except (ValueError, OSError, sqlite3.Error, UnicodeError, json.JSONDecodeError,
+            OverflowError, RuntimeError) as exc:
         print("error: " + str(exc), file=sys.stderr)
         return 1
 

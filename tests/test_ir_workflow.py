@@ -9,7 +9,20 @@ from contextlib import redirect_stderr
 from io import StringIO
 from unittest.mock import patch
 
-from azazel_mio.cli import connect, import_file, main, report, timeline, verify, parse_records
+from azazel_mio.cli import (
+    EXIT_INVALID_EVIDENCE,
+    MAX_BYTES,
+    MAX_RECORDS,
+    MAX_TIMESTAMP_CHARS,
+    connect,
+    import_file,
+    main,
+    parse_records,
+    report,
+    root_path,
+    timeline,
+    verify,
+)
 
 
 class IRWorkflowTests(unittest.TestCase):
@@ -37,6 +50,25 @@ class IRWorkflowTests(unittest.TestCase):
         (self.root / "objects" / digest).chmod(0o600)
         (self.root / "objects" / digest).write_text("tampered")
         self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
+
+    def test_verify_does_not_read_oversized_object_into_memory(self):
+        import_file(self.db, self.root, self.case, self.source, "jsonl")
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        stored = self.root / "objects" / digest
+        with stored.open("wb") as handle:
+            handle.truncate(MAX_BYTES + 1)
+        with patch("pathlib.Path.read_bytes", side_effect=AssertionError("unbounded read")):
+            self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
+
+    def test_import_refuses_oversized_existing_object_without_reading_it(self):
+        import_file(self.db, self.root, self.case, self.source, "jsonl")
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        stored = self.root / "objects" / digest
+        with stored.open("wb") as handle:
+            handle.truncate(MAX_BYTES + 1)
+        with patch("pathlib.Path.read_bytes", side_effect=AssertionError("unbounded read")):
+            with self.assertRaisesRegex(ValueError, "stored object corrupted or too large"):
+                import_file(self.db, self.root, self.case, self.source, "jsonl")
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO support required")
     def test_existing_fifo_object_is_rejected_without_reading(self):
@@ -112,6 +144,20 @@ class IRWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "JSON nesting exceeds parser limit"):
             parse_records(raw, "jsonl")
 
+    def test_jsonl_record_limit_stops_before_parsing_extra_record(self):
+        raw = b"{}\n" * MAX_RECORDS + b"not-json\n"
+        with self.assertRaisesRegex(ValueError, "record count"):
+            parse_records(raw, "jsonl")
+
+    def test_json_array_record_limit_stops_before_parsing_extra_record(self):
+        raw = b"[" + b",".join([b"{}"] * MAX_RECORDS) + b",not-json]"
+        with self.assertRaisesRegex(ValueError, "record count"):
+            parse_records(raw, "json")
+
+    def test_json_array_rejects_trailing_comma(self):
+        with self.assertRaises(json.JSONDecodeError):
+            parse_records(b"[{} ,]", "json")
+
     def test_jsonl_keeps_unicode_separators_inside_strings(self):
         for separator in ("\u2028", "\u0085"):
             with self.subTest(separator=hex(ord(separator))):
@@ -134,6 +180,19 @@ class IRWorkflowTests(unittest.TestCase):
         self.assertIn("error: summary must be a JSON scalar", errors.getvalue())
         self.assertNotIn("Traceback", errors.getvalue())
 
+    def test_null_summary_is_empty_and_absent_summary_uses_default(self):
+        null_summary = parse_records(b'{"summary":null}', "json")[0][3]
+        absent_summary = parse_records(b"{}", "json")[0][3]
+        self.assertEqual(null_summary, "")
+        self.assertEqual(absent_summary, "No summary provided")
+
+    def test_unrepresentable_summary_is_rejected_before_object_write(self):
+        source = self.root / "surrogate-summary.json"
+        source.write_text('{"summary":"\\ud800"}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "summary must be valid UTF-8"):
+            import_file(self.db, self.root, self.case, source, "json")
+        self.assertFalse((self.root / "objects").exists())
+
     def test_reimport_creates_distinct_receipts_but_deduplicates_object(self):
         first = import_file(self.db, self.root, self.case, self.source, "jsonl")
         second = import_file(self.db, self.root, self.case, self.source, "jsonl")
@@ -149,6 +208,46 @@ class IRWorkflowTests(unittest.TestCase):
 
     def test_invalid_timestamp_unknown(self):
         self.assertIsNone(parse_records(b'{"timestamp":"not-a-date","summary":"x"}', "json")[0][1])
+
+    def test_timestamp_utc_overflow_is_unknown(self):
+        record = b'{"timestamp":"0001-01-01T00:00:00+09:00"}'
+        self.assertIsNone(parse_records(record, "json")[0][1])
+
+    def test_timestamp_length_is_bounded(self):
+        oversized = "x" * (MAX_TIMESTAMP_CHARS + 1)
+        raw = json.dumps({"timestamp": oversized}).encode("utf-8")
+        with self.assertRaisesRegex(ValueError, "timestamp exceeds length limit"):
+            parse_records(raw, "json")
+
+    def test_empty_mio_ir_home_is_rejected(self):
+        with patch.dict(os.environ, {"MIO_IR_HOME": ""}):
+            with self.assertRaisesRegex(ValueError, "MIO_IR_HOME must not be empty"):
+                root_path()
+
+    def test_relative_mio_ir_home_is_rejected(self):
+        with patch.dict(os.environ, {"MIO_IR_HOME": "relative-store"}):
+            with self.assertRaisesRegex(ValueError, "storage path must be absolute"):
+                root_path()
+
+    def test_missing_home_is_a_clean_cli_error(self):
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "sys.argv", ["mio-ir", "case", "create", "--name", "test"]
+        ):
+            errors = StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(main(), 1)
+        self.assertIn("error: HOME is required", errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
+
+    def test_empty_mio_ir_home_is_a_clean_cli_error(self):
+        with patch.dict(os.environ, {"MIO_IR_HOME": ""}), patch(
+            "sys.argv", ["mio-ir", "case", "create", "--name", "test"]
+        ):
+            errors = StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(main(), 1)
+        self.assertIn("error: MIO_IR_HOME must not be empty", errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
 
     def test_symlink_rejected(self):
         link = self.root / "link.jsonl"
@@ -259,13 +358,14 @@ class IRWorkflowTests(unittest.TestCase):
 
     def test_report_hardlink_does_not_truncate_evidence(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
+        self.assertTrue(verify(self.db, self.root, self.case)[0]["valid"])
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
         evidence = self.root / "objects" / digest
         with tempfile.TemporaryDirectory() as export:
             output = Path(export) / "report.json"
             output.hardlink_to(evidence)
             original = evidence.read_bytes()
-            self.assertEqual(self.run_report(output), 2)
+            self.assertEqual(self.run_report(output), EXIT_INVALID_EVIDENCE)
             self.assertEqual(evidence.read_bytes(), original)
             self.assertEqual(json.loads(output.read_text())["case_id"], self.case)
             self.assertFalse(json.loads(output.read_text())["evidence"][0]["valid"])
@@ -278,8 +378,26 @@ class IRWorkflowTests(unittest.TestCase):
         evidence.write_text("tampered", encoding="utf-8")
         with tempfile.TemporaryDirectory() as export:
             output = Path(export) / "report.json"
-            self.assertEqual(self.run_report(output), 2)
+            self.assertEqual(self.run_report(output), EXIT_INVALID_EVIDENCE)
             self.assertFalse(json.loads(output.read_text())["evidence"][0]["valid"])
+
+    def test_verify_command_uses_distinct_invalid_evidence_exit_code(self):
+        import_file(self.db, self.root, self.case, self.source, "jsonl")
+        digest = verify(self.db, self.root, self.case)[0]["sha256"]
+        (self.root / "objects" / digest).write_text("tampered", encoding="utf-8")
+        with patch.dict(os.environ, {"MIO_IR_HOME": str(self.root)}), patch(
+            "sys.argv", ["mio-ir", "evidence", "verify", "--case", str(self.case)]
+        ):
+            with redirect_stderr(StringIO()):
+                self.assertEqual(main(), EXIT_INVALID_EVIDENCE)
+
+    def test_usage_error_keeps_argparse_exit_code_distinct(self):
+        with patch("sys.argv", ["mio-ir", "--bad-option"]):
+            errors = StringIO()
+            with redirect_stderr(errors):
+                with self.assertRaises(SystemExit) as raised:
+                    main()
+        self.assertEqual(raised.exception.code, 2)
 
     def test_cross_case_isolation(self):
         other = self.db.execute("INSERT INTO cases(name,created) VALUES('other','now')").lastrowid

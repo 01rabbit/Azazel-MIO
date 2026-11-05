@@ -18,11 +18,15 @@ REPORT_DIR=$(mktemp -d "$HOME/mio-ir-reports.XXXXXX")
 mio-ir report generate --case 1 --format json --output "$REPORT_DIR/mio-ir-report.json"
 ```
 
-Input summaries must be JSON scalars (string, number, boolean, or null). JSONL records are separated only by LF
-(with an optional preceding CR for CRLF); Unicode line-separator characters
-inside strings remain part of their record. `evidence verify` and
-`report generate` return exit code 2 when any stored evidence fails integrity
-verification.
+Input summaries must be JSON scalars (string, finite number, boolean, or null).
+An omitted summary becomes `No summary provided`; an explicit null becomes an
+empty summary. Summaries are limited to 2,048 characters. String timestamps are
+limited to 256 characters; unparseable or unrepresentable timestamps remain
+unknown. JSONL records are separated only by LF (with an optional preceding CR
+for CRLF); Unicode line-separator characters inside strings remain part of
+their record. Each input is limited to 16 MiB and 10,000 records. `evidence
+verify` and `report generate` return exit code 3 when stored evidence fails
+integrity verification; argparse usage errors return 2.
 
 Run the commands inside the Debian ARM64 guest and record results. macOS tests do not establish guest verification. This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
 
@@ -37,6 +41,13 @@ hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks
 require POSIX user-ID reporting; unsupported platforms fail closed. Reports
 must be exported outside the storage directory, including SQLite journal paths.
 Existing report files are replaced atomically with private files.
+
+`MIO_IR_HOME` must be a non-empty absolute path. If it is unset, `HOME` must be
+set and the default store is `$HOME/.local/share/azazel-mio`. The final storage
+directory and its entries are checked; parent path components must be trusted
+and are not independently inspected for symlinks. If an existing object at the
+expected content hash is corrupt or oversized, import fails closed and does not
+replace that object.
 
 Each evidence import invocation creates a distinct receipt and event set, even
 when the same bytes were imported before. The stored object bytes are deduplicated
