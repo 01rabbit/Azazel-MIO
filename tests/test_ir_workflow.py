@@ -138,8 +138,10 @@ class IRWorkflowTests(unittest.TestCase):
     def test_verify_marks_foreign_owned_object_invalid(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
         digest = verify(self.db, self.root, self.case)[0]["sha256"]
-        def owner_check(path):
-            return Path(path).name != digest
+        stored_inode = (self.root / "objects" / digest).lstat().st_ino
+
+        def owner_check(metadata):
+            return metadata.st_ino != stored_inode
 
         with patch("azazel_mio.cli.current_user_owns", side_effect=owner_check):
             self.assertFalse(verify(self.db, self.root, self.case)[0]["valid"])
