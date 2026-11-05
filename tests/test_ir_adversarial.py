@@ -364,31 +364,31 @@ class IRAdversarialTests(unittest.TestCase):
 
     def test_object_directory_is_synced_before_database_commit(self):
         source = self.stage(EVENTS)
-        original_fsync = os.fsync
+        original_sync_directory = cli.fsync_directory
         directory_syncs = []
 
-        def record_fsync(fd):
-            metadata = os.fstat(fd)
-            if stat.S_ISDIR(metadata.st_mode):
-                directory_syncs.append((metadata.st_dev, metadata.st_ino, self.db.in_transaction))
-            return original_fsync(fd)
+        def record_directory_sync(path):
+            directory_syncs.append((Path(path).name, self.db.in_transaction))
+            return original_sync_directory(path)
 
-        with patch.object(cli.os, "fsync", side_effect=record_fsync):
+        with patch.object(cli, "fsync_directory", side_effect=record_directory_sync):
             import_file(self.db, self.root, self.case, source, "jsonl")
 
-        self.assertGreaterEqual(len(directory_syncs), 2)
-        self.assertTrue(all(in_transaction for _, _, in_transaction in directory_syncs))
+        object_syncs = [in_transaction for name, in_transaction in directory_syncs if name == "objects"]
+        self.assertGreaterEqual(len(object_syncs), 2)
+        self.assertTrue(all(object_syncs))
+        self.assertIn((self.root.name, False), directory_syncs)
 
     def test_directory_sync_failure_rolls_back_object_and_rows(self):
         source = self.stage(EVENTS)
-        original_fsync = os.fsync
+        original_sync_directory = cli.fsync_directory
 
-        def fail_directory_fsync(fd):
-            if stat.S_ISDIR(os.fstat(fd).st_mode):
+        def fail_directory_fsync(path):
+            if Path(path).name == "objects":
                 raise OSError(errno.EIO, "simulated directory sync failure")
-            return original_fsync(fd)
+            return original_sync_directory(path)
 
-        with patch.object(cli.os, "fsync", side_effect=fail_directory_fsync):
+        with patch.object(cli, "fsync_directory", side_effect=fail_directory_fsync):
             with self.assertRaisesRegex(ValueError, "filesystem cannot safely publish stored objects"):
                 import_file(self.db, self.root, self.case, source, "jsonl")
 
