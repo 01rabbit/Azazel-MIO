@@ -6,7 +6,7 @@ M.I.O.は、Azazelの観測・知識・運用機能を使い、現場の担当�
 
 Edgeでは現場の検知と通信状態を読み解き、Nexusではシステム全体の運用を支えます。動く場所や利用するモデルが変わっても、M.I.O.としての役割、根拠の扱い、安全上の境界は共通です。
 
-> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。製品側の確認済みの状態は [AI inventory](docs/architecture/ai-inventory.md) を参照してください。
+> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。製品別のAI inventoryは2026-11-04時点のスナップショットで、以後のmain更新を含まない場合があります。現在の統合状態を示すものとしてではなく、記録日時と対象SHAを確認して参照してください。
 
 ソースからの導入と最小の試験方法は [Common Python core](#common-python-core) を参照してください。
 
@@ -130,6 +130,8 @@ python -m pip install .
 
 開発時は編集可能インストールも使えます: `python -m pip install -e .`（`pyproject.toml` のsetuptools構成による。このREADMEの作成では実行していません）。
 
+ビルド分離が有効なインストールでは、build-system要件の `setuptools>=77.0.3` が必要です。オフライン環境では、同要件を満たすwheelを事前に用意してください。インストール手順はこのREADMEの更新時点で実行確認していません。
+
 現在のバージョンは `pyproject.toml` の `version` が正本です。その末尾のローカルサフィックスはソースの基準ラベルで、このコミットのSHAではありません。公開リリースではありません（[versioning](docs/versioning.md)）。
 
 **試験**
@@ -149,6 +151,6 @@ PYTHONPATH=src python -m pytest -q
 
 **任意・評価用の機能（既定の試験には含まれません）**
 
-- 実モデル確認: ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成の助言フレームに対する応答と、モデル未導入時のフォールバック（no-model fallback）を確認するもので、単一の実リクエストを送るものではありません。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
+- 実モデル確認: ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成の助言フレームで最大3回の順序固定リクエストと、モデル未導入時のフォールバック（no-model fallback）を確認します。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
 - オフラインplaybook ranking: 評価マイルストーンです。モデルの有効化、自動学習、認可、実行は含みません（[offline ranking](docs/offline-playbook-ranking.md)）。
 - Assessment baseline: experimentalです（[assessment baseline](docs/assessment-baseline.md)）。
