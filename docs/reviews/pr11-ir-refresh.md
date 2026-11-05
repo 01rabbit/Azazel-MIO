@@ -70,56 +70,63 @@ environment or local test log is committed.
 
 ## Current-main rebase candidate — 2026-11-05
 
-Hashes, line references and 297/299 test totals in the historical sections
-above describe the earlier refresh tree, not the current-main rebase. Current
-MIO main is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The PR #11-only diff is
-limited to six files: `deploy/standalone-vm/README.md`,
-`docs/reviews/pr11-ir-refresh.md`, `examples/synthetic_ir_case/events.jsonl`,
-`pyproject.toml`, `src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`.
-Current main package metadata and exports are retained; only the `mio-ir`
-console script is added.
+Hashes, code line references and 297/299 test totals in earlier sections are
+historical, not current-main evidence. Current MIO main is
+`5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The PR #11-only diff is six files:
+`deploy/standalone-vm/README.md`, `docs/reviews/pr11-ir-refresh.md`,
+`examples/synthetic_ir_case/events.jsonl`, `pyproject.toml`,
+`src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`. Current main package
+metadata and exports are retained; only the `mio-ir` console script is added.
 
 ## Independent review findings and disposition
 
-Claude Code Haiku/low first reviewed candidate
-`611e89352c182d3525982ee3509489c1a27e17b3`; that review was incomplete because
-it did not read all of `cli.py`. A second review read the complete 665-line diff,
-entire CLI and test file, packaging metadata, and both docs at candidate
-`6da9e93c9f2fdf7ac67541176c6485a11af198d9`. It reported no High/blocking code
-finding and four Low/Medium findings. Fixes in current candidate code commit
-`d40ac7130adb7e4685f68b055a4acfd6cedfacf8`:
+Claude Code Haiku/low's first review of `611e893` was incomplete because it did
+not read all of `cli.py`. A later review read all six changed files at
+`6da9e93c9f2fdf7ac67541176c6485a11af198d9`; it had no High/blocking code
+finding and raised four Low/Medium issues. A final review of the then-current
+`6b27c86dd99294ff4797702c40ee72e25fb659c1` read all six files and found five
+Low items, with no High/blocking finding. Their dispositions are:
 
-- Existing storage directories are never chmodded. Existing roots must already
-  be owned by the invoking user and private; new roots are created mode `0700`.
-  Ownership cannot be proven on platforms without POSIX UID support, so those
-  platforms fail closed (`cli.py:22-42`).
-- The database and all three SQLite sidecars are checked before SQLite opens;
-  existing objects and `objects/` are checked before use. Symlinks, hardlinks,
-  FIFOs, non-regular entries, broad permissions and foreign ownership are
-  rejected. Verification returns invalid for unsafe objects/directories
-  (`cli.py:53-60`, `74-96`, `143-148`).
-- Deep JSON and JSONL nesting is converted to a clean input error rather than a
-  traceback (`cli.py:99-112`).
-- Re-importing the same bytes intentionally creates a separate receipt and event
-  set while storing one SHA-256 object. README and test make this explicit.
-- The guest guide now preinstalls `setuptools>=77.0.3` and `wheel` from an
-  offline wheelhouse, uses `--no-index`, and writes reports to a private
-  `mktemp` directory. It states the Python `>=3.11` package requirement.
-- Documentation names all six changed files, labels earlier PR/hash/test data
-  as historical, and no longer cites private `.git` test-log paths.
+- F1 (`text.splitlines()` split valid JSONL strings containing U+2028/U+0085):
+  now split only on LF and strip an optional CR, with regression cases
+  (`cli.py:107-109`, `test_jsonl_keeps_unicode_separators_inside_strings`).
+- F2 (recursive `str()` on an object-valued summary could raise): non-scalar
+  summaries are rejected before string conversion (`cli.py:116-118`), covered
+  by `test_nested_summary_is_a_clean_input_error`.
+- F3 (file mode bits were not checked): directory modes are enforced; internal
+  data files are checked for current owner, regular-file type and single link,
+  but their mode bits are not changed or rejected. They remain inside storage
+  directories with mode `0700`; this minimizes compatibility risk while keeping
+  them inaccessible to other users. The README and this document now state the
+  distinction accurately.
+- F4 (test totals were tied to an earlier commit): current executable source
+  and test commit is `599ff221dfc8f34df06adfc48d1788802fdc18cb`, tree
+  `2daa3e9bbe3a1627d7e556bbdbb6bcde37b02892`. This document is a following
+  documentation-only update; the PR description records the final PR head and
+  the tested source commit separately.
+- F5 (`report generate` returned success with invalid evidence): it now writes
+  the report, then exits 2 if any evidence failed verification. The regression
+  verifies the JSON result and exit code.
+- Prior storage findings remain fixed: existing directories are never chmodded;
+  DB and SQLite sidecars are checked before open; imported and verified objects
+  reject symlinks, hardlinks, FIFOs, nonregular entries and foreign ownership;
+  directories require current-user ownership/private mode; deep JSON is a clean
+  error. Owner validation fails closed without POSIX UID support.
+- The guest guide preinstalls `setuptools>=77.0.3` and `wheel` from a local
+  offline wheelhouse, uses `--no-index`, and exports reports into a private
+  `mktemp` directory. It states Python `>=3.11`.
+- Duplicate byte imports intentionally create separate evidence receipts/event
+  sets while storing one SHA-256 object; README and regression coverage agree.
+- The docs name all changed files, separate historical evidence, and contain no
+  private `.git` log paths.
 
-The second review also flagged a test-versus-doc base/head attribution gap. The
-tested code commit `5fa161a1626c64088b338eed9f7aec0bac7a7360` and doc-only commit
-`6da9e93c9f2fdf7ac67541176c6485a11af198d9` differ only in
-`docs/reviews/pr11-ir-refresh.md`; subsequent code/tests are in `d40ac71`. The
-final candidate head and review must be recorded after this refresh.
+Validation on source/test commit `599ff221dfc8f34df06adfc48d1788802fdc18cb`
+(tree above), based on current main: focused IR workflow **27 passed / 11
+subtests passed**; full MIO suite **672 passed / 254 subtests passed**, CPython
+3.12.14, exit 0. The README offline editable-install procedure was exercised
+from the same source commit in a disposable Linux arm64 / Python 3.12 Docker
+container (`--rm --network=none`): `mio-ir --help` succeeded and installed
+version was `0.1.0+git.c31c244`. No distributable wheel was published.
 
-Validation on candidate code commit `d40ac7130adb7e4685f68b055a4acfd6cedfacf8`
-(tree `83409a03b1095a525c7feaf61d6c2a796ab4954c`), based on current main above:
-focused IR workflow **24 passed / 9 subtests passed**; complete MIO suite
-**669 passed / 252 subtests passed**, CPython 3.12.14, exit 0. The README's
-offline install procedure was exercised in a disposable Linux arm64 / Python
-3.12 Docker container (`--rm --network=none`): editable install and
-`mio-ir --help` passed, reporting version `0.1.0+git.c31c244`. The exact runner
-log is not committed; no wheel was published. The final independent review of
-the corrected candidate and guest Debian ARM64 acceptance remain outstanding.
+The final independent review of this refreshed document and source commit is
+pending. Debian ARM64 guest acceptance remains separate and has not been run.
