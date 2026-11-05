@@ -1,6 +1,7 @@
 """Offline IR evidence workflow; event timestamps come from input records."""
 import argparse
 from contextlib import closing
+import errno
 import hashlib
 import json
 import math
@@ -293,7 +294,9 @@ def import_file(db, root, case, filename, fmt):
     try:
         fd = os.open(source, flags)
     except OSError as exc:
-        raise ValueError("source must be a regular non-symlink file") from exc
+        if exc.errno == getattr(errno, "ELOOP", None):
+            raise ValueError("source must be a regular non-symlink file") from exc
+        raise ValueError(f"unable to open source (errno {exc.errno})") from exc
     try:
         opened = os.fstat(fd)
         if (not stat.S_ISREG(opened.st_mode)

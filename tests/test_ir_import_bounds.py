@@ -1,3 +1,4 @@
+import errno
 import os
 from pathlib import Path
 import signal
@@ -134,6 +135,8 @@ class ImportBoundsTests(unittest.TestCase):
         self.assertEqual(self.event_count(), 0)
 
     def test_source_replaced_with_symlink_before_open_is_rejected(self):
+        if not hasattr(os, "O_NOFOLLOW"):
+            self.skipTest("platform has no O_NOFOLLOW; separate platform coverage required")
         source = self.root / "source.json"
         target = self.root / "target.json"
         source.write_bytes(json_payload(TEST_LIMIT))
@@ -146,8 +149,37 @@ class ImportBoundsTests(unittest.TestCase):
                 source.symlink_to(target)
             return original_open(path, flags, *args, **kwargs)
 
-        with patch("azazel_mio.cli.os.open", side_effect=replace_with_symlink):
-            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+        with patch("azazel_mio.cli.os.O_NOFOLLOW", 0):
+            with patch("azazel_mio.cli.os.open", side_effect=replace_with_symlink):
+                with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                    import_file(self.db, self.root, self.case, source, "json")
+        self.assertEqual(self.evidence_count(), 0)
+        self.assertEqual(self.event_count(), 0)
+
+    def test_open_requests_no_follow_and_nonblocking_flags(self):
+        if not (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_NONBLOCK")):
+            self.skipTest("platform lacks no-follow or nonblocking open flags")
+        source = self.root / "source.json"
+        source.write_bytes(json_payload(TEST_LIMIT))
+        original_open = os.open
+        seen_flags = []
+
+        def record_flags(path, flags, *args, **kwargs):
+            if Path(path) == source:
+                seen_flags.append(flags)
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch("azazel_mio.cli.os.open", side_effect=record_flags):
+            import_file(self.db, self.root, self.case, source, "json")
+        self.assertEqual(len(seen_flags), 1)
+        self.assertTrue(seen_flags[0] & os.O_NOFOLLOW)
+        self.assertTrue(seen_flags[0] & os.O_NONBLOCK)
+
+    def test_open_failure_reports_errno_without_path(self):
+        source = self.root / "source.json"
+        source.write_bytes(json_payload(TEST_LIMIT))
+        with patch("azazel_mio.cli.os.open", side_effect=OSError(errno.EACCES, "denied")):
+            with self.assertRaisesRegex(ValueError, rf"unable to open source \(errno {errno.EACCES}\)"):
                 import_file(self.db, self.root, self.case, source, "json")
         self.assertEqual(self.evidence_count(), 0)
         self.assertEqual(self.event_count(), 0)
