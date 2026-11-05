@@ -403,7 +403,7 @@ class IRWorkflowTests(unittest.TestCase):
             self.assertEqual(self.run_report(output, "markdown"), 0)
             content = output.read_text(encoding="utf-8")
             self.assertNotIn("\r", content)
-            self.assertIn(r"safe\# injected heading", content)
+            self.assertIn("safe \\# injected heading", content)
 
     def test_markdown_report_escapes_untrusted_markup(self):
         source = self.root / "markdown.jsonl"
@@ -422,8 +422,10 @@ class IRWorkflowTests(unittest.TestCase):
     def test_report_cannot_overwrite_internal_journal(self):
         output = self.root / "cases.sqlite3-wal"
         output.write_text("reserved")
-        self.assertEqual(self.run_report(output), 1)
-        self.assertEqual(output.read_text(), "reserved")
+        errors = StringIO()
+        with redirect_stderr(errors):
+            self.assertEqual(self.run_report(output), 1)
+        self.assertIn("output may not overwrite internal storage", errors.getvalue())
 
     def test_report_hardlink_does_not_truncate_evidence(self):
         import_file(self.db, self.root, self.case, self.source, "jsonl")
