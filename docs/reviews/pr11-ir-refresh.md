@@ -36,7 +36,7 @@ were kept outside the repository and are not part of this PR. Synthetic evidence
 
 ## Limitations
 
-Debian ARM64 guest not validated. Not forensic WORM storage. User must control private storage and parent directories; concurrent hostile filesystem mutation remains outside this utility boundary. JSON/JSONL mapping, hashes, case isolation and SQLite behavior preserved; reports now require export outside store. No existing PR rewritten or pushed. Updating PR11 with resliced base requires a separately authorized branch/history operation.
+Debian ARM64 guest not validated. Not forensic WORM storage. User must control private storage and parent directories; concurrent hostile filesystem mutation remains outside this utility boundary. JSON/JSONL mapping, hashes, case isolation and SQLite behavior preserved; reports now require export outside store. At the time of this historical pre-rebase snapshot, no existing PR branch had been rewritten or pushed.
 
 ## IR11-03 follow-up
 
@@ -70,61 +70,56 @@ environment or local test log is committed.
 
 ## Current-main rebase candidate — 2026-11-05
 
-The historical hashes, code line references, and 297/299 test counts above
-describe the earlier refresh candidate; they are not evidence for the current
-main rebase. Current MIO main is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`.
-The PR #11-only diff remains the six IR files listed above, with current main's
-package metadata and exports retained and only the `mio-ir` script added.
+Hashes, line references and 297/299 test totals in the historical sections
+above describe the earlier refresh tree, not the current-main rebase. Current
+MIO main is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The PR #11-only diff is
+limited to six files: `deploy/standalone-vm/README.md`,
+`docs/reviews/pr11-ir-refresh.md`, `examples/synthetic_ir_case/events.jsonl`,
+`pyproject.toml`, `src/azazel_mio/cli.py`, and `tests/test_ir_workflow.py`.
+Current main package metadata and exports are retained; only the `mio-ir`
+console script is added.
 
-The independent Haiku/low review of candidate `611e89352c182d3525982ee3509489c1a27e17b3`
-found no High issue, but identified four Low/Medium items and documentation
-drift. Before syncing the rebased PR, the candidate addresses these as follows:
+## Independent review findings and disposition
 
-- Existing storage directories are no longer chmodded. They must already be
-  owned by the invoking user and private; new roots are created mode `0700`.
-- The database, SQLite sidecars and existing content objects are checked with
-  `lstat`; symlinks, hardlinks, non-regular entries and foreign ownership are
-  refused before open/read. A FIFO object is covered by a regression test.
-- Excessive JSON nesting is converted to a bounded input error rather than a
-  traceback.
-- Re-importing identical bytes intentionally creates a distinct evidence
-  receipt/event set while content objects remain SHA-256 deduplicated. README
-  and regression coverage make this behavior explicit.
-- The Debian ARM64 guide now states the package's Python `>=3.11` requirement.
+Claude Code Haiku/low first reviewed candidate
+`611e89352c182d3525982ee3509489c1a27e17b3`; that review was incomplete because
+it did not read all of `cli.py`. A second review read the complete 665-line diff,
+entire CLI and test file, packaging metadata, and both docs at candidate
+`6da9e93c9f2fdf7ac67541176c6485a11af198d9`. It reported no High/blocking code
+finding and four Low/Medium findings. Fixes in current candidate code commit
+`d40ac7130adb7e4685f68b055a4acfd6cedfacf8`:
 
-The rebased code candidate before this security follow-up was
-`611e89352c182d3525982ee3509489c1a27e17b3`. Claude Haiku/low reviewed its six
-changed files and found no High issue, but the review was incomplete for full
-acceptance: it had not read all of `cli.py` and did not verify the checkout
-head. Findings and disposition:
+- Existing storage directories are never chmodded. Existing roots must already
+  be owned by the invoking user and private; new roots are created mode `0700`.
+  Ownership cannot be proven on platforms without POSIX UID support, so those
+  platforms fail closed (`cli.py:22-42`).
+- The database and all three SQLite sidecars are checked before SQLite opens;
+  existing objects and `objects/` are checked before use. Symlinks, hardlinks,
+  FIFOs, non-regular entries, broad permissions and foreign ownership are
+  rejected. Verification returns invalid for unsafe objects/directories
+  (`cli.py:53-60`, `74-96`, `143-148`).
+- Deep JSON and JSONL nesting is converted to a clean input error rather than a
+  traceback (`cli.py:99-112`).
+- Re-importing the same bytes intentionally creates a separate receipt and event
+  set while storing one SHA-256 object. README and test make this explicit.
+- The guest guide now preinstalls `setuptools>=77.0.3` and `wheel` from an
+  offline wheelhouse, uses `--no-index`, and writes reports to a private
+  `mktemp` directory. It states the Python `>=3.11` package requirement.
+- Documentation names all six changed files, labels earlier PR/hash/test data
+  as historical, and no longer cites private `.git` test-log paths.
 
-- `cli.py:25-26`, existing directory mode mutation: fixed by refusing an
-  existing directory unless it is owned by the invoking user and already
-  private; no existing directory is chmodded (`cli.py:26-36`).
-- `cli.py:23-33`, SQLite sidecars and non-regular content objects: fixed by
-  `lstat` checks for the database, `-journal`, `-wal`, `-shm`, and existing
-  digest objects (`cli.py:38-45`, `48-53`, `137-140`). Symlinks, hardlinks,
-  FIFOs, non-regular entries and foreign-owned files are rejected. Verification
-  reports unsafe/missing objects invalid (`cli.py:69-87`).
-- `cli.py:61-66`, deeply nested JSON parser exception: fixed by translating
-  `RecursionError` to a bounded input `ValueError` (`cli.py:93-105`).
-- Re-import duplication: retained as separate import receipts so each invocation
-  and its source filename/time remain visible; the object bytes are content
-  deduplicated. README wording and `test_reimport_creates_distinct_receipts_but_deduplicates_object`
-  make this behavior explicit.
-- Documentation now states Python `>=3.11`, matching package metadata. The
-  hashes and 297/299 test totals in the earlier sections are historical results
-  for the earlier tree, not current-main rebase evidence.
+The second review also flagged a test-versus-doc base/head attribution gap. The
+tested code commit `5fa161a1626c64088b338eed9f7aec0bac7a7360` and doc-only commit
+`6da9e93c9f2fdf7ac67541176c6485a11af198d9` differ only in
+`docs/reviews/pr11-ir-refresh.md`; subsequent code/tests are in `d40ac71`. The
+final candidate head and review must be recorded after this refresh.
 
-Candidate after these changes: commit `5fa161a1626c64088b338eed9f7aec0bac7a7360`,
-tree `6dc00dd00dd1a4c04901114b5b8fd5b7e8722366`, based on current MIO main
-`5bb09c8d28c57604dc1c63903b98fed7587b49ea`. Validation on that tree: focused
-IR workflow **18 passed / 6 subtests passed**; complete MIO suite **663 passed /
-249 subtests passed**, Python 3.12.14, exit 0; `git diff --check` passed. A
-read-only isolated Docker editable install on Linux arm64 / Python 3.12 also
-passed: `mio-ir --help` showed the four command groups and installed package
-version was `0.1.0+git.c31c244`. The temporary container used `--rm` and
-`--network=none`; no distributable wheel was published or retained.
-
-The final independent review of the corrected current-head candidate is still
-required. Debian ARM64 guest validation remains a separate acceptance gate.
+Validation on candidate code commit `d40ac7130adb7e4685f68b055a4acfd6cedfacf8`
+(tree `83409a03b1095a525c7feaf61d6c2a796ab4954c`), based on current main above:
+focused IR workflow **24 passed / 9 subtests passed**; complete MIO suite
+**669 passed / 252 subtests passed**, CPython 3.12.14, exit 0. The README's
+offline install procedure was exercised in a disposable Linux arm64 / Python
+3.12 Docker container (`--rm --network=none`): editable install and
+`mio-ir --help` passed, reporting version `0.1.0+git.c31c244`. The exact runner
+log is not committed; no wheel was published. The final independent review of
+the corrected candidate and guest Debian ARM64 acceptance remain outstanding.
