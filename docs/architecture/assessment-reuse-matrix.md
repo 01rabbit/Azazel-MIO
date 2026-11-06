@@ -1,13 +1,41 @@
 # Assessment reuse matrix (MIO Issue 14)
 
+## Current integration status (2026-11-06)
+
+MIO main is `57464216a08456d1b97ef292f7558c21b0ff0b34` (README #46 merged).
+MIO #47 remains an unmerged candidate at
+`a1807bf7abb08788b834ae038f7a8b46d09d0acc`, version
+`0.1.0.dev20261106+gitbb6dcfd`. Its implementation label `bb6dcfd` is separate
+from the consumer source pin `a1807bf`; see [artifact identity](../versioning.md#current-candidate-artifact-2026-11-06).
+Edge main `3e6ccf4d3cffdf0d101c69392c3f7a9cc1a65f0c` still pins MIO
+`9fedb01bc9936531407a5181aa8fa5553ec19d55`. Edge #538 at
+`df98300f08a294f33482ef13579192447c9d0ac0` and Nexus #405 at
+`28900ebec35acdb618776340bfdc3065725d12bf` are unmerged candidates pinning
+MIO `a1807bf7abb08788b834ae038f7a8b46d09d0acc`; neither changes its product's
+main dependency. Edge #538 acceptance checks the exact VCS source and package
+version, including installed `direct_url.json` provenance and the actual build
+record; it does not require canonical wheel byte equality. Nexus #405's
+offline lock additionally requires the exact canonical wheel SHA-256 recorded
+in the artifact identity reference above. Source/version acceptance and exact
+artifact acceptance are distinct; version alone does not satisfy either.
+Fabric stable is `v0.10.0`; Edge, Knowledge, Deception and
+Nexus's optional `fabric` extra declare it, while Gadget remains on `v0.9.0`.
+Fabric Knowledge Context v1 is experimental (integrated by #86).
+Nexus #402/#403 are merged software integrations; the Context broker remains
+default-disabled and uncommissioned. Knowledge #116, MIO #47 and Nexus #405
+remain unmerged. These source observations establish no production model
+admission, HG acceptance, live full-node commissioning, release or deployment.
+
+## Historical source evidence (through 2026-11-04)
+
 Scope: documentation only. It changes no code, contracts, pins or rollout state.
 
-Evidence SHAs (current MIO kernel and Edge scorer rows were re-read on 2026-11-04 at these commits):
+Evidence SHAs (the MIO and Edge rows were checked on 2026-11-04; each source-evidence SHA is stated per row):
 
-- MIO current main: `e4a0e504bae91153f3dcb8105f8658ff80d4e884` (kernel source and current package metadata). The earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
+- MIO main at Draft PR #42's base: `5bb09c8d28c57604dc1c63903b98fed7587b49ea` (tree `75b20e000a0be2dad1c9aae3219e5cf5f14700bf`), after #43 defensive-state validation, #44 local model developer smoke, and #45 measured transport. These do not change package version or dependency pins. Historical: main `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d` (tree `0970dad5a8c87b0ce002b4e24c9505301e7a0f2a`) advanced from the PR #41 merge `e4a0e504bae91153f3dcb8105f8658ff80d4e884` via docs-only PR #39; `4d2fd786dd1ea4e99f9393cb50c8f556507cdb53` is the subsequent historical main after #43. The kernel source evidence below is anchored to `e4a0` (not re-read at current main), and the earlier `03913bfcd6b9658ee6f52bd210297d96a7afdafe` and `88f26c59b91c97b8fedbc690f95766bc28928e97` observations are historical where cited.
 - Edge public `main`: `38c2b07774c61b86209d0cd94ce2e7689d38600c` (scorer, agent and model-lane rows re-read at this SHA)
 - Edge `cbc5d77df88a7c0c2aa9f1e8cd3ef4f81aa18be8`: the Rust decision-loop and Rust severity rows (sections 2 and 6) are still observed only at this earlier SHA; they were not re-read at `38c2`.
-- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than current MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884`; open Draft #538 proposes source `b441d431532507387fb81f1e03e31fd1aea57b68` but has not changed Edge main. Package availability alone does not prove runtime deployment.
+- As of 2026-11-04, Edge requirements pin the MIO source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55` (`requirements/runtime.txt` L10). This is older than MIO main at PR #42's base, `5bb09c8d28c57604dc1c63903b98fed7587b49ea`; open Draft #538 (current head `b271da3`) names MIO main `5bb09c8d28c57604dc1c63903b98fed7587b49ea` as its candidate dependency (its earlier head proposed `b441d431532507387fb81f1e03e31fd1aea57b68`) but has not changed Edge main. Package availability alone does not prove runtime deployment.
 
 Labels:
 
@@ -60,8 +88,8 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 ## 4. MIO fast-assessment kernel (observed, with docstring claims)
 
 - `assess_fast` takes normalized inputs and returns a score plus ordered factors ([fast_assessment.py at MIO main](https://github.com/01rabbit/Azazel-MIO/blob/e4a0e504bae91153f3dcb8105f8658ff80d4e884/src/azazel_mio/fast_assessment.py)). It is a pure function over `FastAssessmentInput`. A source search at `e4a0` found the function definition but no caller inside MIO `src/`; its consumers are product adapters.
-- **Observed (direct constant comparison at fixed current SHAs):** I read the MIO constants at `e4a0` and Edge scorer at `38c2`, then compared the two class-weight maps, severity bases, unknown-severity base, token-only ceiling, benign level, deception floor, and severity-1 cap with an AST literal-value script. All values matched. This is a static constant comparison only, not a behavioral or parity test. MIO `e4a0` also validates bounded input sizes/types; this check did not compare those checks with Edge's adapter.
-- **Edge live wiring (observed at `38c2`):** Edge's scorer imports and calls `assess_fast` as a comparison (section 3). Edge main still pins MIO `9fedb01`; open Draft #538 proposes source `b441d43` but is not main adoption.
+- **Observed (direct constant comparison at fixed evidence SHAs):** I read the MIO constants at `e4a0` and Edge scorer at `38c2`, then compared the two class-weight maps, severity bases, unknown-severity base, token-only ceiling, benign level, deception floor, and severity-1 cap with an AST literal-value script. All values matched. This is a static constant comparison only, not a behavioral or parity test. MIO `e4a0` also validates bounded input sizes/types; this check did not compare those checks with Edge's adapter.
+- **Edge live wiring (observed at `38c2`):** Edge's scorer imports and calls `assess_fast` as a comparison (section 3). Edge main still pins MIO `9fedb01`; open Draft #538 names MIO main `5bb09c8` as its candidate dependency (its earlier head proposed `b441d43`) but is not main adoption.
 - **Docstring claims** in the MIO module: it is adapted from Edge's scorer at commit `47c880b`, and importing it does no I/O and loads no Edge modules. `47c880b` appears only in this MIO attribution; it was not verified against Edge history.
 - **Not claimed here:** any parity test result. The MIO parity-vector documentation is linked at [fast-assessment.md](https://github.com/01rabbit/Azazel-MIO/blob/e4a0e504bae91153f3dcb8105f8658ff80d4e884/docs/fast-assessment.md); this pass did not rerun that suite.
 - **Resolved at `38c2`:** Edge imports this kernel, but only in `TacticalScorer.score` as a comparison (section 3). Import is inside the function, so package absence degrades to `unavailable`. This does not make the kernel the decision path.
@@ -96,4 +124,4 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 
 ## 8. Out of scope
 
-- No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. A separate task-local, uncommitted Edge #538 candidate process harness (local supplemental evidence on synthetic input, not Edge CI, not installed-package proof and not main behavior) is recorded in the [AI inventory](ai-inventory.md) current status. No product acceptance, rollout, HIL, or production claim is made.
+- No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. A separate task-local, uncommitted Edge #538 candidate process harness (local supplemental evidence on synthetic input, not Edge CI, not installed-package proof and not main behavior) is recorded in the [AI inventory](ai-inventory.md) historical status. No product acceptance, rollout, HIL, or production claim is made.
