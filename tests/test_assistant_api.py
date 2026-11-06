@@ -1732,6 +1732,8 @@ def test_fabric_response_projects_facts_and_inferences_separately_and_stays_out_
     assert out['dependency_outcome']['knowledge'] == 'available'
     assert prompts and all('Reported by a feed' not in p and 'May be scanning' not in p
                            and 'host-1.example.com' not in p for p in prompts)
+    assert 'KNOWLEDGE_CONTEXT_PARTIAL' not in out['unknowns']
+    assert 'KNOWLEDGE_CONTEXT_STALE' not in out['unknowns']
 
 
 @pytest.mark.parametrize(('snapshot_state', 'unknown'), [
@@ -1768,6 +1770,48 @@ def test_fabric_incomplete_snapshot_does_not_hide_complete_knowledge_lite():
     assert any('partial or stale advisory is not a complete current snapshot' in check
                for check in out['next_checks'])
     assert len(out['knowledge']) == 1
+
+
+@pytest.mark.parametrize('snapshot_state', ['partial', 'stale'])
+def test_fabric_incomplete_snapshot_does_not_mask_rejected_knowledge(snapshot_state):
+    payload = fabric_response()
+    payload['snapshot']['state'] = snapshot_state
+
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_context_response=KnowledgeContextResponseAdvisory(fabric_response()),
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+
+    assert out['dependency_outcome']['knowledge'] == 'rejected'
+    assert 'KNOWLEDGE_CONTEXT_REJECTED' in out['unknowns']
+    assert f'KNOWLEDGE_CONTEXT_{snapshot_state.upper()}' in out['unknowns']
+    assert any('Review the Knowledge adapter' in check for check in out['next_checks'])
+
+
+@pytest.mark.parametrize(('status', 'expected'), [
+    ('timeout', 'timeout'), ('unavailable', 'unavailable'), ('malformed', 'rejected'),
+])
+def test_fabric_incomplete_snapshot_preserves_stronger_frame_outcome(status, expected):
+    payload = fabric_response()
+    payload['snapshot']['state'] = 'partial'
+
+    out = AssistantCore().explain(replace(frame(), knowledge_status=status), now=NOW,
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+
+    assert out['dependency_outcome']['knowledge'] == expected
+    assert 'KNOWLEDGE_CONTEXT_PARTIAL' in out['unknowns']
+
+
+def test_fabric_incomplete_snapshot_does_not_hide_expired_context():
+    payload = fabric_response()
+    payload['snapshot']['state'] = 'stale'
+
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge=(replace(context(), expires_at=NOW),),
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+
+    assert out['dependency_outcome']['knowledge'] == 'expired'
+    assert 'KNOWLEDGE_CONTEXT_EXPIRED' in out['unknowns']
+    assert 'KNOWLEDGE_CONTEXT_STALE' in out['unknowns']
 
 
 def test_fabric_response_default_shape_unchanged_when_absent():

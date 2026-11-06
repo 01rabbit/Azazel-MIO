@@ -1287,11 +1287,12 @@ class AssistantCore:
               and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             # Keep an incomplete receipt visible as advisory without reporting
             # the Knowledge dependency as healthy when it is the only source.
-            knowledge_outcome = (
-                ContextDependencyOutcome.AVAILABLE
-                if fabric_advisory["snapshot_state"] == "complete"
-                else ContextDependencyOutcome.UNAVAILABLE
-            )
+            if fabric_advisory["snapshot_state"] == "complete":
+                knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+            elif rejected:
+                knowledge_outcome = ContextDependencyOutcome.REJECTED
+            else:
+                knowledge_outcome = ContextDependencyOutcome.UNAVAILABLE
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             if rejected and not lite_advisories:
                 knowledge_outcome = ContextDependencyOutcome.REJECTED
