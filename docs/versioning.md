@@ -1,20 +1,24 @@
 # Package version and build identity
 
 `pyproject.toml` is the package-version source of truth. A public release uses
-the project's release version and an immutable tag; development and integration
-artifacts must not reuse a wheel filename when their contents differ.
+the project's release version and an immutable tag. Development and integration
+records must distinguish source/version identity from exact wheel identity:
+independent builds may share a filename without producing identical bytes.
 
 For a source-built integration candidate that contains the same product
 behavior as a reviewed source snapshot but has no new public release, use a
 PEP 440 local version such as `0.1.0+git.c31c244`. The `0.1.0` portion remains
-the product compatibility line; the local suffix distinguishes this wheel from
-other builds on that line. Record the complete source commit, source tree,
-build environment, and artifact SHA-256 in the consuming lock and verification
-record. Form the source archive with an explicit archive umask (for example,
+the product compatibility line; the local suffix labels an implementation
+baseline rather than the complete wheel identity. Record the complete source commit, source tree,
+declared package version, build environment, and actual artifact SHA-256 in the
+consumer's verification record or offline lock, as applicable. To reproduce
+the canonical wheel, form the source archive with an explicit archive umask
+(for example,
 `git -c tar.umask=0022 archive`), and fix the build backend, `SOURCE_DATE_EPOCH`,
-and process umask. The consumer must record the exact values and verify the
-resulting artifact hash. Do not publish local-version artifacts as public
-releases or replace an existing artifact in place.
+and process umask. Record those inputs and the resulting artifact hash;
+the consumer-specific acceptance requirements below determine whether that
+hash must equal the canonical wheel's. Do not publish local-version artifacts
+as public releases or replace an existing artifact in place.
 
 ## Current candidate artifact (2026-11-06)
 
@@ -33,9 +37,23 @@ The canonical build uses setuptools `84.0.0`, `SOURCE_DATE_EPOCH=1793887544`,
 archive/process umask `0022`, and an offline build with no build isolation or
 dependency resolution. The version suffix identifies the implementation
 baseline, while the complete consumer pin identifies the metadata commit.
-Consumers must verify the canonical wheel bytes and preserve their build lock;
-matching the version string alone is insufficient. Earlier `context1` and
-`gitb333657` candidate artifacts do not represent this tuple.
+The canonical SHA-256 above identifies the recorded candidate wheel; it does
+not identify every wheel built from the same source/version or grant runtime
+authority. Earlier `context1` and `gitb333657` candidate artifacts do not
+represent this tuple.
+
+The two consumer candidates have different artifact acceptance requirements:
+
+- **Edge #538:** accept the exact VCS source commit and declared package
+  version, checking installed `direct_url.json` VCS provenance against the pin
+  and recording the actual build provenance. Its pip-built wheel may have a
+  different hash; canonical wheel byte equality is not an Edge acceptance
+  requirement. A matching version string alone is insufficient, and this
+  source/version acceptance does not prove canonical wheel reproducibility.
+- **Nexus #405:** its offline lock requires the exact canonical wheel above.
+  Verify the wheel bytes against that SHA-256 and preserve the offline build
+  lock and provenance. Matching source/version alone does not satisfy this
+  artifact requirement.
 
 Edge main `3e6ccf4d3cffdf0d101c69392c3f7a9cc1a65f0c` still pins MIO
 `9fedb01bc9936531407a5181aa8fa5553ec19d55`. Unmerged Edge #538

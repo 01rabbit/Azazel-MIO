@@ -12,7 +12,13 @@ Edge main `3e6ccf4d3cffdf0d101c69392c3f7a9cc1a65f0c` still pins MIO
 `df98300f08a294f33482ef13579192447c9d0ac0` and Nexus #405 at
 `28900ebec35acdb618776340bfdc3065725d12bf` are unmerged candidates pinning
 MIO `a1807bf7abb08788b834ae038f7a8b46d09d0acc`; neither changes its product's
-main dependency. Fabric stable is `v0.10.0`; Edge, Knowledge, Deception and
+main dependency. Edge #538 acceptance checks the exact VCS source and package
+version, including installed `direct_url.json` provenance and the actual build
+record; it does not require canonical wheel byte equality. Nexus #405's
+offline lock additionally requires the exact canonical wheel SHA-256 recorded
+in the artifact identity reference above. Source/version acceptance and exact
+artifact acceptance are distinct; version alone does not satisfy either.
+Fabric stable is `v0.10.0`; Edge, Knowledge, Deception and
 Nexus's optional `fabric` extra declare it, while Gadget remains on `v0.9.0`.
 Fabric Knowledge Context v1 is experimental (integrated by #86).
 Nexus #402/#403 are merged software integrations; the Context broker remains
