@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import html
+import ipaddress
 import json
 import re
 from typing import Any, Mapping, Sequence
@@ -15,6 +16,8 @@ from .contracts import ContextDependencyOutcome, MioSituationFrame, ReasoningSta
 from .playbook import DEFAULT_PLAYBOOKS, PromptCompiler, select_playbook
 from .contracts import model_id_ok
 from .handoff import build_no_model_handoff
+from .id_grammar import second_layer_ok
+from .redaction import redact_text
 from .reasoning import BoundedReasoningLoop
 from .lifecycle import ReasoningCoordinator
 from .tactical_grounding import (
@@ -79,11 +82,13 @@ class KnowledgeLiteAdvisory:
     recheck it against their clock before reuse because Knowledge Lite has no
     per-claim expiry. `expires_at` is optional and is never inferred.
     `citation` identifies the claim; optional `source_citation` is separate,
-    untrusted dataset display text. An empty summary stays empty.
+    untrusted dataset display text. An empty summary stays empty. `None` is
+    accepted only for clear, non-expiring static references with an ATT&CK-format
+    technique ID, and is projected as an empty summary.
     """
     technique_id: str
     name: str
-    summary: str
+    summary: str | None
     claim_id: str
     bundle_digest: str
     freshness: str
@@ -104,6 +109,18 @@ class KnowledgeContextResponseAdvisory:
     authenticate the producer or confer trust.
     """
     context_response: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class FabricKnowledgeContextResponseAdvisory:
+    """One Fabric ``knowledge-context-response/v1`` payload for bounded projection.
+
+    Distinct from the legacy Knowledge /v1/context shape. Every claim in it is
+    source-reported, unverified and advisory-only; it is never prompt material,
+    an observation, a known fact, or authorization. Construction does not
+    authenticate the provider or confer trust.
+    """
+    response: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -248,6 +265,7 @@ def _reported_context(value: Any, now: datetime) -> dict[str, Any] | None:
 
 _KNOWLEDGE_LITE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}")
 _KNOWLEDGE_LITE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_ATTACK_TECHNIQUE_ID = re.compile(r"T[0-9]{4}(?:\.[0-9]{3})?")
 
 
 def _source_citation_ok(value: Any) -> bool:
@@ -280,10 +298,20 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
     if value.revocation_status == "revoked":
         return None
     if (type(value.name) is not str or not 0 < len(value.name) <= 160 or
-            any(ord(c) < 32 for c in value.name)):
+            not value.name.strip() or any(not c.isprintable() for c in value.name)):
         return None
-    if (type(value.summary) is not str or len(value.summary) > 1200 or
-            any(ord(c) < 32 and c not in "\n\t" for c in value.summary)):
+    summary = value.summary
+    if summary is None:
+        # Static-reference exception: a producer with no summary may be kept as
+        # an empty-summary advisory only for a clear, non-expiring static claim
+        # with an ATT&CK-format technique ID. The summary is never synthesized.
+        if not (value.freshness == "static" and value.revocation_status == "clear" and
+                value.expires_at is None and type(value.technique_id) is str and
+                _ATTACK_TECHNIQUE_ID.fullmatch(value.technique_id)):
+            return None
+        summary = ""
+    if (type(summary) is not str or len(summary) > 1200 or
+            any(ord(c) < 32 and c not in "\n\t" for c in summary)):
         return None
     if type(value.citation) is not str or not _KNOWLEDGE_LITE_ID.fullmatch(value.citation):
         return None
@@ -305,7 +333,7 @@ def _knowledge_lite_advisory(value: Any, now: datetime) -> dict[str, Any] | None
     projection = {
         "kind": "knowledge_lite_advisory", "source_kind": "knowledge_lite",
         "claim_status": "reported_unverified", "technique_id": value.technique_id,
-        "name": value.name, "summary": value.summary, "claim_id": value.claim_id,
+        "name": value.name, "summary": summary, "claim_id": value.claim_id,
         "bundle_digest": value.bundle_digest, "freshness": value.freshness,
         "temporal_validity": "current_at_lookup" if value.freshness == "current" else "static",
         "generation": value.generation, "as_of": value.as_of,
@@ -510,6 +538,525 @@ def _bounded_context_response(value: Any) -> dict[str, Any] | None:
     }
 
 
+_FABRIC_RESPONSE_SCHEMA = "knowledge-context-response/v1"
+_FABRIC_IDENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:/@+\-]*")
+_FABRIC_INSTANT = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})")
+_FABRIC_MAX_BYTES = 128 * 1024
+_FABRIC_MAX_NODES = 2048
+_FABRIC_MAX_DEPTH = 8
+_FABRIC_TOP_KEYS = frozenset({
+    "schema_version", "request_id", "correlation_id", "source_product", "source_ref",
+    "provider_id", "snapshot", "facts", "inferences", "unknowns", "limitations",
+    "generated_at", "expires_at", "authority"})
+_FABRIC_SNAPSHOT_KEYS = frozenset({"ref", "state", "as_of"})
+_FABRIC_SUBJECT_KEYS = frozenset({"entity_type", "value"})
+_FABRIC_FACT_KEYS = frozenset({"claim_class", "fact_id", "subject", "predicate", "value", "provenance"})
+_FABRIC_INFERENCE_KEYS = frozenset({
+    "claim_class", "inference_id", "subject", "statement", "method_refs", "basis_fact_ids"})
+
+
+class _FabricReject(Exception):
+    pass
+
+
+def _fabric_walk(value: Any, depth: int, budget: list[int]) -> None:
+    """Bound depth/nodes/UTF-8 content and JSON types before serialization."""
+    budget[0] += 1
+    if budget[0] > _FABRIC_MAX_NODES or depth > _FABRIC_MAX_DEPTH:
+        raise _FabricReject
+    kind = type(value)
+    if kind is str:
+        if len(value) > _FABRIC_MAX_BYTES:
+            raise _FabricReject
+        budget[1] += len(value.encode("utf-8"))
+        if budget[1] > _FABRIC_MAX_BYTES:
+            raise _FabricReject
+        return
+    if kind is list:
+        for child in value:
+            _fabric_walk(child, depth + 1, budget)
+        return
+    if kind is dict:
+        for key, child in value.items():
+            if type(key) is not str or len(key) > 64:
+                raise _FabricReject
+            budget[1] += len(key.encode("utf-8"))
+            if budget[1] > _FABRIC_MAX_BYTES:
+                raise _FabricReject
+            _fabric_walk(child, depth + 1, budget)
+        return
+    raise _FabricReject
+
+
+def _fabric_str(value: Any, limit: int, *, ident: bool = False, ref: bool = False) -> str:
+    if type(value) is not str or not 0 < len(value) <= limit:
+        raise _FabricReject
+    if ident or ref:
+        if not _FABRIC_IDENT.fullmatch(value):
+            raise _FabricReject
+        if ref and "://" in value:
+            raise _FabricReject
+    elif not value.isprintable():
+        raise _FabricReject
+    return value
+
+
+def _fabric_list(value: Any, *, low: int, high: int) -> list[Any]:
+    if type(value) is not list or not low <= len(value) <= high:
+        raise _FabricReject
+    return value
+
+
+def _fabric_keys(value: Any, keys: frozenset[str]) -> dict[str, Any]:
+    if type(value) is not dict or set(value) != keys:
+        raise _FabricReject
+    return value
+
+
+def _fabric_instant(value: Any) -> datetime:
+    if type(value) is not str or not _FABRIC_INSTANT.fullmatch(value):
+        raise _FabricReject
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    fraction = re.search(r"\.([0-9]{1,6})(?=[+-][0-9]{2}:[0-9]{2}$)", text)
+    if fraction:
+        text = text[:fraction.start(1)] + fraction.group(1).ljust(6, "0") + text[fraction.end(1):]
+    try:
+        return datetime.fromisoformat(text).astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise _FabricReject from exc
+
+
+def _fabric_instant_text(value: datetime) -> str:
+    text = value.strftime("%Y-%m-%dT%H:%M:%S")
+    return text + (f".{value.microsecond:06d}" if value.microsecond else "") + "Z"
+
+
+def _fabric_distinct_strs(items: list[Any], limit: int, **kind: bool) -> list[str]:
+    out = [_fabric_str(item, limit, **kind) for item in items]
+    if len(set(out)) != len(out):
+        raise _FabricReject
+    return out
+
+
+# IPv4 quads with ".", "-" or "_" separators (for example "ip-10-0-0-5" or "10_0_0_5").
+_FABRIC_IPV4_LITERAL = re.compile(r"(?<![0-9])[0-9]{1,3}(?:[.\-_][0-9]{1,3}){3}(?![0-9])")
+# Address-like runs of hex digits, colons and dots. A letter outside A-F ends a run; the suffixes of
+# each run (for example "srcfe80::1" -> "fe80::1") are tested by _fabric_ipv6_candidates.
+_FABRIC_IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]+")
+# Shorthand IPv4 with two or three numeric parts ("127.1", "10.1.2"), read as addresses by inet_aton-style parsers.
+# Prose is ambiguous ("confidence 0.75", "version 0.9.1", "10.5 GB"), so shorthand is interpreted only when an
+# address label sits immediately before it. Short protocol-like labels (ip, ipv4, src, dst, addr) may be followed
+# by optional space, colon, equal sign or dot ("ip 127.1", "src:10.1", "dst=10.1.2", "ip[.]127.1" after defang
+# normalization). Full English labels (source, destination, address, host) count only with an explicit colon or
+# equal sign, optionally followed by spaces ("source:127.1", "host: 10.1.2"); bare phrase forms ("host 10.1.2",
+# "The destination. 10.5 GB") are prose. A letter may glue a short label ("ip127.1", "src10.1"); a letter before
+# the label ("tip 0.75") does not start one. Unlabelled shorthand is preserved as prose.
+_FABRIC_LABELED_SHORT_IPV4 = re.compile(
+    r"(?i)(?<![A-Za-z])(?:(?:ipv4|ip|src|dst|addr)[\s:=.]*|(?:source|destination|address|host)[:=]\s*)"
+    r"(?P<ip>(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){1,3})(?!\.?[0-9A-Za-z\-_])")
+# Common defang forms: a bracketed, parenthesised or braced dot (or "dot") and colon, with optional spaces.
+_FABRIC_DEFANG_DOT = re.compile(r"\s*[\[({]\s*(?:\.|dot)\s*[\])}]\s*", re.IGNORECASE)
+_FABRIC_DEFANG_COLON = re.compile(r"\s*[\[({]\s*:\s*[\])}]\s*")
+# MAC literals: colon or hyphen pairs (aa:bb:cc:dd:ee:ff) and Cisco dotted triples (aabb.ccdd.eeff).
+_FABRIC_MAC_LITERAL = re.compile(
+    r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}([:\-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}"
+    r"|[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})(?![0-9A-Fa-f])")
+# Host-subject types whose value must be a DNS name or a global IP literal.
+_FABRIC_DNS_NAME_TYPES = frozenset({"host", "hostname", "fqdn", "domain"})
+# Typed address subjects (see _fabric_is_address_type) must carry exactly one global IP literal.
+# URL/URI subject types: the host of the value must pass the host-subject rules.
+_FABRIC_URL_TYPES = frozenset({"url", "uri", "link", "href"})
+# Clearly local-only host names. A bare word such as "internal" is ordinary prose and is not matched.
+_FABRIC_LOCAL_HOST = re.compile(
+    r"(?i)(?<![A-Za-z0-9-])(?:localhost|(?:[A-Za-z0-9-]+\.)+(?:localhost|localdomain|local|internal|lan|home\.arpa|"
+    r"corp|home|intranet|private|test|example|invalid))"
+    r"(?![A-Za-z0-9-]|\.[A-Za-z0-9-])")
+
+
+# IPv6 transition and tunneling prefixes that carry an IPv4 address. ``is_global`` for them differs across
+# Python versions, so the policy is fixed: all of these are refused, even with a globally routable embedded IPv4.
+_IPV6_TRANSITION_PREFIXES = (
+    ipaddress.IPv6Network("::/96"),           # IPv4-compatible
+    ipaddress.IPv6Network("::ffff:0:0:0/96"), # IPv4-translated (SIIT)
+    ipaddress.IPv6Network("64:ff9b::/96"),    # NAT64 well-known
+    ipaddress.IPv6Network("64:ff9b:1::/48"),  # NAT64 local-use
+    ipaddress.IPv6Network("2002::/16"),       # 6to4
+    ipaddress.IPv6Network("2001::/32"),       # Teredo
+)
+
+
+def _fabric_global_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Globally routable public address, independent of Python ipaddress table differences.
+
+    IPv4-mapped IPv6 and every IPv4-compatible, NAT64, 6to4 and Teredo address are refused outright, before
+    ``is_global``, even when the embedded IPv4 address is globally routable. Other IPv6 uses ``is_global``.
+    """
+    if not isinstance(address, ipaddress.IPv6Address):
+        return address.is_global
+    if address.ipv4_mapped is not None or any(address in net for net in _IPV6_TRANSITION_PREFIXES):
+        return False
+    return address.is_global
+
+
+def _fabric_short_ipv4_refused(token: str) -> bool:
+    """Refuse inet_aton-style shorthand ("a.b" or "a.b.c") only when it expands to a non-global IPv4 address."""
+    text_parts = token.split(".")
+    # A multi-digit part with a leading zero is ambiguous (inet_aton may read it as octal): refuse it under a label.
+    if any(len(part) > 1 and part.startswith("0") for part in text_parts):
+        return True
+    # Hex parts ("0x7f.1") are ambiguous under inet_aton-style parsing: refuse them under a label.
+    if any(part[:2].lower() == "0x" for part in text_parts):
+        return True
+    # Bound digit runs before int() (very long runs exceed Python's conversion limit); they are out of range.
+    parts = [int(part) if len(part) <= 12 else 1 << 40 for part in text_parts]
+    if len(parts) == 4:
+        # Full dotted quad: leading zeros were refused above; invalid or non-global values are refused.
+        try:
+            return not ipaddress.IPv4Address(".".join(text_parts)).is_global
+        except ValueError:
+            return True
+    host_bits = 24 if len(parts) == 2 else 16
+    if any(part > 255 for part in parts[:-1]) or parts[-1] >= 1 << host_bits:
+        return False
+    value = 0
+    for part in parts[:-1]:
+        value = (value << 8) | part
+    value = (value << host_bits) | parts[-1]
+    return not ipaddress.IPv4Address(value).is_global
+
+
+def _fabric_ipv6_candidates(run: str):
+    """Yield IPv6 candidates for each permitted suffix start in an address-like run.
+
+    A suffix starts at the run's beginning, or at a hex digit or colon whose predecessor is a hex letter,
+    a dot or a separator colon. This exposes glued prefixes ("srcfe80::1", "1fe80::1") and separator prefixes
+    ("Dec:fd00::1"). A start is skipped only when it is a decimal digit after a decimal digit, so a numeric
+    group such as "4700" cannot yield a false "700::1". A colon that begins or continues "::" is never a
+    start, so the "::1111" inside a public "2606:4700:4700::1111" is not tested alone. Lone separator colons
+    and trailing dots are trimmed; candidates without a hex digit are skipped.
+    """
+    for start, char in enumerate(run):
+        if start and (
+            (char in "0123456789" and run[start - 1] in "0123456789")
+            or (char == ":" and (run[start - 1] == ":" or run[start + 1:start + 2] == ":"))
+        ):
+            continue
+        candidate = run[start:].rstrip(".")
+        if candidate.startswith(":") and not candidate.startswith("::"):
+            candidate = candidate[1:]
+        if candidate.endswith(":") and not candidate.endswith("::"):
+            candidate = candidate[:-1]
+        if re.search(r"[0-9A-Fa-f]", candidate):
+            yield candidate
+
+
+def _fabric_scan_copy(text: str) -> str:
+    """Scan-only copy with common defang forms read as the characters they hide. Never displayed."""
+    return _FABRIC_DEFANG_COLON.sub(":", _FABRIC_DEFANG_DOT.sub(".", text))
+
+
+def _fabric_text_publishable(text: str) -> bool:
+    """Both the original text and its defang-normalized scan copy must be free of address and host literals."""
+    return _fabric_literals_clean(text) and _fabric_literals_clean(_fabric_scan_copy(text))
+
+
+def _fabric_literals_clean(text: str) -> bool:
+    """No non-global or malformed address literal (dotted, dashed or underscore quad; shorthand IPv4; IPv6; MAC),
+    and no local-only host name. Every IPv6 suffix candidate is checked, not only the first parse."""
+    if _FABRIC_MAC_LITERAL.search(text):
+        return False
+    for match in _FABRIC_IPV4_LITERAL.finditer(text):
+        try:
+            quad = ".".join(re.split(r"[.\-_]", match.group(0)))
+            if not ipaddress.IPv4Address(quad).is_global:
+                return False
+        except ValueError:
+            return False
+    for match in _FABRIC_LABELED_SHORT_IPV4.finditer(text):
+        if _fabric_short_ipv4_refused(match.group("ip")):
+            return False
+    for match in _FABRIC_IPV6_RUN.finditer(text):
+        run = match.group(0)
+        if match.end() < len(text) and text[match.end()] == "%":
+            scope = re.match(r"%[A-Za-z0-9_.-]+", text[match.end():])
+            if scope:
+                try:
+                    ipaddress.IPv6Address(run)
+                except ValueError:
+                    pass
+                else:
+                    return False
+        if run.count(":") < 2:
+            continue
+        for candidate in _fabric_ipv6_candidates(run):
+            try:
+                address = ipaddress.IPv6Address(candidate)
+            except ValueError:
+                continue
+            # IPv4-mapped literals are refused even when the dotted tail is global: they are IPv6 literals.
+            if not _fabric_global_ip(address):
+                return False
+    return _FABRIC_LOCAL_HOST.search(text) is None and _fabric_embedded_urls_clean(text)
+
+
+# Lookahead, so overlapping starts are all scanned (a URL nested in another URL's query, or comma-joined URLs).
+_FABRIC_EMBEDDED_URL = re.compile(r"(?=([A-Za-z][A-Za-z0-9+.\-]*://[^\s<>\"'`]+))")
+_FABRIC_SCHEME_PREFIX = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://")
+
+
+def _fabric_trim_url(url: str) -> str:
+    """Drop trailing sentence punctuation. A closing bracket is dropped only when unbalanced, so a URL ending in
+    a bracketed IPv6 host ("https://[2606:4700:4700::1111]") keeps it."""
+    pairs = {")": "(", "]": "[", "}": "{"}
+    while url:
+        last = url[-1]
+        if last in ".,;:!?" or (last in pairs and url.count(last) > url.count(pairs[last])):
+            url = url[:-1]
+        else:
+            break
+    return url
+
+
+def _fabric_url_authority_ok(url: str) -> bool:
+    """Strict authority check for a URL with or without a scheme. Whitespace, backslashes, userinfo,
+    percent-encoding, malformed ports and missing or non-global hosts are refused (host-confusion bypasses)."""
+    if any(ch.isspace() for ch in url) or "\\" in url:
+        return False
+    scheme = _FABRIC_SCHEME_PREFIX.match(url)
+    rest = url[scheme.end():] if scheme else url.removeprefix("//")
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    if "@" in authority or "%" in authority:
+        return False
+    if authority.startswith("["):
+        match = re.fullmatch(r"\[([^\[\]]+)\](?::([0-9]+))?", authority)
+        if match is None:
+            return False
+        host, port = match.groups()
+        try:
+            address = ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+        if port is not None and (len(port) > 5 or int(port) > 65535):
+            return False
+        return _fabric_global_ip(address)
+    if "[" in authority or "]" in authority or authority.count(":") > 1:
+        return False
+    host, separator, port = authority.partition(":")
+    if separator and (not re.fullmatch(r"[0-9]+", port) or len(port) > 5 or int(port) > 65535):
+        return False
+    return bool(host) and _fabric_host_value_ok(host)
+
+
+def _fabric_embedded_urls_clean(text: str) -> bool:
+    """Every scheme://... substring in copied text, including nested and comma-joined ones, must pass the strict
+    authority checks, whatever the entity_type."""
+    return all(_fabric_url_authority_ok(_fabric_trim_url(m.group(1))) for m in _FABRIC_EMBEDDED_URL.finditer(text))
+
+
+def _fabric_copied_ident(value: Any, limit: int) -> str:
+    """An identifier copied into the advisory must pass the MIO second layer (address and secret shapes).
+    Underscore is not an address character, so it is read as "-" for the shape checks only."""
+    value = _fabric_str(value, limit, ident=True)
+    if not second_layer_ok(value.replace("_", "-")) or not _fabric_text_publishable(value):
+        raise _FabricReject
+    return value
+
+
+def _fabric_copied_text(value: Any, limit: int) -> str:
+    """Source prose copied for display is treated as untrusted data: credential/PII text is redacted with the
+    MIO redaction rules, and address literals or local-only host names are refused, not shown."""
+    text = redact_text(_fabric_str(value, limit))
+    if not _fabric_text_publishable(text):
+        raise _FabricReject
+    return text
+
+
+_FABRIC_DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
+def _fabric_host_value_ok(text: str) -> bool:
+    """A DNS-name subject is a globally routable IP literal or a dotted name with more than one label.
+
+    A bare single label is refused, and so is a name whose final label is all-numeric ("127.1") or hex-like
+    ("0x1", "0x7f"): that is shorthand for an address, not a DNS name. Arbitrary privately owned names under
+    a public suffix are not distinguishable here; upstream policy and source controls remain required.
+    """
+    if "/" in text or "@" in text or "%" in text:
+        return False  # a URL or userinfo form is not a bare host subject
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        labels = text.split(".")
+        return (len(labels) > 1 and len(text) <= 253
+                and all(_FABRIC_DNS_LABEL.fullmatch(label) for label in labels)
+                and re.fullmatch(r"[0-9]+", labels[-1]) is None
+                and re.fullmatch(r"0[xX][0-9A-Fa-f]*", labels[-1]) is None)
+    return _fabric_global_ip(address)
+
+
+def _fabric_ip_value_ok(text: str) -> bool:
+    """A typed address subject is exactly one globally routable IP literal; shorthand, integer or hex IPv4,
+    dotted names, IPv4-mapped IPv6 and transition forms carrying non-global IPv4 are refused."""
+    if "%" in text:
+        return False  # scoped IPv6 includes a local interface identifier
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return _fabric_global_ip(address)
+
+
+def _fabric_url_host_ok(text: str) -> bool:
+    """A URL/URI subject, with or without a scheme, passes the same strict authority checks as embedded URLs."""
+    return _fabric_url_authority_ok(_fabric_trim_url(text))
+
+
+def _fabric_type_key(entity_type: str) -> str:
+    """Split camelCase, lower-case, and read separators as "_" ("srcIP" -> "src_ip", "IPv4Address" -> "ipv4_address")."""
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", entity_type.strip())
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+_FABRIC_ADDRESS_TOKENS = frozenset({"ip", "ip4", "ip6", "ipv4", "ipv6", "ipaddr", "ipaddress"})
+_FABRIC_COMPACT_ADDRESS_TYPES = frozenset({
+    "srcip", "dstip", "destip", "sourceip", "destinationip", "clientip", "serverip", "remoteip", "localip",
+    "peerip", "hostip", "publicip", "privateip", "attackerip", "victimip", "targetip", "ip4", "ip6",
+    "sourceipaddress", "ipv4address", "ipv6address", "ipv4addr", "ipv6addr",
+    "srcaddr", "dstaddr", "destaddr", "sourceaddr", "destinationaddr", "clientaddr", "serveraddr", "remoteaddr",
+    "localaddr", "peeraddr", "remoteaddress", "clientaddress", "sourceaddress", "srcaddress", "dstaddress",
+    "attackeraddr", "c2ip",
+})
+_FABRIC_ADDRESS_WORDS = frozenset({"addr", "address"})
+# Words that make "addr"/"address" something other than an IP address (hardware, mail, postal, web).
+_FABRIC_NON_IP_ADDRESS = frozenset({"mac", "email", "mail", "street", "postal", "hw", "hardware", "physical",
+                                    "bluetooth", "web", "url", "uri", "sender", "from", "to", "recipient",
+                                    "reply", "wallet", "contract", "billing", "home", "mailing", "payment",
+                                    "memory"})
+
+
+def _fabric_is_address_type(key: str) -> bool:
+    """Token match on the normalized key, so "iphone" and "ipsec_policy" are not addresses but "src_ip",
+    "remote_addr" and "address_v4" are. "mac_addr" and "email_addr" are excluded."""
+    if key in _FABRIC_COMPACT_ADDRESS_TYPES:
+        return True
+    tokens = set(key.split("_"))
+    if tokens & _FABRIC_ADDRESS_TOKENS:
+        return True
+    return bool(tokens & _FABRIC_ADDRESS_WORDS) and not tokens & _FABRIC_NON_IP_ADDRESS
+
+
+def _fabric_is_url_type(key: str) -> bool:
+    return key in _FABRIC_URL_TYPES or key.rsplit("_", 1)[-1] in ("url", "uri")
+
+
+def _fabric_subject(value: Any) -> dict[str, str]:
+    value = _fabric_keys(value, _FABRIC_SUBJECT_KEYS)
+    entity_type = _fabric_copied_ident(value["entity_type"], 64)
+    text = _fabric_copied_text(value["value"], 256)
+    key = _fabric_type_key(entity_type)
+    if _fabric_is_address_type(key) and not _fabric_ip_value_ok(text):
+        raise _FabricReject
+    if _fabric_is_url_type(key) and not _fabric_url_host_ok(text):
+        raise _FabricReject
+    if key in _FABRIC_DNS_NAME_TYPES and not _fabric_host_value_ok(text):
+        raise _FabricReject
+    return {"entity_type": entity_type, "value": text}
+
+
+def _fabric_context_response(value: Any, now: datetime) -> tuple[dict[str, Any] | None, bool]:
+    """Fail-closed projection of a Fabric Knowledge Context response v1.
+
+    Returns (projection, expired). Any deviation rejects the whole payload; no
+    partial projection, truncation or coercion. Opaque refs, provider and request
+    identifiers, and provenance/method references are validated but not copied.
+    Fact and inference source IDs are validated and replaced by local ordinals
+    (fact-N, inference-N); basis references are remapped to the local fact IDs.
+    Copied identifiers pass the MIO second layer; copied prose is redacted and
+    refused if it carries a non-global address literal or a local-only host name.
+    """
+    if type(value) is not FabricKnowledgeContextResponseAdvisory:
+        return None, False
+    try:
+        data = value.response
+        _fabric_walk(data, 0, [0, 0])
+        if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8")) > _FABRIC_MAX_BYTES:
+            raise _FabricReject
+        data = _fabric_keys(data, _FABRIC_TOP_KEYS)
+        if data["schema_version"] != _FABRIC_RESPONSE_SCHEMA or data["authority"] != "advisory_only":
+            raise _FabricReject
+        for key, limit in (("request_id", 128), ("correlation_id", 128),
+                           ("provider_id", 128), ("source_product", 64)):
+            _fabric_str(data[key], limit, ident=True)
+        _fabric_str(data["source_ref"], 256, ref=True)
+        snapshot = _fabric_keys(data["snapshot"], _FABRIC_SNAPSHOT_KEYS)
+        _fabric_str(snapshot["ref"], 256, ref=True)
+        if snapshot["state"] not in ("complete", "partial", "stale"):
+            raise _FabricReject
+        as_of = _fabric_instant(snapshot["as_of"])
+        generated = _fabric_instant(data["generated_at"])
+        expires = _fabric_instant(data["expires_at"])
+        if as_of > generated or generated > now or expires <= generated:
+            raise _FabricReject
+        facts, fact_ids = [], []
+        for raw in _fabric_list(data["facts"], low=0, high=64):
+            raw = _fabric_keys(raw, _FABRIC_FACT_KEYS)
+            if raw["claim_class"] != "source_reported_fact":
+                raise _FabricReject
+            fact_id = _fabric_copied_ident(raw["fact_id"], 128)  # validated; the source ID is not emitted
+            provenance = _fabric_distinct_strs(_fabric_list(raw["provenance"], low=1, high=8), 256, ref=True)
+            fact_ids.append(fact_id)
+            facts.append({"claim_class": "source_reported_fact", "fact_id": f"fact-{len(facts) + 1}",
+                          "subject": _fabric_subject(raw["subject"]),
+                          "predicate": _fabric_copied_ident(raw["predicate"], 64),
+                          "value": _fabric_copied_text(raw["value"], 512),
+                          "provenance_count": len(provenance)})
+        inferences, inference_ids = [], []
+        for raw in _fabric_list(data["inferences"], low=0, high=32):
+            raw = _fabric_keys(raw, _FABRIC_INFERENCE_KEYS)
+            if raw["claim_class"] != "inference":
+                raise _FabricReject
+            inference_id = _fabric_copied_ident(raw["inference_id"], 128)
+            _fabric_distinct_strs(_fabric_list(raw["method_refs"], low=1, high=8), 256, ref=True)
+            basis = [_fabric_copied_ident(item, 128) for item in _fabric_list(raw["basis_fact_ids"], low=1, high=16)]
+            if len(set(basis)) != len(basis):
+                raise _FabricReject
+            inference_ids.append(inference_id)
+            inferences.append({"claim_class": "inference", "inference_id": f"inference-{len(inferences) + 1}",
+                               "subject": _fabric_subject(raw["subject"]),
+                               "statement": _fabric_copied_text(raw["statement"], 512),
+                               "basis_fact_ids": basis})
+        known = set(fact_ids)
+        if (len(known) != len(fact_ids) or len(set(inference_ids)) != len(inference_ids)
+                or known & set(inference_ids)
+                or any(ref not in known for item in inferences for ref in item["basis_fact_ids"])):
+            raise _FabricReject
+        local_fact_ids = {source: f"fact-{index}" for index, source in enumerate(fact_ids, start=1)}
+        for item in inferences:
+            item["basis_fact_ids"] = [local_fact_ids[ref] for ref in item["basis_fact_ids"]]
+        unknowns = [_fabric_copied_text(x, 512) for x in _fabric_list(data["unknowns"], low=0, high=16)]
+        limitations = [_fabric_copied_text(x, 512) for x in _fabric_list(data["limitations"], low=0, high=16)]
+        if not any((facts, inferences, unknowns, limitations)):
+            raise _FabricReject
+    except (_FabricReject, TypeError, ValueError, UnicodeError, RecursionError):
+        return None, False
+    if expires <= now:
+        return None, True
+    return {
+        "kind": "fabric_knowledge_context_response_advisory",
+        "source_kind": "fabric_knowledge_context_response_v1",
+        "schema_version": _FABRIC_RESPONSE_SCHEMA,
+        "claim_status": "source_reported_unverified",
+        "authority": "advisory_only",
+        "trust": "unverified_advisory_only",
+        "snapshot_state": snapshot["state"],
+        "generated_at": _fabric_instant_text(generated),
+        "expires_at": _fabric_instant_text(expires),
+        "facts": facts, "inferences": inferences,
+        "unknowns": unknowns, "limitations": limitations,
+    }, False
+
+
 def _expired_context(value: Any, now: datetime) -> bool:
     """Recognize only typed, parseable date-bounded Knowledge projections."""
     if type(value) not in (VerifiedKnowledgeContext, ReportedKnowledgeContext):
@@ -557,6 +1104,7 @@ class AssistantCore:
                 reported_knowledge=(), now: str,
                 knowledge_lite_advisories=(), knowledge_attempted: bool = True,
                 knowledge_context_response=None,
+                fabric_knowledge_context_response=None,
                 cancel_check=None, stale_check=None) -> Assistance:
         if type(knowledge_attempted) is not bool:
             raise TypeError("knowledge_attempted_must_be_bool")
@@ -613,6 +1161,13 @@ class AssistantCore:
             context_response_advisory = _bounded_context_response(knowledge_context_response)
             if context_response_advisory is None:
                 rejected = True
+        fabric_advisory = None
+        if fabric_knowledge_context_response is not None:
+            fabric_advisory, fabric_expired = _fabric_context_response(
+                fabric_knowledge_context_response, instant)
+            if fabric_advisory is None:
+                rejected = True
+                knowledge_expired = knowledge_expired or fabric_expired
         refs = tuple(dict.fromkeys(ref for ctx in contexts + static_references for ref in ctx["evidence_refs"]
                                    if model_id_ok(ref, "evidence_ref")))[:32]
         reported_refs = tuple(dict.fromkeys(
@@ -708,6 +1263,8 @@ class AssistantCore:
             unknowns.insert(0, "KNOWLEDGE_CONTEXT_REJECTED")
         if knowledge_expired:
             unknowns.insert(0, "KNOWLEDGE_CONTEXT_EXPIRED")
+        if fabric_advisory and fabric_advisory["snapshot_state"] in {"partial", "stale"}:
+            unknowns.insert(0, f"KNOWLEDGE_CONTEXT_{fabric_advisory['snapshot_state'].upper()}")
         check_playbook = DEFAULT_PLAYBOOKS[AUTH_PLAYBOOK_ID] if auth_context else selection.playbook
         checks = list(check_playbook.discriminating_questions[:4])
         if not checks:
@@ -720,22 +1277,36 @@ class AssistantCore:
             knowledge_outcome = ContextDependencyOutcome.EXPIRED
         elif contexts or reported_contexts or static_references:
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
-        elif context_response_advisory and knowledge_outcome is ContextDependencyOutcome.ABSENT:
+        elif (context_response_advisory
+              and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        elif (lite_advisories
+              and knowledge_outcome is ContextDependencyOutcome.ABSENT):
+            knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        elif (fabric_advisory
+              and knowledge_outcome is ContextDependencyOutcome.ABSENT):
+            # Keep an incomplete receipt visible as advisory without reporting
+            # the Knowledge dependency as healthy when it is the only source.
+            if fabric_advisory["snapshot_state"] == "complete":
+                knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+            elif rejected:
+                knowledge_outcome = ContextDependencyOutcome.REJECTED
+            else:
+                knowledge_outcome = ContextDependencyOutcome.UNAVAILABLE
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             if rejected and not lite_advisories:
                 knowledge_outcome = ContextDependencyOutcome.REJECTED
-            elif lite_advisories:
-                knowledge_outcome = ContextDependencyOutcome.AVAILABLE
         if (knowledge_attempted is False and not rejected
                 and not frame.knowledge_refs
                 and not contexts and not static_references and not reported_contexts and not lite_advisories
                 and context_response_advisory is None
+                and fabric_knowledge_context_response is None
                 and not knowledge and not references and not reported_knowledge and not knowledge_lite_advisories
                 and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             knowledge_outcome = ContextDependencyOutcome.NOT_QUERIED
         deception_outcome = _frame_dependency_outcome(frame.deception_status)
         scenario_checks: list[str] = []
+        safety_checks: list[str] = []
         if knowledge_outcome is ContextDependencyOutcome.NOT_QUERIED:
             scenario_checks.append(
                 "This fast result did not query Knowledge; consult the separate validated Knowledge analysis lane for Knowledge context before relying on this assessment.")
@@ -747,13 +1318,13 @@ class AssistantCore:
             scenario_checks.append(
                 "Clarify if 'allowed' means network acceptance or successful authentication; correlate event time/target with authentication and approved change/automation records before claiming access succeeded.")
         if knowledge_outcome is ContextDependencyOutcome.TIMEOUT:
-            scenario_checks.append(
+            safety_checks.append(
                 "Confirm the Knowledge peer health and timed-out request timestamp through its authorized status view; request a fresh read-only retrieval only after service recovery.")
         elif knowledge_outcome is ContextDependencyOutcome.EXPIRED:
-            scenario_checks.append(
+            safety_checks.append(
                 "Check the signed Knowledge response expiry against the adapter clock, then request a fresh authorized snapshot; do not reuse the expired context.")
         elif knowledge_outcome is ContextDependencyOutcome.REJECTED:
-            scenario_checks.append(
+            safety_checks.append(
                 "Review the Knowledge adapter's closed validation result and response metadata through authorized diagnostics; do not reuse the rejected context.")
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(
@@ -770,16 +1341,23 @@ class AssistantCore:
             scenario_checks.append(
                 "Confirm AZ-06 environment coverage and observation availability for the incident window; missing decoy telemetry does not establish that no decoy interaction occurred.")
         elif deception_relevant and deception_outcome is ContextDependencyOutcome.TIMEOUT:
-            scenario_checks.append(
+            safety_checks.append(
                 "Confirm AZ-06 observation-service health and the timed-out request window through its authorized status view.")
         elif deception_relevant and deception_outcome in {ContextDependencyOutcome.REJECTED, ContextDependencyOutcome.UNAVAILABLE}:
-            scenario_checks.append(
+            safety_checks.append(
                 "Confirm AZ-06 observation coverage and adapter status for the incident window; unavailable or rejected telemetry does not establish that no interaction occurred.")
         if scenario_checks:
             checks = list(dict.fromkeys(scenario_checks + checks))[:4]
         if lite_advisories:
             check = "Recheck the cited Knowledge Lite claim and its revocation status against an authorized current source before relying on it."
             checks = list(dict.fromkeys([check] + checks))[:4]
+        if fabric_advisory and fabric_advisory["snapshot_state"] in {"partial", "stale"}:
+            check = "Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot."
+            checks = [check] + [item for item in checks if item != check]
+            checks = checks[:4]
+        if safety_checks:
+            # Dependency-failure guidance must survive competing optional checks.
+            checks = list(dict.fromkeys(safety_checks + checks))[:4]
         payload = {
             "schema_version": "mio.assistance.v1", "trace_id": frame.trace_id,
             "frame_id": frame.frame_id,
@@ -797,6 +1375,8 @@ class AssistantCore:
             "knowledge": [] if interrupted else contexts + static_references + reported_contexts + lite_advisories,
             **({"knowledge_context_response_advisory": None if interrupted else context_response_advisory}
                if context_response_advisory is not None else {}),
+            **({"fabric_knowledge_context_advisory": None if interrupted else fabric_advisory}
+               if fabric_advisory is not None else {}),
             "handoff": handoff,
             "reasoning_trace": ([] if outcome.state is ReasoningState.VALIDATION_REJECTED
                                 else _public_reasoning_trace(outcome.trace)),
@@ -813,4 +1393,6 @@ class AssistantCore:
                     "dependency_outcome": {"knowledge": ContextDependencyOutcome.UNAVAILABLE.value,
                                            "deception": ContextDependencyOutcome.UNAVAILABLE.value},
                 })
+                payload.pop("knowledge_context_response_advisory", None)
+                payload.pop("fabric_knowledge_context_advisory", None)
         return Assistance(payload)

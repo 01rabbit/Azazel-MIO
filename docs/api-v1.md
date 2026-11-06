@@ -1,6 +1,6 @@
 # M.I.O. internal API v1
 
-`azazel_mio.assistant.AssistantCore(model=None).explain(frame, *, knowledge=(), now: str, knowledge_attempted: bool = True, cancel_check=None, stale_check=None) -> Assistance`
+`azazel_mio.assistant.AssistantCore(model=None, *, coordinator=None).explain(frame, *, knowledge=(), references=(), reported_knowledge=(), now: str, knowledge_lite_advisories=(), knowledge_attempted: bool = True, knowledge_context_response=None, fabric_knowledge_context_response=None, cancel_check=None, stale_check=None) -> Assistance`
 
 `frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
 `AssistantCore(model, coordinator=...)` may opt into product-neutral request lifecycle
@@ -101,7 +101,7 @@ MIO bounds and checks all fields again, rejects expired/future/malformed context
 and preserves facts and inferences separately. A context grants no authority.
 `now` is mandatory, timezone-aware ISO 8601, supplied by the product clock.
 
-`KnowledgeLiteAdvisory(technique_id, name, summary, claim_id, bundle_digest,
+`KnowledgeLiteAdvisory(technique_id, name, summary: str | None, claim_id, bundle_digest,
 freshness, generation, as_of, citation, revocation_status, trust_check="verified",
 expires_at=None, source_citation=None)` is accepted through `explain(...,
 knowledge_lite_advisories=(...), now=...)`. It is projected as
@@ -109,6 +109,16 @@ knowledge_lite_advisories=(...), now=...)`. It is projected as
 `claim_status=reported_unverified`. Its summary remains only a reported claim:
 it is not placed in observations or VerifiedKnowledgeContext facts/inferences.
 `summary` may be empty and is preserved exactly, with no fabricated fallback.
+Static-reference exception: a producer that supplies `summary=None` (no summary at
+all) is accepted only when every other check passes, `freshness` is `static`,
+`revocation_status` is `clear`, `expires_at` is absent, and `technique_id` matches
+`T[0-9]{4}(\.[0-9]{3})?` (format only; catalogue membership is not checked). MIO then projects the advisory with `summary: ""` and
+never synthesizes replacement prose. It stays `reported_unverified`, `unverified_advisory_only`,
+and advisory-only: no observation, known fact, evidence, truth, or authority is
+created. Any other `None` summary (including `current`, `unknown`/`revoked`
+revocation, a supplied expiry, a malformed technique ID, or failed bindings)
+is rejected. Blank or whitespace-only names are rejected, and names must contain
+only printable characters.
 `citation` remains the canonical identifier; adapters mapping a KnowledgeRef use
 its `claim_id` for this field, not its human-readable dataset citation.
 The optional trailing `source_citation` carries that source's dataset citation
@@ -167,6 +177,166 @@ match/source lists project to `source_groups=[]`; they supply no identity and
 do not by themselves make an otherwise empty projection useful. Source groups
 remain unverified receipt metadata and never enter prompts, observations,
 verified facts, or training. Existing JSON size/depth/node bounds still apply.
+
+### Fabric Knowledge Context response v1 (separate input)
+
+`FabricKnowledgeContextResponseAdvisory(response: Mapping[str, Any])`, passed as
+`AssistantCore.explain(..., fabric_knowledge_context_response=...)`, accepts one
+Fabric `knowledge-context-response/v1` payload (Fabric PR #76,
+`50494cf769978abdbad21626a130d6525c83135d`). It is a different contract from
+`KnowledgeContextResponseAdvisory` (legacy Knowledge `/v1/context`); neither
+wrapper is accepted by the other's keyword, and the legacy input, output key and
+behavior are unchanged. MIO has no Fabric runtime dependency: the check is a
+stdlib re-implementation of the wire shape.
+
+Validation is strict and fail-closed: exact field sets at every level (unknown
+or directive-shaped keys such as `action` or `command` are rejected), exact
+`str`/`list`/`dict` JSON types, Fabric identifier/opaque-reference grammar
+(opaque refs may not contain `://`), printable bounded text, the Fabric
+list caps (64 facts, 32 inferences, 8 provenance/method refs, 16 basis facts,
+16 unknowns/limitations), explicit-offset instants with
+`as_of <= generated_at < expires_at`, distinct and non-dangling fact/inference
+IDs, and a MIO-specific stricter node cap (2048; Fabric does not define a
+node-count cap), depth (8) and canonical UTF-8 size (128 KiB) limits. A payload
+can therefore be valid under Fabric's walker yet rejected by MIO's additional
+resource bound. Any failure rejects the whole payload with no partial
+projection. A response with neither facts nor inferences is still useful when
+it carries bounded unknowns or limitations;
+only an entirely empty result is rejected. A response whose
+`expires_at` is not later than the caller's `now` is rejected as expired
+(`dependency_outcome.knowledge=expired`); future-dated `generated_at` values are
+rejected. Rejection adds `KNOWLEDGE_CONTEXT_REJECTED` and leaves the rest of the
+result unchanged.
+
+A valid response adds a separate top-level `fabric_knowledge_context_advisory`
+object (absent otherwise, so the default output shape is unchanged):
+`kind=fabric_knowledge_context_response_advisory`,
+`source_kind=fabric_knowledge_context_response_v1`, `schema_version`,
+`claim_status=source_reported_unverified`, `authority=advisory_only`,
+`trust=unverified_advisory_only`, `snapshot_state`
+(`complete|partial|stale`), UTC `generated_at`/`expires_at`, `facts`,
+`inferences`, `unknowns` and `limitations`. Each fact carries
+`claim_class=source_reported_fact`, `fact_id`, `subject`, `predicate`, `value`
+and `provenance_count`. Each inference carries `claim_class=inference`,
+`inference_id`, `subject`, `statement` and the `basis_fact_ids` it cites; facts
+and inferences are never merged. Request/correlation/provider IDs, source and
+snapshot refs, provenance refs and method refs are validated but not copied.
+Fact and inference source IDs (`fact_id`, `inference_id`) are validated as identifiers
+but are not copied. MIO emits bounded local references instead: `fact-1`, `fact-2`, …
+and `inference-1`, `inference-2`, … in response order. Each inference's
+`basis_fact_ids` is remapped to the local fact references, so the claim relationships
+are preserved while source identifiers do not appear in the output. Malformed,
+duplicate, or dangling source references still reject the whole payload.
+
+A `partial` or `stale` snapshot remains visible in this separate unverified
+advisory, but it is not reported as a healthy Knowledge dependency. When it is
+the only Knowledge context, `dependency_outcome.knowledge` is `unavailable`,
+the output includes the fixed `KNOWLEDGE_CONTEXT_PARTIAL` or
+`KNOWLEDGE_CONTEXT_STALE` unknown, and `next_checks` asks for an authorized
+current full-node snapshot. That fixed check is placed ahead of optional
+checks so they cannot crowd it out; dependency-failure checks (timeout,
+expired, rejected) keep precedence over it within the four-item cap. Here `unavailable` means no complete current
+snapshot was supplied; it does not claim that the transport or service was
+unreachable. A separate complete Knowledge source retains the aggregate
+`available` outcome while the incomplete Fabric receipt and its unknown remain
+visible.
+
+Copied prose is refused, not shown, when it contains a non-global IPv4 or IPv6
+literal; a MAC literal in colon, hyphen or Cisco dotted form; labelled shorthand IPv4 with
+two or three numeric parts (for example `ip 127.1` or `src:10.1`) that expands to a non-global
+address; or a local-only host name. Before checking, MIO builds a scan-only copy in which
+common defang forms are read as the characters they hide: `[.]`, `(.)`, `{.}` and `[dot]`,
+`(dot)`, `{dot}` (case-insensitive) become `.`, and `[:]`, `(:)`, `{:}` become `:`, with
+optional spaces inside and around the brackets. The original text must pass and so must
+the normalized copy, so `10[.]0[.]0[.]5` is refused while `8[.]8[.]8[.]8` remains usable
+as written. Only the original text is ever shown. IPv6 suffixes are tested from each
+hex-letter or separator-colon boundary, except a decimal digit after a decimal digit and a
+colon that begins or continues `::`, so a glued prefix (`srcfe80::1`), a digit-prefixed
+prefix (`1fe80::1`) or a separator prefix (`Dec:fd00::1`) cannot hide a non-global suffix.
+Shorthand IPv4 is interpreted in prose only when an address label sits immediately before
+it. Short protocol-like labels `ip`, `ipv4`, `src`, `dst` and `addr` may be followed by optional
+spaces, colon, equal sign or dot (`ip 127.1`, `src:10.1`, `dst=10.1.2`). Full English labels
+`source`, `destination`, `address` and `host` count only when followed by an explicit colon or
+equal sign, optionally followed by spaces (`source:127.1`, `destination=192.168.1`,
+`host: 10.1.2`). Bare phrase forms such as `host 10.1.2`, `source 127.1` or
+`The destination. 10.5 GB` are treated as prose and are not refused. A short label may be
+glued to the number (`ip127.1`, `src10.1`) and is still refused when the shorthand expands to a
+non-global address. Under a label, a shorthand part with more than one digit that begins with `0`
+(for example `ip 0177.1`, `src 010.1`, `ip 0177.0.1`) is refused as ambiguous, because inet_aton-style
+parsers may read it as octal. Labelled dotted groups of two to four numeric parts are scanned, each
+part decimal digits (any length) or `0x` plus hex digits. Labelled hex shorthand (`ip 0x7f.1`,
+`src 0x7f.0.0.1`) is refused as ambiguous. A labelled four-part decimal group is parsed as IPv4 and
+refused when invalid (`src 10.0.0.0177`, `ip 10.1000` as two-part shorthand expands to a private address)
+or non-global; valid global literals are preserved. Labelled `ip 0.75` is refused because it denotes
+non-global shorthand (`0.0.0.75`), whereas unlabelled `confidence 0.75` is preserved.
+A letter before the label does not start one (`tip 0.75` and `tip 0x7f.1` are ordinary text).
+Ordinary decimal, version and unit text such as `confidence 0.75`, `version 0.9.1`, `10.5 GB`
+and an unlabelled dotted version such as `10.1.2` remains usable. As a fail-closed
+consequence, a public address with a private-looking group after a colon (for example
+`2606:4700:fd00::1`) is also refused. Ordinary version and date text such as `15.1.2`,
+`2026-10-30` and `23:00:00` remains usable. Any `scheme://` URL embedded in a copied subject or prose string, whatever its `entity_type`,
+has its host parsed and screened with the host rules below: shorthand, integer and hex hosts
+(`http://127.1/`, `http://2130706433/`, `http://0x7f.1/`), non-global IP literals, single-label
+hosts, userinfo (`@`), percent-encoded or backslash authorities and invalid ports are refused,
+while public hosts (`https://example.com/a`, `http://8.8.8.8/`) remain usable.
+A typed address subject (`entity_type` `ip` and its aliases such as `ipv4`, `ipv6`, `ip_address`,
+`*_ip`, `*_addr`, case-insensitive) must be exactly one globally routable IP literal: shorthand, private or
+reserved addresses, IPv4-mapped IPv6 and dotted names are refused. Host subjects (`host`,
+`hostname`, `fqdn`, `domain`) must be a global IP literal or a dotted name whose final label
+is not all-numeric and not hex-like address notation; a bare single label is refused. A final label matching
+`0[xX][0-9A-Fa-f]*` (for example `127.0x1`, `0x7f.0x1`, `10.0x1`) is refused because inet_aton-style parsers
+read it as address shorthand, while ordinary names such as `host-1.example.com` remain usable.
+Entity types are normalized (camelCase split, separators read as `_`) and matched by token or known compact alias,
+so `srcIP`, `srcip`, `ClientIP`, `remoteAddr`, `source_address`, `peer_address`, `address_v4`, `attackerip`,
+`remoteaddress`, `sourceaddress`, `attackeraddr`, `c2ip` and `ip4` are address types. `iphone`, `ipsec_policy`,
+`mac_addr`, `email_addr`, `sender_address` and `wallet_address` are not. URL types (`url`, `uri`, `link`, `href`,
+`*_url`, `*_uri`)
+use the same strict authority checks with or without a scheme; a bracketed IPv6 host such as
+`https://[2606:4700:4700::1111]` is kept intact. The embedded-URL scan also covers nested and comma-joined
+URLs (`https://example.com/f?u=http://2130706433/`), and DNS host labels must be ASCII letters, digits and
+hyphens (at most 63 characters per label, 253 in total).
+IPv6 IPv4-compatible (`::/96`), IPv4-translated/SIIT (`::ffff:0:0:0/96`), NAT64
+(`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 (`2002::/16`) and Teredo (`2001::/32`) addresses are always refused,
+even when the embedded IPv4 address is public. These prefix decisions are independent of the Python version;
+other address classes still use that version's `ipaddress.is_global` table. Zone-scoped IPv6 literals with an
+interface suffix such as `%eth0` are also refused.
+Other entity types get no address-type validation, but copied strings are still screened for URL hosts and address
+literals. A `scheme://` URL embedded in any copied string is checked, including nested or comma-joined URLs;
+scheme-less URLs in other entity types are not parsed. Typed URL values do get strict authority checks without a
+scheme. Address-tokened subjects must be a single public IP; non-IP values such as CIDR or reputation text are
+refused as unsupported. DNS hostnames must use ASCII letters, digits and hyphens; underscores, trailing-dot names
+and IDNs are refused. The generic URL scan does not decode percent-encoded URLs or parse malformed URL-like prose
+such as `http:127.1` or `//127.1/`.
+
+Residual limits: an arbitrary privately owned FQDN under a public suffix (for example
+an internal `srv.example.com`) is indistinguishable at this layer, so upstream P0
+policy and source controls remain required. Unseparated 12-hex MAC forms and malformed
+IPv6 with a dotted tail are not detected here. Disambiguation is conservative: unlabelled
+shorthand notation (for example a bare `127.1` or `10.1` in prose) is treated as ambiguous
+prose and preserved, not classified as an IP, so an address written without one of the labels
+above is not refused. Bare full-word phrase forms (for example `host 127.1` or `address 10.1`
+without a colon or equal sign) are likewise preserved as prose, a residual case. Defang normalization covers only the forms listed above:
+other encodings (for example `hxxp`, `[at]`, full-width or Unicode dots, or unbracketed
+spaces such as `10 . 0 . 0 . 5`) are not normalized. Shorthand separated from its label by a
+dash or underscore (`ip-127.1`, `ip_127.1`) is not refused, and shorthand preceded by a digit
+and dot (`2026.10.1`) is read as part of a longer dotted number, not as shorthand. Public
+IPv6 suffixes that begin with a private-looking group are refused fail-closed.
+
+All provider claims are source-reported, unverified and advisory-only. They are
+never converted into `observations`, known facts, `knowledge_refs`, evidence,
+authorization or model prompt material, and free text is carried as inert data.
+A valid `complete` response marks `dependency_outcome.knowledge` `available`
+only when the frame has no stronger outcome. A `partial` or `stale` response
+uses `unavailable` as described above. This means the response passed MIO
+validation and is within its time window; it does not mean its claims were
+independently corroborated. Request and correlation identifiers are checked for shape only:
+this API receives no corresponding request and does not verify that they match
+one. When the legacy and Fabric advisory inputs are both supplied, a valid
+input can keep the aggregate dependency outcome `available` while a rejected
+input is separately reported as `KNOWLEDGE_CONTEXT_REJECTED`. Construction does
+not authenticate the provider. If a coordinated
+explanation is superseded, cancelled, or cannot start because of backpressure,
+its Knowledge advisories are omitted with the other non-current material.
 
 This is an in-process input seam only. Production networking, authentication
 principal and token rotation, TLS, privacy/retention approval, and request

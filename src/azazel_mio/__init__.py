@@ -52,6 +52,7 @@ from .replay import ReplayFixture, run_replay, run_selected
 from .trace import ReasoningTrace, ReasoningTraceEvent
 
 from .lifecycle import ReasoningCoordinator
-from .assistant import (AssistantCore, Assistance, KnowledgeLiteAdvisory,
+from .assistant import (AssistantCore, Assistance, FabricKnowledgeContextResponseAdvisory,
+    KnowledgeLiteAdvisory,
     KnowledgeContextResponseAdvisory, ReportedKnowledgeContext,
     StaticKnowledgeReference, VerifiedKnowledgeContext)
