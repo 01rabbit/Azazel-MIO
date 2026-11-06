@@ -436,8 +436,13 @@ checks and before invoking the provider. An exception before that notification
 is recorded as zero sent; an exception after it is recorded as one sent. A
 legacy adapter without this method is rejected before entry with
 `dispatch_tracking_unavailable`; a successful return without notification is
-also rejected. The notification is an adapter attestation and must not be used
-for an attempt that was not dispatched. The product must provide and verify
+also rejected. If an adapter notifies more than once while the call is active,
+MIO retains the detected violation even if the adapter catches the callback's
+exception; the job terminates as `failed` with reason `send_notification_conflict`,
+without a later task, and retains the first sent count and known usage. A late
+notification is rejected without changing an already finished receipt. The
+notification is an adapter attestation and must not be used for an attempt that
+was not dispatched. The product must provide and verify
 this boundary; MIO cannot observe provider dispatch itself. Non-budget calls
 continue to use the existing `__call__` interface.
 

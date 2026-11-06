@@ -1424,5 +1424,6 @@ class AssistantCore:
                 reason = disposition
             receipt = replace(receipt, coordinator_disposition=disposition, reason=reason,
                               state=(receipt.state if disposition == "current" else
+                                     "failed" if receipt.reason == "send_notification_conflict" else
                                      "partial" if sum(receipt.calls_sent.values()) else "failed"))
         return Assistance(payload, receipt)

@@ -141,3 +141,70 @@ def test_grounding_failure_marks_sent_task_failed():
     assert result.state is ReasoningState.VALIDATION_REJECTED
     assert result.generation_receipt.task_results[TASKS[0]] == "failed"
     assert result.generation_receipt.calls_sent[TASKS[0]] == 1
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize("mode", ["swallowed", "propagated", "translated"])
+def test_duplicate_dispatch_notification_is_terminal_even_if_caught(index, mode):
+    class Duplicate(Model):
+        def __init__(self):
+            super().__init__(); self.entries = []
+        def invoke_budgeted(self, task, prompt, on_dispatch):
+            self.entries.append(task)
+            on_dispatch()
+            if task == TASKS[index]:
+                try:
+                    on_dispatch()
+                except RuntimeError:
+                    if mode == "propagated":
+                        raise
+                    if mode == "translated":
+                        raise MioModelBlocked("translated exception")
+            return self(task, prompt)
+    model = Duplicate()
+    assistance = AssistantCore(model=model).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    receipt = assistance.generation_receipt
+    assert assistance.to_dict()["generation_method"] == "static_reference"
+    assert assistance.to_dict()["state"] != "complete"
+    assert receipt.state == "failed" and receipt.reason == "send_notification_conflict"
+    assert receipt.calls_sent == {task: int(i <= index) for i, task in enumerate(TASKS)}
+    assert receipt.task_results[TASKS[index]] == "failed"
+    assert receipt.usage[TASKS[index]] == {"input_tokens": 10, "output_tokens": 2}
+    assert model.entries == list(TASKS[:index + 1])
+    for task in TASKS[:index]:
+        assert receipt.task_results[task] == "validated"
+
+
+def test_late_notification_rejected_without_changing_completed_receipt():
+    class Late(Model):
+        def __init__(self):
+            super().__init__(); self.callbacks = []
+        def invoke_budgeted(self, task, prompt, on_dispatch):
+            self.callbacks.append(on_dispatch)
+            on_dispatch()
+            return self(task, prompt)
+    model = Late(); outcome = run(model, lambda _: budget()); receipt = outcome.generation_receipt
+    assert receipt.state == "complete"
+    for callback in model.callbacks:
+        with pytest.raises(RuntimeError, match="invalid_dispatch_notification"):
+            callback()
+    assert receipt.calls_sent == dict.fromkeys(TASKS, 1) and receipt.reason is None
+
+
+def test_duplicate_notification_reason_survives_coordinator_cancellation():
+    coordinator = ReasoningCoordinator(); f = frame()
+    class DuplicateThenCancel(Model):
+        def invoke_budgeted(self, task, prompt, on_dispatch):
+            on_dispatch()
+            try:
+                on_dispatch()
+            except RuntimeError:
+                pass
+            assert coordinator.cancel(f.trace_id)
+            return self(task, prompt)
+    result = AssistantCore(model=DuplicateThenCancel(), coordinator=coordinator).explain(
+        f, now=NOW, generation_budget=lambda _: budget())
+    receipt = result.generation_receipt
+    assert receipt.coordinator_disposition == "cancelled"
+    assert receipt.state == "failed" and receipt.reason == "send_notification_conflict"
+    assert receipt.calls_sent[TASKS[0]] == 1

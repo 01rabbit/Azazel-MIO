@@ -236,8 +236,9 @@ class BoundedReasoningLoop:
             results = dict(task_results)
             if not done and current_task in results and results[current_task] == "sent":
                 results[current_task] = "failed"
-            return GenerationOutcome("complete" if done else ("partial" if sum(calls_sent.values()) else "failed"),
-                results, dict(calls_sent), dict(usage), reason, dict(selections))
+            receipt_state = ("complete" if done else "failed" if reason == "send_notification_conflict"
+                             else "partial" if sum(calls_sent.values()) else "failed")
+            return GenerationOutcome(receipt_state, results, dict(calls_sent), dict(usage), reason, dict(selections))
 
         def finish(state, hypotheses_out, gaps_out, recommendation_out):
             result = self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated,
@@ -296,19 +297,28 @@ class BoundedReasoningLoop:
                 budget_reason = "dispatch_tracking_unavailable"
                 raise MioModelUnavailable("dispatch_tracking_unavailable")
             active = True
+            notification_conflict = False
             def on_dispatch():
-                if not active or calls_sent[task] != 0:
+                nonlocal notification_conflict
+                if not active:
+                    raise RuntimeError("invalid_dispatch_notification")
+                if calls_sent[task] != 0:
+                    notification_conflict = True
                     raise RuntimeError("invalid_dispatch_notification")
                 calls_sent[task] = 1
                 task_results[task] = "sent"
             try:
                 result = budgeted(task, prompt, on_dispatch)
+                if notification_conflict:
+                    raise MioModelUnavailable("send_notification_conflict")
                 if not calls_sent[task]:
                     budget_reason = "dispatch_tracking_unavailable"
                     raise MioModelUnavailable("dispatch_notification_missing")
                 return result
             finally:
                 active = False
+                if notification_conflict:
+                    budget_reason = "send_notification_conflict"
                 # Only a dispatched call can have usage. This explicit
                 # per-task adapter hook is best-effort and never inferred.
                 if calls_sent[task]:
