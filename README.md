@@ -6,7 +6,7 @@ M.I.O.は、Azazelの観測・知識・運用機能を使い、現場の担当�
 
 Edgeでは現場の検知と通信状態を読み解き、Nexusではシステム全体の運用を支えます。動く場所や利用するモデルが変わっても、M.I.O.としての役割、根拠の扱い、安全上の境界は共通です。
 
-> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。製品別のAI inventoryは2026-11-04時点のスナップショットで、以後のmain更新を含まない場合があります。現在の統合状態を示すものとしてではなく、記録日時と対象SHAを確認して参照してください。
+> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。[製品別のAI inventory](docs/architecture/ai-inventory.md)は2026-11-04時点のスナップショットで、以後のmain更新を含まない場合があります。現在の統合状態を示すものとしてではなく、記録日時と対象SHAを確認して参照してください。
 
 ソースからの導入と最小の試験方法は [Common Python core](#common-python-core) を参照してください。
 
@@ -58,7 +58,7 @@ Azazel-MIOは、製品をまたいで共有するAI補助能力を所有しま�
 | [Azazel-Deception](https://github.com/01rabbit/Azazel-Deception) | 承認されたデコイ環境の隔離・実行・観測 |
 | [Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric) | 製品間で受け渡す共通データ契約 |
 
-共有する通信契約をM.I.O.独自の互換形式として複製せず、Fabricとの責任分担を明確にします。製品間のwire契約はFabricが所有します。一方、現在のM.I.O.内部API（[internal API v1](docs/api-v1.md)。内部frame `mio.situation_frame.v2` は [`src/azazel_mio/contracts.py`](src/azazel_mio/contracts.py) で定義）はM.I.O.が所有しており、Fabric契約への対応付けは未完了です。モデルやruntimeの導入・認可・起動は、利用先の製品が管理します。
+共有する通信契約をM.I.O.独自の互換形式として複製せず、Fabricとの責任分担を明確にします。製品間のwire契約はFabricが所有します。一方、現在のM.I.O.内部API（[internal API v1](docs/api-v1.md)）と内部frame `mio.situation_frame.v2`（[`src/azazel_mio/contracts.py`](src/azazel_mio/contracts.py)で定義）はM.I.O.が所有します。この内部frameはFabricのwire契約ではなく、Fabric契約への対応付けも未完了です。モデルやruntimeの導入・認可・起動は、利用先の製品が管理します。
 
 ## 助言と実行の境界
 
@@ -127,10 +127,10 @@ IssueやPull Requestには、目的、対象製品、入力と出力、権限へ
 **インストール（このチェックアウトから）**
 
 ```sh
-python -m pip install .
+python3 -m pip install .
 ```
 
-開発時は編集可能インストールも使えます: `python -m pip install -e .`（`pyproject.toml` のsetuptools構成による。このREADMEの作成では実行していません）。
+開発時は編集可能インストールも使えます: `python3 -m pip install -e .`（`pyproject.toml` のsetuptools構成による。このREADMEの作成では実行していません）。
 
 ビルド分離が有効なインストールでは、build-system要件の `setuptools>=77.0.3` が必要です。オフライン環境では、同要件を満たすwheelを事前に用意してください。インストール手順はこのREADMEの更新時点で実行確認していません。
 
@@ -138,11 +138,11 @@ python -m pip install .
 
 **試験**
 
-`pyproject.toml` は試験ランナーを宣言していません。一部のテストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。`docs/assessment-baseline.md` の集中unittest手順は Python 3.12+ を要求します。一方、パッケージは Python 3.11+ を要求しますが、3.11での全試験実行は確認していません。
+`pyproject.toml` は試験ランナーを宣言していません。一部のテストは `import pytest` を使うため、`pytest` を別途導入して実行します（このREADMEの作成では実行していません）。`docs/assessment-baseline.md` の限定的なunittest baseline手順は Python 3.12+ を要求します。これはpytestを使う全テストの代替ではありません。一方、パッケージは Python 3.11+ を要求しますが、3.11での全試験実行は確認していません。
 
 ```sh
-python -m pip install pytest
-PYTHONPATH=src python -m pytest -q
+python3 -m pip install pytest
+PYTHONPATH=src python3 -m pytest -q
 ```
 
 **参照文書**
@@ -153,6 +153,6 @@ PYTHONPATH=src python -m pytest -q
 
 **任意・評価用の機能（既定の試験には含まれません）**
 
-- 実モデル確認: POSIX環境と、ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。合成の助言フレームで最大3回の順序固定モデル呼出しを行います。指定tagが未導入なら失敗終了します。モデル実行の後、同じコマンド内で同じフレームをモデルなしで実行し、決定論的フォールバックと`MODEL_NOT_AVAILABLE`を確認します。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
+- 実モデル確認: POSIX環境と、ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。スクリプトの接続先はloopback（`127.0.0.1`）固定です。成功には、合成の助言フレームについて固定された3種類のモデルタスクを順番に各1回完了する必要があります。指定tagが未導入なら失敗終了します。モデル実行の後、同じコマンド内で同じフレームをモデルなしで実行し、決定論的フォールバックと`MODEL_NOT_AVAILABLE`を確認します。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
 - オフラインplaybook ranking: 評価マイルストーンです。モデルの有効化、自動学習、認可、実行は含みません（[offline ranking](docs/offline-playbook-ranking.md)）。
 - Assessment baseline: experimentalです（[assessment baseline](docs/assessment-baseline.md)）。
