@@ -1773,6 +1773,25 @@ def test_fabric_incomplete_snapshot_does_not_hide_complete_knowledge_lite():
     assert len(out['knowledge']) == 1
 
 
+def test_fabric_incomplete_check_survives_competing_checks_and_knowledge_lite():
+    payload = fabric_response()
+    payload['snapshot']['state'] = 'partial'
+    crowded_frame = replace(frame(),
+        mission='Investigate authentication failures and honeypot observations',
+        known_facts=('Observed normalized event outcome: allowed',),
+        knowledge_status='timeout')
+
+    out = AssistantCore().explain(crowded_frame, now=NOW,
+        knowledge_lite_advisories=(lite_advisory(),),
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+
+    assert out['dependency_outcome']['knowledge'] == 'timeout'
+    assert out['next_checks'][0] == (
+        'Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot.')
+    assert out['next_checks'][1].startswith('Recheck the cited Knowledge Lite claim')
+    assert len(out['next_checks']) == 4
+
+
 @pytest.mark.parametrize('snapshot_state', ['partial', 'stale'])
 def test_fabric_incomplete_snapshot_does_not_mask_rejected_knowledge(snapshot_state):
     payload = fabric_response()
