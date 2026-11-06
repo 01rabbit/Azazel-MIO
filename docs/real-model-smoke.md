@@ -31,17 +31,21 @@ Start the already installed Ollama service and use a local model tag:
 PYTHONPATH=src python3 tools/real_model_smoke.py --model qwen3.5:0.8b
 ```
 
+The command uses `SIGALRM`/`setitimer` for its deadline and requires a POSIX
+environment; native Windows is not supported.
+
 The script submits the synthetic frame through the normal MIO `AssistantCore`
 and validates the bounded response using MIO's prompt-derived JSON schema. It
 requires exactly the hypothesis, evidence-gap, and recommendation tasks to
 complete once each with `done_reason=stop`, requires no transport failure, and
 puts a hard 150-second deadline around the whole run.
-It then runs the same frame with no model and verifies that MIO returns its
-deterministic fallback with `MODEL_NOT_AVAILABLE`. The JSON report includes
-the model tag, Ollama version, task sequence, local token counts and observed
-elapsed times; it does not declare a performance threshold. Record the full
-source commit/tree and local model digest in the restricted run record when
-using the result as evidence.
+After a successful model run, the same command runs the frame again with no
+model and verifies that MIO returns its deterministic fallback with
+`MODEL_NOT_AVAILABLE`. A missing model tag fails before this fallback step. The
+JSON report includes the model tag, Ollama version, task sequence, local token
+counts and observed elapsed times; it does not declare a performance threshold.
+Record the full source commit/tree and local model digest in the restricted run
+record when using the result as evidence.
 
 The transport enforces the task sequence itself: before building any request it
 accepts only the next task in the exact order `generate_hypotheses`,
