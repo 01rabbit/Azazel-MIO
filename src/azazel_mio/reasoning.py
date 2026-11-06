@@ -234,7 +234,7 @@ class BoundedReasoningLoop:
             done = state is ReasoningState.COMPLETE
             reason = None if done else (budget_reason or ("malformed" if "output_invalid" in errors else state.value))
             results = dict(task_results)
-            if not done and current_task in results:
+            if not done and current_task in results and results[current_task] == "sent":
                 results[current_task] = "failed"
             return GenerationOutcome("complete" if done else ("partial" if sum(calls_sent.values()) else "failed"),
                 results, dict(calls_sent), dict(usage), reason, dict(selections))
@@ -250,12 +250,16 @@ class BoundedReasoningLoop:
         def compile_task(task: str, **kwargs) -> str:
             nonlocal budget_reason, current_task
             current_task = task
+            if budget_for_task is not None:
+                task_results[task] = "not_sent"
             try:
                 if budget_for_task is None:
                     prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, **kwargs)
                 else:
                     try:
                         budget = budget_for_task(task)
+                    except BudgetError:
+                        raise
                     except Exception:
                         raise BudgetError("count_unknown", "budget_unavailable") from None
                     prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, budget=budget, **kwargs)
@@ -267,8 +271,8 @@ class BoundedReasoningLoop:
                     selections[task] = chosen
                     prompt = prompt.text
             except BudgetError as exc:
-                budget_reason = exc.reason
-                errors.append(exc.reason)
+                budget_reason = exc.reason if exc.reason in {"budget_exhausted", "count_unknown"} else "count_unknown"
+                errors.append(budget_reason)
                 task_results[task] = "not_sent"
                 raise PromptCompileFailure from None
             except Exception as exc:
@@ -283,24 +287,40 @@ class BoundedReasoningLoop:
             return prompt
 
         def invoke(task: str, prompt: str):
-            if budget_for_task is not None:
-                calls_sent[task] += 1
+            nonlocal budget_reason
+            if budget_for_task is None:
+                return self.model(task, prompt)
+            task_results[task] = "not_sent"
+            budgeted = getattr(self.model, "invoke_budgeted", None)
+            if not callable(budgeted):
+                budget_reason = "dispatch_tracking_unavailable"
+                raise MioModelUnavailable("dispatch_tracking_unavailable")
+            active = True
+            def on_dispatch():
+                if not active or calls_sent[task] != 0:
+                    raise RuntimeError("invalid_dispatch_notification")
+                calls_sent[task] = 1
                 task_results[task] = "sent"
             try:
-                return self.model(task, prompt)
+                result = budgeted(task, prompt, on_dispatch)
+                if not calls_sent[task]:
+                    budget_reason = "dispatch_tracking_unavailable"
+                    raise MioModelUnavailable("dispatch_notification_missing")
+                return result
             finally:
-                # Usage is optional explicit adapter telemetry, never inferred
-                # from text or stale global last-call attributes.
-                if budget_for_task is not None:
-                    get_usage = getattr(self.model, "usage_for_task", None)
-                    if callable(get_usage):
-                        try:
+                active = False
+                # Only a dispatched call can have usage. This explicit
+                # per-task adapter hook is best-effort and never inferred.
+                if calls_sent[task]:
+                    try:
+                        get_usage = getattr(self.model, "usage_for_task", None)
+                        if callable(get_usage):
                             observed = get_usage(task)
                             if (type(observed) is dict and set(observed) == {"input_tokens", "output_tokens"}
                                     and all(type(v) is int and v >= 0 for v in observed.values())):
                                 usage[task] = dict(observed)
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
 
         def enter_model_adapter(task: str) -> None:
             trace.record(state="adapter_entered", kind="model_adapter", payload={"task": task})
@@ -332,8 +352,6 @@ class BoundedReasoningLoop:
                 valid = False
             if not valid:
                 errors.append("output_invalid")
-            elif budget_for_task is not None:
-                task_results[task] = "validated"
             return valid
 
         trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id, "frame_material_digest": "sha256:" + frame.canonical_digest()})
@@ -443,6 +461,8 @@ class BoundedReasoningLoop:
                          "proposed_role": trusted_alternatives[h.hypothesis_alternative_id],
                          "verification": "model_proposed_unverified"} for h in hypotheses]})
 
+        if budget_for_task is not None:
+            task_results["generate_hypotheses"] = "validated"
         if model_calls >= self.budget.max_model_calls:
             errors.append("model_budget_exhausted_before_gap_planning")
             return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, (), None)
@@ -498,6 +518,8 @@ class BoundedReasoningLoop:
         if not gap_check.ok:
             errors.extend(gap_check.errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+        if budget_for_task is not None:
+            task_results["identify_evidence_gaps"] = "validated"
         trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gaps", payload={"ids": [g.gap_id for g in gaps]})
         if frame_gap_ids:
             trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="frame_derived_gaps",
@@ -719,6 +741,8 @@ class BoundedReasoningLoop:
         if not rec_check.ok:
             errors.extend(rec_check.errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, recommendation)
+        if budget_for_task is not None:
+            task_results["recommend"] = "validated"
         trace.record(
             state=ReasoningState.RECOMMENDATION_READY.value,
             kind="recommendation",

@@ -1,6 +1,6 @@
 # M.I.O. internal API v1
 
-`azazel_mio.assistant.AssistantCore(model=None, *, coordinator=None).explain(frame, *, knowledge=(), references=(), reported_knowledge=(), now: str, knowledge_lite_advisories=(), knowledge_attempted: bool = True, knowledge_context_response=None, fabric_knowledge_context_response=None, cancel_check=None, stale_check=None) -> Assistance`
+`azazel_mio.assistant.AssistantCore(model=None, *, coordinator=None).explain(frame, *, knowledge=(), references=(), reported_knowledge=(), now: str, knowledge_lite_advisories=(), knowledge_attempted: bool = True, knowledge_context_response=None, fabric_knowledge_context_response=None, cancel_check=None, stale_check=None, generation_budget=None) -> Assistance`
 
 `frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
 `AssistantCore(model, coordinator=...)` may opt into product-neutral request lifecycle
@@ -429,8 +429,29 @@ request; MIO does not itself configure the provider. It rejects a required fourt
 validates each raw response against the effective schema before normalization;
 lossy normalization is `malformed`. `ReasoningOutcome.generation_receipt` is
 a separate `GenerationOutcome` with task statuses, sent-call counts, optional
-usage, reason and per-task selections. Counts include calls that raised. Usage
-is `None` unless the model adapter implements `usage_for_task(task)` and returns
+usage, reason and per-task selections. A budgeted adapter must implement
+`invoke_budgeted(task, prompt, on_dispatch)`. It must call `on_dispatch()` once,
+synchronously at the actual provider dispatch boundary, after all pre-send gate
+checks and before invoking the provider. An exception before that notification
+is recorded as zero sent; an exception after it is recorded as one sent. A
+legacy adapter without this method is rejected before entry with
+`dispatch_tracking_unavailable`; a successful return without notification is
+also rejected. The notification is an adapter attestation and must not be used
+for an attempt that was not dispatched. The product must provide and verify
+this boundary; MIO cannot observe provider dispatch itself. Non-budget calls
+continue to use the existing `__call__` interface.
+
+Typed `BudgetError("budget_exhausted", ...)` and `BudgetError("count_unknown", ...)`
+from the budget callback retain their reason; unexpected callback exceptions are
+`count_unknown`. Completed task statuses remain `validated` on a later stop;
+a compile/gate refusal is `not_sent`, and an unsuccessfully finished dispatched
+task is `failed`. A receipt's `coordinator_disposition` is a separate closed
+value: `current`, `cancelled`, `superseded`, `backpressure`,
+`in_flight_duplicate`, `pre_restart`, `unknown_or_evicted`, `ticket_mismatch`,
+`already_completed`, or `unknown` (or `None` without a coordinator). A later
+coordinator disposition does not erase an earlier primary failure reason.
+
+Usage is `None` unless the model adapter implements `usage_for_task(task)` and returns
 `{"input_tokens": int, "output_tokens": int}` for that task; no value is
 inferred. A receipt marked `complete` means the MIO semantic loop completed;
 the product must still check actual usage, finish/integrity, deadline,

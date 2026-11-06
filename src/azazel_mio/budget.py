@@ -42,3 +42,7 @@ class GenerationOutcome:
     usage: dict[str, Any | None]
     reason: str | None
     selections: dict[str, PromptSelection]
+    # Closed coordinator disposition is distinct from the original outcome.
+    coordinator_disposition: Literal["current", "cancelled", "superseded", "backpressure",
+        "in_flight_duplicate", "pre_restart", "unknown_or_evicted", "ticket_mismatch",
+        "already_completed", "unknown"] | None = None

@@ -92,6 +92,9 @@ class Model:
             return {"evidence_gaps": []}
         return {"summary": "uncertain", "recommended_action": "OBSERVE", "rationale": "review",
                 "evidence_refs": ["ev:ssh:1"], "limitations": ["unverified"]}
+    def invoke_budgeted(self, task, prompt, on_dispatch):
+        on_dispatch()
+        return self(task, prompt)
     def usage_for_task(self, task):
         return {"input_tokens": 10, "output_tokens": 2}
 

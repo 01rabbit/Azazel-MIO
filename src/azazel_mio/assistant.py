@@ -1409,7 +1409,20 @@ class AssistantCore:
                 payload.pop("knowledge_context_response_advisory", None)
                 payload.pop("fabric_knowledge_context_advisory", None)
         receipt = getattr(outcome, "generation_receipt", None)
-        if receipt is not None and coordinator is not None and cycle_disposition != "current":
-            receipt = replace(receipt, state="partial" if sum(receipt.calls_sent.values()) else "failed",
-                              reason="superseded")
+        if receipt is not None and coordinator is not None:
+            disposition = {
+                "current": "current", "backpressure": "backpressure",
+                "in_flight_duplicate": "in_flight_duplicate",
+                "stale_cycle_cancelled": "cancelled", "stale_cycle_superseded": "superseded",
+                "stale_pre_restart_cycle": "pre_restart", "stale_unknown_or_evicted_cycle": "unknown_or_evicted",
+                "stale_ticket_mismatch": "ticket_mismatch", "stale_cycle_already_completed": "already_completed",
+            }.get(cycle_disposition, "unknown")
+            reason = receipt.reason
+            if disposition in {"backpressure", "in_flight_duplicate"}:
+                reason = disposition  # no loop was started for this request
+            elif disposition != "current" and reason is None:
+                reason = disposition
+            receipt = replace(receipt, coordinator_disposition=disposition, reason=reason,
+                              state=(receipt.state if disposition == "current" else
+                                     "partial" if sum(receipt.calls_sent.values()) else "failed"))
         return Assistance(payload, receipt)
