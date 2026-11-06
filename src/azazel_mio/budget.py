@@ -1,0 +1,44 @@
+"""Local generation budget values; transport and clocks belong to products."""
+from dataclasses import dataclass
+from typing import Any, Callable, Literal
+
+
+@dataclass(frozen=True)
+class GenerationBudget:
+    input_tokens: int
+    output_tokens: int
+    context_limit: int
+    safety_margin: int
+    count_tokens: Callable[[str], int | None]
+
+
+@dataclass(frozen=True)
+class PromptSelection:
+    coverage: Literal["full", "selected"]
+    kept: tuple[str, ...]
+    dropped: tuple[tuple[str, str], ...]
+    token_count: int | None
+    template_version: str
+
+
+@dataclass(frozen=True)
+class CompiledPrompt:
+    text: str
+    selection: PromptSelection
+
+
+class BudgetError(ValueError):
+    def __init__(self, reason: Literal["budget_exhausted", "count_unknown"], detail: str):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class GenerationOutcome:
+    state: Literal["complete", "partial", "failed"]
+    task_results: dict[str, str]
+    calls_sent: dict[str, int]
+    usage: dict[str, Any | None]
+    reason: str | None
+    selections: dict[str, PromptSelection]

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import html
@@ -126,6 +126,7 @@ class FabricKnowledgeContextResponseAdvisory:
 @dataclass(frozen=True)
 class Assistance:
     _payload: dict[str, Any]
+    generation_receipt: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         return copy.deepcopy(self._payload)
@@ -1105,7 +1106,7 @@ class AssistantCore:
                 knowledge_lite_advisories=(), knowledge_attempted: bool = True,
                 knowledge_context_response=None,
                 fabric_knowledge_context_response=None,
-                cancel_check=None, stale_check=None) -> Assistance:
+                cancel_check=None, stale_check=None, generation_budget=None) -> Assistance:
         if type(knowledge_attempted) is not bool:
             raise TypeError("knowledge_attempted_must_be_bool")
         instant = _time(now)
@@ -1168,18 +1169,27 @@ class AssistantCore:
             if fabric_advisory is None:
                 rejected = True
                 knowledge_expired = knowledge_expired or fabric_expired
-        refs = tuple(dict.fromkeys(ref for ctx in contexts + static_references for ref in ctx["evidence_refs"]
-                                   if model_id_ok(ref, "evidence_ref")))[:32]
-        reported_refs = tuple(dict.fromkeys(
-            ref for ctx in reported_contexts
-            for ref in ctx["record_refs"] + ctx["source_refs"]
-            if model_id_ok(ref, "evidence_ref")))
-        refs = tuple(dict.fromkeys(refs + reported_refs))[:32]
-        if refs:
+        raw_refs = [ref for ctx in contexts + static_references for ref in ctx["evidence_refs"]]
+        raw_refs += [ref for ctx in reported_contexts for ref in ctx["record_refs"] + ctx["source_refs"]]
+        refs = tuple(dict.fromkeys(ref for ref in raw_refs if model_id_ok(ref, "evidence_ref")))[:32]
+        if generation_budget is not None:
+            all_refs = tuple(dict.fromkeys(tuple(frame.knowledge_refs) + refs))
+            source_incomplete = (any(not model_id_ok(ref, "evidence_ref") for ref in raw_refs)
+                                 or len(set(raw_refs)) > 32 or len(all_refs) > 16)
+            refs = all_refs[:16]
+        else:
+            source_incomplete = False
+        if refs or source_incomplete:
             payload = frame.to_dict()
             payload["knowledge_refs"] = list(refs)
-            payload["knowledge_status"] = "available"
-            payload["provenance"]["knowledge_refs"] = ["knowledge"]
+            if refs:
+                payload["knowledge_status"] = "available"
+                if generation_budget is not None:
+                    sources = payload["provenance"].get("knowledge_refs", [])
+                    payload["provenance"]["knowledge_refs"] = list(dict.fromkeys(sources + ["knowledge"]))
+                else:
+                    payload["provenance"]["knowledge_refs"] = ["knowledge"]
+            payload["truncated"] = payload["truncated"] or source_incomplete
             frame = MioSituationFrame.from_dict(payload)
         selection = select_playbook(frame)
         broker = CapabilityBroker()
@@ -1216,7 +1226,8 @@ class AssistantCore:
             try:
                 outcome = loop.run(frame=frame, playbook=selection.playbook,
                                    cycle_id=ticket.cycle_id if ticket is not None else "cycle-1",
-                                   selection=selection, cancel_check=cancel_check, stale_check=stale_check)
+                                   selection=selection, cancel_check=cancel_check, stale_check=stale_check,
+                                   budget_for_task=generation_budget)
                 if coordinator is not None and ticket is not None:
                     if outcome.state in {ReasoningState.OPERATOR_CANCELLED, ReasoningState.STALE_SUPERSEDED}:
                         coordinator.cancel_ticket(ticket, reason=outcome.state.value)
@@ -1232,7 +1243,8 @@ class AssistantCore:
         interrupted = outcome.state in {
             ReasoningState.OPERATOR_CANCELLED, ReasoningState.STALE_SUPERSEDED}
         handoff = outcome.handoff.to_dict() if outcome.handoff is not None else None
-        if outcome.state is ReasoningState.VALIDATION_REJECTED and handoff is not None:
+        if (outcome.state is ReasoningState.VALIDATION_REJECTED or
+                (generation_budget is not None and outcome.state is not ReasoningState.COMPLETE)) and handoff is not None:
             # A later-stage rejection may carry earlier, individually valid
             # model hypotheses in the no-model handoff. The cycle as a whole
             # is rejected, so its public handoff must be frame-only.
@@ -1243,7 +1255,8 @@ class AssistantCore:
              **({"alternative_slot_verification": "model_proposed_unverified"}
                 if h.hypothesis_alternative_id is not None else {})}
             for h in outcome.hypotheses
-        ] if not interrupted and outcome.state is not ReasoningState.VALIDATION_REJECTED else []
+        ] if (not interrupted and outcome.state is not ReasoningState.VALIDATION_REJECTED
+              and (generation_budget is None or outcome.state is ReasoningState.COMPLETE)) else []
         # Static alternatives are questions to discriminate, never observations
         # or asserted threat attribution. They remain labelled without a model.
         if not hypotheses and not interrupted:
@@ -1361,7 +1374,7 @@ class AssistantCore:
         payload = {
             "schema_version": "mio.assistance.v1", "trace_id": frame.trace_id,
             "frame_id": frame.frame_id,
-            "generation_method": "model" if self.model is not None and outcome.hypotheses and outcome.state is not ReasoningState.VALIDATION_REJECTED else "static_reference",
+            "generation_method": "model" if self.model is not None and outcome.hypotheses and outcome.state is not ReasoningState.VALIDATION_REJECTED and (generation_budget is None or outcome.state is ReasoningState.COMPLETE) else "static_reference",
             "state": outcome.state.value,
             **({"validation_diagnostic": dict(outcome.validation_diagnostic)}
                if getattr(outcome, "validation_diagnostic", None) is not None else {}),
@@ -1395,4 +1408,8 @@ class AssistantCore:
                 })
                 payload.pop("knowledge_context_response_advisory", None)
                 payload.pop("fabric_knowledge_context_advisory", None)
-        return Assistance(payload)
+        receipt = getattr(outcome, "generation_receipt", None)
+        if receipt is not None and coordinator is not None and cycle_disposition != "current":
+            receipt = replace(receipt, state="partial" if sum(receipt.calls_sent.values()) else "failed",
+                              reason="superseded")
+        return Assistance(payload, receipt)

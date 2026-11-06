@@ -56,3 +56,5 @@ from .assistant import (AssistantCore, Assistance, FabricKnowledgeContextRespons
     KnowledgeLiteAdvisory,
     KnowledgeContextResponseAdvisory, ReportedKnowledgeContext,
     StaticKnowledgeReference, VerifiedKnowledgeContext)
+
+from .budget import GenerationBudget, PromptSelection, CompiledPrompt, BudgetError, GenerationOutcome
