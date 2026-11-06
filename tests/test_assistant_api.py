@@ -1767,8 +1767,9 @@ def test_fabric_incomplete_snapshot_does_not_hide_complete_knowledge_lite():
     assert out['dependency_outcome']['knowledge'] == 'available'
     assert out['fabric_knowledge_context_advisory']['snapshot_state'] == 'stale'
     assert 'KNOWLEDGE_CONTEXT_STALE' in out['unknowns']
-    assert any('partial or stale advisory is not a complete current snapshot' in check
-               for check in out['next_checks'])
+    assert out['next_checks'][0] == (
+        'Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot.')
+    assert len(out['next_checks']) <= 4
     assert len(out['knowledge']) == 1
 
 

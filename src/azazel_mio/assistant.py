@@ -1328,9 +1328,6 @@ class AssistantCore:
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(
                 "Confirm whether an authorized Knowledge context was requested and supplied for this frame.")
-        if fabric_advisory and fabric_advisory["snapshot_state"] in {"partial", "stale"}:
-            scenario_checks.append(
-                "Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot.")
         deception_relevant = (
             selection.playbook.playbook_id == "deception-observation-v1"
             or bool(re.search(r"\b(?:deception|decoy|honeypot|az[-_ ]?06)\b",
@@ -1353,6 +1350,10 @@ class AssistantCore:
         if lite_advisories:
             check = "Recheck the cited Knowledge Lite claim and its revocation status against an authorized current source before relying on it."
             checks = list(dict.fromkeys([check] + checks))[:4]
+        if fabric_advisory and fabric_advisory["snapshot_state"] in {"partial", "stale"}:
+            check = "Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot."
+            checks = [check] + [item for item in checks if item != check]
+            checks = checks[:4]
         payload = {
             "schema_version": "mio.assistance.v1", "trace_id": frame.trace_id,
             "frame_id": frame.frame_id,
