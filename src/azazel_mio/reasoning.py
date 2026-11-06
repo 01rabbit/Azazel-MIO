@@ -32,8 +32,9 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
+from .model_schema import validate_model_response
 from .observation_objectives import MioObservationObjective, ObservationProjectionReport, project_observation_report
-from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
+from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, compiled_model_response_schema, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
 from .tactical_grounding import (
     claim_scope_violations,
@@ -204,6 +205,7 @@ class BoundedReasoningLoop:
         stale_check: CancelCheck | None = None,
         selection: PlaybookSelection | None = None,
         broker: CapabilityBroker | None = None,
+        strict_model_response: bool = False,
     ) -> ReasoningOutcome:
         # ``broker``: this cycle's own broker (ReasoningCoordinator.run_cycle
         # passes a new one per cycle); defaults to the loop's broker.
@@ -239,6 +241,17 @@ class BoundedReasoningLoop:
 
         def enter_model_adapter(task: str) -> None:
             trace.record(state="adapter_entered", kind="model_adapter", payload={"task": task})
+
+        def response_valid(task: str, prompt: str, raw: Any) -> bool:
+            if not strict_model_response:
+                return True
+            try:
+                valid = validate_model_response(raw, compiled_model_response_schema(task, prompt))
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                errors.append("output_invalid")
+            return valid
 
         trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id, "frame_material_digest": "sha256:" + frame.canonical_digest()})
         selection = guard_selection(playbook, selection)  # invalid playbook -> generic, never compiled
@@ -289,6 +302,8 @@ class BoundedReasoningLoop:
         if interrupted is not None:
             return finish(interrupted, (), (), None)
 
+        if not response_valid("generate_hypotheses", prompt, raw_h):
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
         items = raw_h.get("hypotheses", []) if isinstance(raw_h, Mapping) else []
         if not isinstance(items, list):
             errors.append("hypotheses_not_list")
@@ -363,6 +378,8 @@ class BoundedReasoningLoop:
         except Exception as exc:
             errors.append(_exception_code("model_gap_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
+        if not response_valid("identify_evidence_gaps", prompt, raw_g):
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
         gap_items = raw_g.get("evidence_gaps", []) if isinstance(raw_g, Mapping) else []
         if not isinstance(gap_items, list):
             gap_items = []
@@ -487,6 +504,8 @@ class BoundedReasoningLoop:
             except Exception as exc:
                 errors.append(_exception_code("model_hypothesis_update_error", exc))
                 return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+            if not response_valid("update_hypotheses", prompt, raw_u):
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
             if not isinstance(raw_u, Mapping):
                 errors.append("hypothesis_update_not_mapping")
                 return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
@@ -577,6 +596,8 @@ class BoundedReasoningLoop:
         interrupted = self._interrupted(cancel_check, stale_check, errors)
         if interrupted is not None:
             return finish(interrupted, hypotheses, gaps, None)
+        if not response_valid("recommend", prompt, raw_r):
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
         if not isinstance(raw_r, Mapping):
             errors.append("recommendation_not_mapping")
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
