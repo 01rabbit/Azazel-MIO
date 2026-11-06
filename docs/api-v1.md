@@ -228,6 +228,17 @@ and `inference-1`, `inference-2`, … in response order. Each inference's
 are preserved while source identifiers do not appear in the output. Malformed,
 duplicate, or dangling source references still reject the whole payload.
 
+A `partial` or `stale` snapshot remains visible in this separate unverified
+advisory, but it is not reported as a healthy Knowledge dependency. When it is
+the only Knowledge context, `dependency_outcome.knowledge` is `unavailable`,
+the output includes the fixed `KNOWLEDGE_CONTEXT_PARTIAL` or
+`KNOWLEDGE_CONTEXT_STALE` unknown, and `next_checks` asks for an authorized
+current full-node snapshot. Here `unavailable` means no complete current
+snapshot was supplied; it does not claim that the transport or service was
+unreachable. A separate complete Knowledge source retains the aggregate
+`available` outcome while the incomplete Fabric receipt and its unknown remain
+visible.
+
 Copied prose is refused, not shown, when it contains a non-global IPv4 or IPv6
 literal; a MAC literal in colon, hyphen or Cisco dotted form; labelled shorthand IPv4 with
 two or three numeric parts (for example `ip 127.1` or `src:10.1`) that expands to a non-global
@@ -312,10 +323,11 @@ IPv6 suffixes that begin with a private-looking group are refused fail-closed.
 All provider claims are source-reported, unverified and advisory-only. They are
 never converted into `observations`, known facts, `knowledge_refs`, evidence,
 authorization or model prompt material, and free text is carried as inert data.
-A valid response marks `dependency_outcome.knowledge` `available` only when the
-frame has no stronger outcome. This means the response passed MIO validation
-and is within its time window; it does not mean its claims were independently
-corroborated. Request and correlation identifiers are checked for shape only:
+A valid `complete` response marks `dependency_outcome.knowledge` `available`
+only when the frame has no stronger outcome. A `partial` or `stale` response
+uses `unavailable` as described above. This means the response passed MIO
+validation and is within its time window; it does not mean its claims were
+independently corroborated. Request and correlation identifiers are checked for shape only:
 this API receives no corresponding request and does not verify that they match
 one. When the legacy and Fabric advisory inputs are both supplied, a valid
 input can keep the aggregate dependency outcome `available` while a rejected

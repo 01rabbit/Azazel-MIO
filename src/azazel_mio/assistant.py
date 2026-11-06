@@ -1263,6 +1263,8 @@ class AssistantCore:
             unknowns.insert(0, "KNOWLEDGE_CONTEXT_REJECTED")
         if knowledge_expired:
             unknowns.insert(0, "KNOWLEDGE_CONTEXT_EXPIRED")
+        if fabric_advisory and fabric_advisory["snapshot_state"] in {"partial", "stale"}:
+            unknowns.insert(0, f"KNOWLEDGE_CONTEXT_{fabric_advisory['snapshot_state'].upper()}")
         check_playbook = DEFAULT_PLAYBOOKS[AUTH_PLAYBOOK_ID] if auth_context else selection.playbook
         checks = list(check_playbook.discriminating_questions[:4])
         if not checks:
@@ -1275,14 +1277,24 @@ class AssistantCore:
             knowledge_outcome = ContextDependencyOutcome.EXPIRED
         elif contexts or reported_contexts or static_references:
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
-        elif ((context_response_advisory or fabric_advisory)
+        elif (context_response_advisory
               and knowledge_outcome is ContextDependencyOutcome.ABSENT):
             knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        elif (lite_advisories
+              and knowledge_outcome is ContextDependencyOutcome.ABSENT):
+            knowledge_outcome = ContextDependencyOutcome.AVAILABLE
+        elif (fabric_advisory
+              and knowledge_outcome is ContextDependencyOutcome.ABSENT):
+            # Keep an incomplete receipt visible as advisory without reporting
+            # the Knowledge dependency as healthy when it is the only source.
+            knowledge_outcome = (
+                ContextDependencyOutcome.AVAILABLE
+                if fabric_advisory["snapshot_state"] == "complete"
+                else ContextDependencyOutcome.UNAVAILABLE
+            )
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             if rejected and not lite_advisories:
                 knowledge_outcome = ContextDependencyOutcome.REJECTED
-            elif lite_advisories:
-                knowledge_outcome = ContextDependencyOutcome.AVAILABLE
         if (knowledge_attempted is False and not rejected
                 and not frame.knowledge_refs
                 and not contexts and not static_references and not reported_contexts and not lite_advisories
@@ -1315,6 +1327,9 @@ class AssistantCore:
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(
                 "Confirm whether an authorized Knowledge context was requested and supplied for this frame.")
+        if fabric_advisory and fabric_advisory["snapshot_state"] in {"partial", "stale"}:
+            scenario_checks.append(
+                "Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot.")
         deception_relevant = (
             selection.playbook.playbook_id == "deception-observation-v1"
             or bool(re.search(r"\b(?:deception|decoy|honeypot|az[-_ ]?06)\b",

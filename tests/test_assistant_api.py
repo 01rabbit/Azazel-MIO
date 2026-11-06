@@ -1734,6 +1734,42 @@ def test_fabric_response_projects_facts_and_inferences_separately_and_stays_out_
                            and 'host-1.example.com' not in p for p in prompts)
 
 
+@pytest.mark.parametrize(('snapshot_state', 'unknown'), [
+    ('partial', 'KNOWLEDGE_CONTEXT_PARTIAL'),
+    ('stale', 'KNOWLEDGE_CONTEXT_STALE'),
+])
+def test_fabric_incomplete_snapshot_stays_advisory_and_is_not_reported_available(
+        snapshot_state, unknown):
+    payload = fabric_response()
+    payload['snapshot']['state'] = snapshot_state
+
+    out = run_fabric(payload)
+
+    assert out['fabric_knowledge_context_advisory']['snapshot_state'] == snapshot_state
+    assert out['fabric_knowledge_context_advisory']['trust'] == 'unverified_advisory_only'
+    assert out['dependency_outcome']['knowledge'] == 'unavailable'
+    assert unknown in out['unknowns']
+    assert any('partial or stale advisory is not a complete current snapshot' in check
+               for check in out['next_checks'])
+    assert out['knowledge'] == []
+
+
+def test_fabric_incomplete_snapshot_does_not_hide_complete_knowledge_lite():
+    payload = fabric_response()
+    payload['snapshot']['state'] = 'stale'
+
+    out = AssistantCore().explain(frame(), now=NOW,
+        knowledge_lite_advisories=(lite_advisory(),),
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+
+    assert out['dependency_outcome']['knowledge'] == 'available'
+    assert out['fabric_knowledge_context_advisory']['snapshot_state'] == 'stale'
+    assert 'KNOWLEDGE_CONTEXT_STALE' in out['unknowns']
+    assert any('partial or stale advisory is not a complete current snapshot' in check
+               for check in out['next_checks'])
+    assert len(out['knowledge']) == 1
+
+
 def test_fabric_response_default_shape_unchanged_when_absent():
     out = AssistantCore().explain(frame(), now=NOW).to_dict()
     assert 'fabric_knowledge_context_advisory' not in out
