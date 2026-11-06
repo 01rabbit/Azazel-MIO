@@ -1,6 +1,6 @@
 # M.I.O. internal API v1
 
-`azazel_mio.assistant.AssistantCore(model=None, *, coordinator=None).explain(frame, *, knowledge=(), references=(), reported_knowledge=(), now: str, knowledge_lite_advisories=(), knowledge_attempted: bool = True, knowledge_context_response=None, fabric_knowledge_context_response=None, cancel_check=None, stale_check=None) -> Assistance`
+`azazel_mio.assistant.AssistantCore(model=None, *, coordinator=None).explain(frame, *, knowledge=(), references=(), reported_knowledge=(), now: str, knowledge_lite_advisories=(), knowledge_attempted: bool = True, knowledge_context_response=None, fabric_knowledge_context_response=None, cancel_check=None, stale_check=None, generation_budget=None) -> Assistance`
 
 `frame` is `azazel_mio.contracts.MioSituationFrame` (existing Edge v2 semantics).
 `AssistantCore(model, coordinator=...)` may opt into product-neutral request lifecycle
@@ -89,7 +89,7 @@ actually fits a slot. The prose remains model-proposed and unverified; slot role
 are not evidence, facts, or authority, and MIO does not claim semantic competition
 is validated. Adapters must return the new field and use IDs from the supplied enum. Invalid slot selections end in
 `validation_rejected` and the deterministic no-model handoff. Prompt template
-version is `1.5.0`. Custom playbooks must define one unique slot per prompt and at
+version is `1.6.0`. Custom playbooks must define one unique slot per prompt and at
 least one benign or unresolved role. There is no enforcement operation or
 executable recommendation.
 
@@ -396,3 +396,80 @@ is used to infer that a delayed bootstrap cannot run. There is no process-exit
 flush guarantee; products requiring durable audit persistence must monitor the
 counters and own persistence. Independently constructed families each own one
 reservation; applications should reuse a broker family across reasoning cycles.
+
+
+## Opt-in generation budget (internal)
+
+`GenerationBudget(input_tokens, output_tokens, context_limit, safety_margin, count_tokens)`
+represents one task's fixed budget. The product supplies `count_tokens(prompt)`
+for its fixed model, tokenizer and complete chat template, including injected
+schema and other overhead. It returns an exact non-negative integer or `None`.
+Booleans, negative values and unknown counts are rejected. MIO does not
+estimate tokens from characters, operate a clock or manage a process.
+
+`PromptCompiler.compile(..., budget=budget)` returns `CompiledPrompt` with
+`text` and `selection`; without `budget` it retains the existing string return.
+Each final candidate is counted and must satisfy both `P <= input_tokens` and
+`P + output_tokens + safety_margin <= context_limit`. `BudgetError.reason` is
+`budget_exhausted` if mandatory material cannot fit, or `count_unknown` for an
+invalid/unknown count or an already truncated frame. The frame, all hypotheses,
+trusted rules and source-linked content are kept as whole units. A bounded
+`{"kind": "supplemental_reference", "evidence_refs": [...]}` unit unrelated
+to the frame and hypotheses may be omitted as a whole, with an omission notice;
+prose and source-linked material are not shortened. Selection records contain
+only local unit ordinals and closed reasons, not the source text or identifiers.
+This conservative policy may reject inputs that a future reviewed policy could
+safely reduce. The product must supply its own upstream omission/coverage and
+privacy metadata; an unreported upstream truncation cannot be detected here.
+
+`BoundedReasoningLoop.run(..., budget_for_task=callback)` calls the callback
+for each of the three ordered tasks and counts the actual compiled prompt before
+each send. The product must bind that task’s `output_tokens` cap to its transport
+request; MIO does not itself configure the provider. It rejects a required fourth task as `task_plan_unsupported` and
+validates each raw response against the effective schema before normalization;
+lossy normalization is `malformed`. `ReasoningOutcome.generation_receipt` is
+a separate `GenerationOutcome` with task statuses, sent-call counts, optional
+usage, reason and per-task selections. A budgeted adapter must implement
+`invoke_budgeted(task, prompt, on_dispatch)`. It must call `on_dispatch()` once,
+synchronously at the actual provider dispatch boundary, after all pre-send gate
+checks and before invoking the provider. An exception before that notification
+is recorded as zero sent; an exception after it is recorded as one sent. A
+legacy adapter without this method is rejected before entry with
+`dispatch_tracking_unavailable`; a successful return without notification is
+also rejected. If an adapter notifies more than once while the call is active,
+MIO retains the detected violation even if the adapter catches the callback's
+exception; the job terminates as `failed` with reason `send_notification_conflict`,
+without a later task, and retains the first sent count and known usage. A late
+notification is rejected without changing an already finished receipt. The
+notification is an adapter attestation and must not be used for an attempt that
+was not dispatched. The product must provide and verify
+this boundary; MIO cannot observe provider dispatch itself. Non-budget calls
+continue to use the existing `__call__` interface.
+
+Typed `BudgetError("budget_exhausted", ...)` and `BudgetError("count_unknown", ...)`
+from the budget callback retain their reason; unexpected callback exceptions are
+`count_unknown`. Completed task statuses remain `validated` on a later stop;
+a compile/gate refusal is `not_sent`, and an unsuccessfully finished dispatched
+task is `failed`. A receipt's `coordinator_disposition` is a separate closed
+value: `current`, `cancelled`, `superseded`, `backpressure`,
+`in_flight_duplicate`, `pre_restart`, `unknown_or_evicted`, `ticket_mismatch`,
+`already_completed`, or `unknown` (or `None` without a coordinator). A later
+coordinator disposition does not erase an earlier primary failure reason.
+
+Usage is `None` unless the model adapter implements `usage_for_task(task)` and returns
+`{"input_tokens": int, "output_tokens": int}` for that task; no value is
+inferred. A receipt marked `complete` means the MIO semantic loop completed;
+the product must still check actual usage, finish/integrity, deadline,
+authorization, upstream coverage, and all other receipt conditions before it
+claims a within-budget result. Aggregate coverage conservatively across all
+three selections and upstream coverage; a selected task cannot be upgraded by
+a later full task.
+
+`AssistantCore.explain(..., generation_budget=callback)` returns `Assistance`
+with a separate `.generation_receipt`; `.to_dict()` keeps the existing closed
+`mio.assistance.v1` schema. An incomplete budgeted loop exposes static advice,
+not interim model hypotheses. The product owns tokenization, deadlines,
+transport integrity, cancellation and stop confirmation, and must reject
+missing usage and unsupported or unknown coverage according to its own contract.
+The JSON decoder must reject duplicate keys before passing the raw mapping to
+MIO. Neither this API nor a successful local result grants generation admission.

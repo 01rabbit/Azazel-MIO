@@ -10,6 +10,45 @@ from .lifecycle import ENTRY_HYPOTHESIS_STATUSES
 import re
 
 
+def validate_model_response(value, schema: dict) -> bool:
+    """Validate an unnormalised response against a MIO effective schema.
+
+    This deliberately accepts only the JSON types and schema vocabulary used
+    by ``model_response_schema``.  Callers must reject duplicate JSON keys at
+    decoding time, before a mapping reaches this function.
+    """
+    def check(item, rule):
+        kind = rule.get("type")
+        if kind == "object":
+            if type(item) is not dict:
+                return False
+            props = rule["properties"]
+            if not set(rule.get("required", ())).issubset(item):
+                return False
+            if rule.get("additionalProperties") is False and not set(item).issubset(props):
+                return False
+            return all(check(v, props[k]) for k, v in item.items() if k in props)
+        if kind == "array":
+            return (type(item) is list and len(item) >= rule.get("minItems", 0)
+                    and len(item) <= rule.get("maxItems", len(item))
+                    and all(check(v, rule["items"]) for v in item))
+        if kind == "string":
+            return (type(item) is str and len(item) >= rule.get("minLength", 0)
+                    and len(item) <= rule.get("maxLength", len(item))
+                    and ("enum" not in rule or item in rule["enum"])
+                    and ("pattern" not in rule or re.search(rule["pattern"], item) is not None))
+        if kind == "integer":
+            return (type(item) is int and item >= rule.get("minimum", item)
+                    and item <= rule.get("maximum", item)
+                    and ("enum" not in rule or item in rule["enum"]))
+        return False
+
+    try:
+        return check(value, schema)
+    except (KeyError, TypeError, ValueError, RecursionError):
+        return False
+
+
 def _text(size, *, nonempty=False, nonblank=False):
     result = {"type": "string", "maxLength": size}
     if nonempty or nonblank:
