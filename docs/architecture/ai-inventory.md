@@ -1,8 +1,30 @@
 # AI inventory and source-to-target map
 
+## Current integration status (2026-11-06)
+
+MIO main is `57464216a08456d1b97ef292f7558c21b0ff0b34` (README #46 merged).
+MIO #47 remains an unmerged candidate at
+`a1807bf7abb08788b834ae038f7a8b46d09d0acc`, version
+`0.1.0.dev20261106+gitbb6dcfd`. Its implementation label `bb6dcfd` is separate
+from the consumer source pin `a1807bf`; see [artifact identity](../versioning.md#current-candidate-artifact-2026-11-06).
+Edge main `3e6ccf4d3cffdf0d101c69392c3f7a9cc1a65f0c` still pins MIO
+`9fedb01bc9936531407a5181aa8fa5553ec19d55`. Edge #538 at
+`df98300f08a294f33482ef13579192447c9d0ac0` and Nexus #405 at
+`28900ebec35acdb618776340bfdc3065725d12bf` are unmerged candidates pinning
+MIO `a1807bf7abb08788b834ae038f7a8b46d09d0acc`; neither changes its product's
+main dependency. Fabric stable is `v0.10.0`; Edge, Knowledge, Deception and
+Nexus's optional `fabric` extra declare it, while Gadget remains on `v0.9.0`.
+Fabric Knowledge Context v1 is experimental (integrated by #86).
+Nexus #402/#403 are merged software integrations; the Context broker remains
+default-disabled and uncommissioned. Knowledge #116, MIO #47 and Nexus #405
+remain unmerged. These source observations establish no production model
+admission, HG acceptance, live full-node commissioning, release or deployment.
+
+## Historical source evidence (through 2026-11-04)
+
 **Evidence cut: 2026-11-03, with dated supplements below.** Project-owner direction makes MIO the common AI assistance source of truth; see the [ownership ADR](ownership-adr.md). This is a source inventory, not cross-product owner consent, merged adoption, deployment, or a production contract. The historical inventory evidence base is MIO main `3cdfe4c5643161bc260471e7085d1eb6b44a6fe2`; the original PR base was `03913bfcd6b9658ee6f52bd210297d96a7afdafe`. The documentation refresh was based on MIO main `e4a0e504bae91153f3dcb8105f8658ff80d4e884` and later merged as `4d92b4451a3bf1ec44eb7215ebadb0fd05879c1d` by docs-only PR #39. At the evidence cut, documentation PR [MIO #27](https://github.com/01rabbit/Azazel-MIO/pull/27) was open/draft at public head `c07fdf895c0373f0a7b53d8e1aaabf8468268405`; it merged later on 2026-11-03 as `7a35288fd3fb59c7bf2a3ffd6fcc6a925650db05`. The PR table below remains a historical cut except for dated updates: Edge #525/#532 and #537/#538 statuses were refreshed on 2026-11-04; other historical Edge PR statuses have not been rechecked.
 
-## Current status (dated 2026-11-04)
+## Historical status (dated 2026-11-04)
 
 This dated status supplements the 2026-11-03 evidence cut above; the historical entries below are preserved as historical evidence. The MIO main identity below is the base of Draft PR #42, `5bb09c8d28c57604dc1c63903b98fed7587b49ea`; it does not include a future merge of this documentation update. Versions and PR states are as reported for 2026-11-04 and are not adoption, deployment, or production claims.
 
@@ -83,6 +105,6 @@ The MIO `assess_fast` kernel has no caller inside MIO `src/` in this public code
 
 ## Remaining evidence and contracts
 
-The shared separate-time Knowledge/LLM path is not an established integrated path on MIO or Edge main in this cut. The local #538 candidate harness (see Current status) exercised an Edge process route on its candidate source with synthetic input, and it is not main evidence. Synthetic local process exercises, fixtures and single-event model smokes support only their specific route and source version. They do not establish live producer authentication/full-node interoperability, external model approval, hostile-load (HG) behavior, HIL, hardware latency/resource guarantees, admission gates, main/release adoption, or production operation.
+The shared separate-time Knowledge/LLM path is not an established integrated path on MIO or Edge main in this cut. The local #538 candidate harness (see Historical status) exercised an Edge process route on its candidate source with synthetic input, and it is not main evidence. Synthetic local process exercises, fixtures and single-event model smokes support only their specific route and source version. They do not establish live producer authentication/full-node interoperability, external model approval, hostile-load (HG) behavior, HIL, hardware latency/resource guarantees, admission gates, main/release adoption, or production operation.
 
 Product owners still need to accept adapter seams, source trust/freshness/revocation, identity and authorization, external egress/data policy, cancellation/persistence, and rollout. Fabric wire mapping/version policy remains pending; the internal MIO Python API is not that contract. Model hypotheses and Knowledge-reported displays remain advisory data, never authorization or applied outcomes. No owner agreement is inferred from a PR, local test, or the project-owner direction.

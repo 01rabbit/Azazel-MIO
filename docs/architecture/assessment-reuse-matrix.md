@@ -1,5 +1,27 @@
 # Assessment reuse matrix (MIO Issue 14)
 
+## Current integration status (2026-11-06)
+
+MIO main is `57464216a08456d1b97ef292f7558c21b0ff0b34` (README #46 merged).
+MIO #47 remains an unmerged candidate at
+`a1807bf7abb08788b834ae038f7a8b46d09d0acc`, version
+`0.1.0.dev20261106+gitbb6dcfd`. Its implementation label `bb6dcfd` is separate
+from the consumer source pin `a1807bf`; see [artifact identity](../versioning.md#current-candidate-artifact-2026-11-06).
+Edge main `3e6ccf4d3cffdf0d101c69392c3f7a9cc1a65f0c` still pins MIO
+`9fedb01bc9936531407a5181aa8fa5553ec19d55`. Edge #538 at
+`df98300f08a294f33482ef13579192447c9d0ac0` and Nexus #405 at
+`28900ebec35acdb618776340bfdc3065725d12bf` are unmerged candidates pinning
+MIO `a1807bf7abb08788b834ae038f7a8b46d09d0acc`; neither changes its product's
+main dependency. Fabric stable is `v0.10.0`; Edge, Knowledge, Deception and
+Nexus's optional `fabric` extra declare it, while Gadget remains on `v0.9.0`.
+Fabric Knowledge Context v1 is experimental (integrated by #86).
+Nexus #402/#403 are merged software integrations; the Context broker remains
+default-disabled and uncommissioned. Knowledge #116, MIO #47 and Nexus #405
+remain unmerged. These source observations establish no production model
+admission, HG acceptance, live full-node commissioning, release or deployment.
+
+## Historical source evidence (through 2026-11-04)
+
 Scope: documentation only. It changes no code, contracts, pins or rollout state.
 
 Evidence SHAs (the MIO and Edge rows were checked on 2026-11-04; each source-evidence SHA is stated per row):
@@ -96,4 +118,4 @@ Source: `py/azazel_edge/tactics_engine/scorer.py` at `38c2` ([link](https://gith
 
 ## 8. Out of scope
 
-- No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. A separate task-local, uncommitted Edge #538 candidate process harness (local supplemental evidence on synthetic input, not Edge CI, not installed-package proof and not main behavior) is recorded in the [AI inventory](ai-inventory.md) current status. No product acceptance, rollout, HIL, or production claim is made.
+- No tests were run on this documentation-only candidate. The separate fixed-head synthetic event model smoke is summarized in P2 and linked there; it is not a parity corpus. A separate task-local, uncommitted Edge #538 candidate process harness (local supplemental evidence on synthetic input, not Edge CI, not installed-package proof and not main behavior) is recorded in the [AI inventory](ai-inventory.md) historical status. No product acceptance, rollout, HIL, or production claim is made.

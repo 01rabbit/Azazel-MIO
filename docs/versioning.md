@@ -16,7 +16,41 @@ and process umask. The consumer must record the exact values and verify the
 resulting artifact hash. Do not publish local-version artifacts as public
 releases or replace an existing artifact in place.
 
-## Current integration identity example (2026-11-04)
+## Current candidate artifact (2026-11-06)
+
+MIO main is `57464216a08456d1b97ef292f7558c21b0ff0b34`; its metadata remains
+`0.1.0+git.c31c244`. MIO #47 is unmerged and has a separate development identity:
+
+| Field | Canonical candidate value |
+| --- | --- |
+| Consumer source pin / MIO #47 head | `a1807bf7abb08788b834ae038f7a8b46d09d0acc` |
+| Implementation source label | `bb6dcfdaa731e939da0fc29be212bb2b5851009f` |
+| Package version | `0.1.0.dev20261106+gitbb6dcfd` |
+| Wheel filename | `azazel_mio-0.1.0.dev20261106+gitbb6dcfd-py3-none-any.whl` |
+| Canonical wheel SHA-256 | `cb67a8c00f9011b0accd14a9901298d29dd0eb30b036e9af8c1ec5b5878356ff` |
+
+The canonical build uses setuptools `84.0.0`, `SOURCE_DATE_EPOCH=1793887544`,
+archive/process umask `0022`, and an offline build with no build isolation or
+dependency resolution. The version suffix identifies the implementation
+baseline, while the complete consumer pin identifies the metadata commit.
+Consumers must verify the canonical wheel bytes and preserve their build lock;
+matching the version string alone is insufficient. Earlier `context1` and
+`gitb333657` candidate artifacts do not represent this tuple.
+
+Edge main `3e6ccf4d3cffdf0d101c69392c3f7a9cc1a65f0c` still pins MIO
+`9fedb01bc9936531407a5181aa8fa5553ec19d55`. Unmerged Edge #538
+(`df98300f08a294f33482ef13579192447c9d0ac0`) and Nexus #405
+(`28900ebec35acdb618776340bfdc3065725d12bf`) pin MIO `a1807bf7` above.
+Fabric stable is `v0.10.0`; Edge, Knowledge, Deception and Nexus's optional
+`fabric` extra declare it; Gadget remains on `v0.9.0`. Fabric Knowledge
+Context v1 remains experimental after #86. Nexus #402/#403 are merged
+software integrations with a default-disabled, uncommissioned Context broker;
+Knowledge #116, MIO #47 and Nexus #405 remain unmerged candidates. No public
+MIO release, product deployment, HG acceptance or production admission is
+implied. Older fixed-head examples and process results below and in the
+[inventory](architecture/ai-inventory.md) remain historical and were not rerun.
+
+## Historical integration identity example (2026-11-04)
 
 At MIO main `5bb09c8d28c57604dc1c63903b98fed7587b49ea` (tree
 `75b20e000a0be2dad1c9aae3219e5cf5f14700bf`), the base of Draft PR #42, `pyproject.toml` still declares
