@@ -1786,10 +1786,80 @@ def test_fabric_incomplete_check_survives_competing_checks_and_knowledge_lite():
         fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
 
     assert out['dependency_outcome']['knowledge'] == 'timeout'
-    assert out['next_checks'][0] == (
+    assert out['next_checks'][0].startswith('Confirm the Knowledge peer health')
+    assert out['next_checks'][1] == (
         'Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot.')
-    assert out['next_checks'][1].startswith('Recheck the cited Knowledge Lite claim')
+    assert out['next_checks'][2].startswith('Recheck the cited Knowledge Lite claim')
     assert len(out['next_checks']) == 4
+
+
+@pytest.mark.parametrize(('status', 'outcome', 'safety'), [
+    ('timeout', 'timeout', 'Confirm the Knowledge peer health'),
+    ('malformed', 'rejected', "Review the Knowledge adapter's closed validation result"),
+])
+@pytest.mark.parametrize('snapshot_state', ['partial', 'stale'])
+def test_dependency_safety_check_survives_crowded_incomplete_snapshot(
+        status, outcome, safety, snapshot_state):
+    payload = fabric_response()
+    payload['snapshot']['state'] = snapshot_state
+    crowded = replace(frame(),
+        mission='Investigate authentication failures and honeypot observations',
+        known_facts=('AUTH_FAILURES_OBSERVED', 'Observed normalized event outcome: allowed'),
+        knowledge_status=status)
+    kwargs = dict(now=NOW, knowledge_lite_advisories=(lite_advisory(),))
+    before = AssistantCore().explain(crowded, **kwargs).to_dict()
+    assert any('Compare the observed authentication timing' in c for c in before['next_checks'])
+    assert any("Clarify if 'allowed'" in c for c in before['next_checks'])
+
+    out = AssistantCore().explain(crowded,
+        fabric_knowledge_context_response=_FabricAdv(payload), **kwargs).to_dict()
+
+    assert out['dependency_outcome']['knowledge'] == outcome
+    assert any(check.startswith(safety) for check in out['next_checks'])
+    assert out['next_checks'][0].startswith(safety)
+    assert 'partial or stale advisory' in out['next_checks'][1]
+    assert out['next_checks'][2].startswith('Recheck the cited Knowledge Lite claim')
+    assert len(out['next_checks']) == 4
+    assert out['fabric_knowledge_context_advisory']['trust'] == 'unverified_advisory_only'
+
+
+def test_expired_knowledge_safety_check_survives_crowded_incomplete_snapshot():
+    payload = fabric_response()
+    payload['snapshot']['state'] = 'partial'
+    crowded = replace(frame(),
+        mission='Investigate authentication failures and honeypot observations',
+        known_facts=('AUTH_FAILURES_OBSERVED', 'Observed normalized event outcome: allowed'))
+    out = AssistantCore().explain(crowded, now=NOW,
+        knowledge=(replace(context(), expires_at=NOW),),
+        knowledge_lite_advisories=(lite_advisory(),),
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+    assert out['dependency_outcome']['knowledge'] == 'expired'
+    assert out['next_checks'][0].startswith('Check the signed Knowledge response expiry')
+    assert 'partial or stale advisory' in out['next_checks'][1]
+    assert out['next_checks'][2].startswith('Recheck the cited Knowledge Lite claim')
+    assert len(out['next_checks']) == 4
+
+
+@pytest.mark.parametrize(('status', 'safety'), [
+    ('timeout', 'Confirm AZ-06 observation-service health'),
+    ('unavailable', 'Confirm AZ-06 observation coverage and adapter status'),
+])
+def test_knowledge_and_deception_safety_checks_survive_incomplete_snapshot(status, safety):
+    payload = fabric_response()
+    payload['snapshot']['state'] = 'partial'
+    crowded = replace(frame(),
+        mission='Investigate authentication failures and honeypot observations',
+        known_facts=('AUTH_FAILURES_OBSERVED', 'Observed normalized event outcome: allowed'),
+        knowledge_status='timeout', deception_status=status)
+    out = AssistantCore().explain(crowded, now=NOW,
+        knowledge_lite_advisories=(lite_advisory(),),
+        fabric_knowledge_context_response=_FabricAdv(payload)).to_dict()
+    assert out['dependency_outcome']['knowledge'] == 'timeout'
+    assert out['dependency_outcome']['deception'] == status
+    assert out['next_checks'][0].startswith('Confirm the Knowledge peer health')
+    assert out['next_checks'][1].startswith(safety)
+    assert 'partial or stale advisory' in out['next_checks'][2]
+    assert out['next_checks'][3].startswith('Recheck the cited Knowledge Lite claim')
 
 
 @pytest.mark.parametrize('snapshot_state', ['partial', 'stale'])

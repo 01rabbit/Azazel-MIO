@@ -1306,6 +1306,7 @@ class AssistantCore:
             knowledge_outcome = ContextDependencyOutcome.NOT_QUERIED
         deception_outcome = _frame_dependency_outcome(frame.deception_status)
         scenario_checks: list[str] = []
+        safety_checks: list[str] = []
         if knowledge_outcome is ContextDependencyOutcome.NOT_QUERIED:
             scenario_checks.append(
                 "This fast result did not query Knowledge; consult the separate validated Knowledge analysis lane for Knowledge context before relying on this assessment.")
@@ -1317,13 +1318,13 @@ class AssistantCore:
             scenario_checks.append(
                 "Clarify if 'allowed' means network acceptance or successful authentication; correlate event time/target with authentication and approved change/automation records before claiming access succeeded.")
         if knowledge_outcome is ContextDependencyOutcome.TIMEOUT:
-            scenario_checks.append(
+            safety_checks.append(
                 "Confirm the Knowledge peer health and timed-out request timestamp through its authorized status view; request a fresh read-only retrieval only after service recovery.")
         elif knowledge_outcome is ContextDependencyOutcome.EXPIRED:
-            scenario_checks.append(
+            safety_checks.append(
                 "Check the signed Knowledge response expiry against the adapter clock, then request a fresh authorized snapshot; do not reuse the expired context.")
         elif knowledge_outcome is ContextDependencyOutcome.REJECTED:
-            scenario_checks.append(
+            safety_checks.append(
                 "Review the Knowledge adapter's closed validation result and response metadata through authorized diagnostics; do not reuse the rejected context.")
         elif knowledge_outcome is ContextDependencyOutcome.ABSENT:
             scenario_checks.append(
@@ -1340,10 +1341,10 @@ class AssistantCore:
             scenario_checks.append(
                 "Confirm AZ-06 environment coverage and observation availability for the incident window; missing decoy telemetry does not establish that no decoy interaction occurred.")
         elif deception_relevant and deception_outcome is ContextDependencyOutcome.TIMEOUT:
-            scenario_checks.append(
+            safety_checks.append(
                 "Confirm AZ-06 observation-service health and the timed-out request window through its authorized status view.")
         elif deception_relevant and deception_outcome in {ContextDependencyOutcome.REJECTED, ContextDependencyOutcome.UNAVAILABLE}:
-            scenario_checks.append(
+            safety_checks.append(
                 "Confirm AZ-06 observation coverage and adapter status for the incident window; unavailable or rejected telemetry does not establish that no interaction occurred.")
         if scenario_checks:
             checks = list(dict.fromkeys(scenario_checks + checks))[:4]
@@ -1354,6 +1355,9 @@ class AssistantCore:
             check = "Request an authorized current full-node Knowledge snapshot; this partial or stale advisory is not a complete current snapshot."
             checks = [check] + [item for item in checks if item != check]
             checks = checks[:4]
+        if safety_checks:
+            # Dependency-failure guidance must survive competing optional checks.
+            checks = list(dict.fromkeys(safety_checks + checks))[:4]
         payload = {
             "schema_version": "mio.assistance.v1", "trace_id": frame.trace_id,
             "frame_id": frame.frame_id,

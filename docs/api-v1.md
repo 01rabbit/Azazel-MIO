@@ -233,8 +233,9 @@ advisory, but it is not reported as a healthy Knowledge dependency. When it is
 the only Knowledge context, `dependency_outcome.knowledge` is `unavailable`,
 the output includes the fixed `KNOWLEDGE_CONTEXT_PARTIAL` or
 `KNOWLEDGE_CONTEXT_STALE` unknown, and `next_checks` asks for an authorized
-current full-node snapshot. That fixed check is placed first so optional checks
-cannot crowd it out. Here `unavailable` means no complete current
+current full-node snapshot. That fixed check is placed ahead of optional
+checks so they cannot crowd it out; dependency-failure checks (timeout,
+expired, rejected) keep precedence over it within the four-item cap. Here `unavailable` means no complete current
 snapshot was supplied; it does not claim that the transport or service was
 unreachable. A separate complete Knowledge source retains the aggregate
 `available` outcome while the incomplete Fabric receipt and its unknown remain
