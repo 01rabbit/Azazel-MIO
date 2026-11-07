@@ -494,3 +494,22 @@ or execution authority by this metadata. Callers must withhold expired,
 revoked, cross-incident, or otherwise unverifiable content as appropriate.
 This applies to both budget and non-budget compiler paths, including callers
 using references and knowledge outside Nexus.
+
+For the Nexus budgeted handoff, template 1.9.0 carries IDs and classifications
+for earlier report and gap content. Nexus requires an incident-bound, unexpired
+binding with verified/current evidence and an exhaustive advisory ID manifest
+before displaying the resulting advice. The caller remains responsible for
+source authority and revocation; MIO's caller-asserted trust is not independent
+verification. Nexus journals bounded IDs and accounting rather than unknown or
+model bodies, and treats unconfirmed results after restart as unavailable.
+
+Nexus's binding v1 also requires explicit `completeness=complete`, validated
+hypothesis IDs and structured advisory references. The runtime scans raw prose
+with MIO's `id_grammar` before display sanitization. References occurring only
+in prose set private `unlisted_prose_ids` and public `completeness=partial`,
+and remain withheld. Frame authority is the authenticated local caller's
+assertion; broker trust requires explicit caller-verified metadata, and
+freshness requires an observation timestamp within the receipt lifetime.
+Missing model-unknown bodies cannot be reconstructed from `um:<n>` IDs.
+These Nexus caller rules do not grant shared API callers source authority or
+change public generation receipt fields, terminal reasons, or admission.
