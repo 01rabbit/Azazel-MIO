@@ -1,5 +1,5 @@
 """Local generation budget values; transport and clocks belong to products."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 
@@ -46,3 +46,6 @@ class GenerationOutcome:
     coordinator_disposition: Literal["current", "cancelled", "superseded", "backpressure",
         "in_flight_duplicate", "pre_restart", "unknown_or_evicted", "ticket_mismatch",
         "already_completed", "unknown"] | None = None
+    # Private receipt material. Never place these caller-supplied strings in
+    # public provenance; products must keep this mapping with the local receipt.
+    frame_unknowns: dict[str, str] = field(default_factory=dict)

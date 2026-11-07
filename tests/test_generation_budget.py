@@ -99,6 +99,28 @@ class Model:
         return {"input_tokens": 10, "output_tokens": 2}
 
 
+def test_advice_provenance_retains_frame_ids_and_private_unknown_mapping():
+    class ModelWithUnknown(Model):
+        def __call__(self, task, prompt):
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result["hypotheses"][0]["missing_evidence"] = ["unknown"]
+                result["hypotheses"][0]["statement"] = "Possible hostile activity"
+                result["hypotheses"][1]["statement"] = "Possible benign configuration change"
+            return result
+
+    assistance = AssistantCore(model=ModelWithUnknown()).explain(
+        frame(), now=NOW, generation_budget=lambda _: budget())
+    payload = assistance.to_dict()
+    provenance = payload["advice_provenance"]
+    assert provenance["hypotheses"][0] == {
+        "hypothesis_id": "h1", "slot": "hostile_activity", "support_refs": ["ev:ssh:1"],
+        "refute_refs": [], "unknown_ids": ["u1"], "text_origin": "model_authored"}
+    assert provenance["recommendation"] == {"evidence_refs": ["ev:ssh:1"], "text_origin": "model_authored"}
+    assert assistance.generation_receipt.frame_unknowns == {"u1": "unknown"}
+    assert '"unknown"' not in json.dumps(provenance)
+
+
 def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_gaps():
     class AuthModel(Model):
         def __init__(self):
