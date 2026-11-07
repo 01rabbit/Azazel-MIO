@@ -1,0 +1,113 @@
+# Debian ARM64 VMware Fusion PoC
+
+Current isolated IR candidate (2026-11-07): Draft PR #31 source `822865726c0eb8d834799f28fedce0a439cb0f45`, version `0.1.0.dev20261107+git6899323.ir1`. Its immutable wheel passed Debian ARM64 VMware guest acceptance; it is separate from the Nexus runtime wheel and is not merged to main or production-admitted. Verify the wheel against the supplied accepted artifact manifest before installation. Use a fresh venv, with no system site-packages; the offline wheel install below does not use an editable checkout or require a build backend. The synthetic input files still come from the matching source checkout.
+
+Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands in Bash from the checkout root. The block is a subshell, so its environment changes do not persist; activate `.venv` and export `MIO_IR_HOME` again before later commands.
+
+```bash
+(
+set -euo pipefail
+# Refuse to reuse an existing environment, including a dangling symlink.
+test ! -e .venv
+test ! -L .venv
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+python3 -m venv .venv
+. .venv/bin/activate
+# Point this at the already-provisioned offline wheelhouse in the guest.
+: "${WHEELHOUSE:?set WHEELHOUSE to the guest offline wheelhouse}"
+IR_WHEEL="$WHEELHOUSE/azazel_mio-0.1.0.dev20261107+git6899323.ir1-py3-none-any.whl"
+test -f "$IR_WHEEL"
+python -m pip install --no-index --no-deps "$IR_WHEEL"
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+export MIO_IR_HOME="$HOME/mio-ir-data"
+CASE_ID=$(mio-ir case create --name "Synthetic IR Case" | python -c 'import json,sys; print(json.load(sys.stdin)["case_id"])')
+test -n "$CASE_ID"
+mio-ir evidence import --case "$CASE_ID" --file examples/synthetic_ir_case/events.jsonl --format jsonl
+mio-ir evidence verify --case "$CASE_ID"
+mio-ir timeline build --case "$CASE_ID"
+REPORT_DIR=$(mktemp -d "$HOME/mio-ir-reports.XXXXXX")
+mio-ir report generate --case "$CASE_ID" --format json --output "$REPORT_DIR/mio-ir-report.json"
+printf 'Report: %s\n' "$REPORT_DIR/mio-ir-report.json"
+)
+```
+
+Input summaries must be JSON scalars (string, finite number, boolean, or null).
+An omitted summary becomes `No summary provided`; an explicit null becomes an
+empty summary. Summaries longer than 2,048 characters are truncated in timeline
+and report text; the original input remains available through the stored object.
+Only ISO-formatted string timestamps with an explicit timezone offset are
+normalized to UTC; other types and naive timestamps remain unknown.
+String timestamps longer than 256 characters are rejected; shorter unparseable
+or unrepresentable timestamps remain unknown. JSONL records are separated only
+by LF (with an optional preceding CR for CRLF); Unicode line-separator
+characters inside strings remain part of their record. Empty lines, spaces-only
+lines and tabs-only lines are skipped; other Unicode whitespace is rejected.
+Each input file is limited to 16 MiB, 10,000 records and 256 levels of JSON
+container nesting (objects and arrays combined; the outermost container is
+level one). Braces and brackets inside JSON strings do not count toward the
+depth limit. There is no cumulative per-case event or
+evidence limit. `evidence
+verify` and `report generate` return exit code 3 when stored evidence fails
+integrity verification; argparse usage errors return 2.
+An empty JSONL file has no records; the empty JSON array `[]` is accepted and
+also has no records. Empty JSON input and UTF-8 BOM-prefixed input are rejected.
+Timeline `record` is the one-based event index within that import,
+not a physical source line number. Markdown reports show missing timestamps as
+`unknown`, replace control characters, line separators and bidirectional
+format controls in summaries with spaces, and escape ASCII punctuation in
+rendered Markdown. This reduces display spoofing; it is not a general-purpose
+sanitizer for arbitrary Markdown consumers.
+
+Run the commands inside the Debian ARM64 guest and record results. The fixed candidate above has a separate installed-wheel guest receipt; repeating this example is a new run. macOS tests do not establish guest verification.
+
+For the acceptance runner, start from the matching source checkout, keep the guest venv active, and run the following separately. Its CLI and interpreter must resolve inside that venv. The runner creates a private temporary store and uses synthetic data; it does not use the example store above. `--help` lists the runner's actual interface; no extra runner arguments are required.
+
+```bash
+: "${VIRTUAL_ENV:?activate the fresh IR candidate venv}"
+IR_VENV_PYTHON="$VIRTUAL_ENV/bin/python"
+"$IR_VENV_PYTHON" scripts/ir_guest_acceptance.py --help
+(
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+export PATH="$VIRTUAL_ENV/bin"
+"$IR_VENV_PYTHON" scripts/ir_guest_acceptance.py
+)
+```
+
+This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
+
+This CLI is a separate local evidence utility; it does not call the MIO reasoning
+core or take production actions. Store evidence under a dedicated private
+`MIO_IR_HOME` directory. Symlinked storage entries are rejected; use a directory
+owned by the current user with no group or other access. Only the final
+storage-directory component of a new store is created with mode
+`0700`; missing parent components use the default creation mode and must be
+trusted. An existing directory with unsafe ownership or
+permissions is refused without changing its mode. The database, SQLite sidecars,
+and content objects must be owned regular files with one link; symlinks,
+hardlinks, FIFOs, and other non-regular entries are refused. Ownership checks
+require POSIX user-ID reporting; unsupported platforms fail closed. Reports
+must be exported outside the storage directory, including SQLite journal paths.
+New content objects are created with mode `0400`. Existing database, sidecar,
+and object file mode bits are not checked or changed; access relies on ownership
+and the private storage-directory mode.
+Output paths are resolved before validation; an external output symlink therefore
+targets its resolved destination. Existing report files are replaced atomically
+with private files.
+
+`MIO_IR_HOME` must be non-empty. After `~` expansion it must be an absolute
+path; the path is not canonicalized before use. If it is unset, `HOME` must be
+set and the default store is `$HOME/.local/share/azazel-mio`. The final storage
+directory and its entries are checked; parent path components must be trusted
+and are not independently inspected for symlinks. If an existing object at the
+expected content hash is corrupt or oversized, import fails closed and does not
+replace that object.
+
+Each evidence import invocation creates a distinct receipt and event set, even
+when the same bytes were imported before. The stored object bytes are deduplicated
+by SHA-256, while the separate receipt records each import action.
+
+These checks do not defend against a concurrent writer with access to the
+storage directory or its parent directories.

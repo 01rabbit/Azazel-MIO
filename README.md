@@ -148,6 +148,7 @@ PYTHONPATH=src python3 -m pytest -q
 **参照文書**
 
 - 内部API: [internal API v1](docs/api-v1.md)
+- IR evidence import recovery: [IR evidence import recovery](docs/ir-import-recovery.md)
 - 移行元と互換性: [source/license migration](docs/migration.md)
 - バージョン: [versioning](docs/versioning.md)
 

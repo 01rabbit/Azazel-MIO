@@ -1,0 +1,5 @@
+{"timestamp":"2026-10-01T10:00:00+09:00","summary":"Synthetic PowerShell execution on workstation"}
+{"timestamp":"2026-10-01T10:02:00+09:00","summary":"DNS query to example.invalid"}
+{"timestamp":"2026-10-01T10:03:00+09:00","summary":"HTTPS connection to 192.0.2.10"}
+{"timestamp":"2026-10-01T10:07:00+09:00","summary":"Child process started"}
+{"timestamp":"2026-10-01T10:12:00+09:00","summary":"Authentication failures observed"}
