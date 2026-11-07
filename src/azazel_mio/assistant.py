@@ -16,7 +16,7 @@ from .contracts import ContextDependencyOutcome, MioSituationFrame, ReasoningSta
 from .playbook import DEFAULT_PLAYBOOKS, PromptCompiler, select_playbook
 from .contracts import model_id_ok
 from .handoff import build_no_model_handoff
-from .id_grammar import second_layer_ok
+from .id_grammar import EVIDENCE_REF, id_ok, second_layer_ok
 from .redaction import redact_text
 from .reasoning import BoundedReasoningLoop
 from .lifecycle import ReasoningCoordinator
@@ -130,6 +130,46 @@ class Assistance:
 
     def to_dict(self) -> dict[str, Any]:
         return copy.deepcopy(self._payload)
+
+
+def _advice_provenance(frame, outcome, playbook, auth_context):
+    """Return only bounded, frame-bound identifiers, never model prose."""
+    if outcome.state is not ReasoningState.COMPLETE or getattr(outcome, "recommendation", None) is None:
+        return None
+    from .tactical_grounding import unknowns_with_model
+    unknowns = (getattr(getattr(outcome, "generation_receipt", None), "frame_unknowns", None)
+                or unknowns_with_model(frame, auth_context, outcome.hypotheses))
+    ids_by_hypothesis = getattr(getattr(outcome, "generation_receipt", None), "hypothesis_unknown_ids", None)
+    refs = set(frame.evidence_refs)
+    slots = {slot for slot, _ in playbook.hypothesis_alternatives}
+    filtered = set()
+    final_stage = (ReasoningState.HYPOTHESES_UPDATED.value
+                   if any(event.kind == "hypotheses_updated" for event in outcome.trace)
+                   else ReasoningState.HYPOTHESES_READY.value)
+    for event in outcome.trace:
+        if (event.state == final_stage and event.kind == "semantic_scope_filter"
+                and isinstance(event.payload, Mapping)):
+            filtered.update(item.get("hypothesis_id") for item in event.payload.get("filtered", ())
+                            if isinstance(item, Mapping))
+    items = []
+    for h in outcome.hypotheses:
+        evidence = h.supporting_evidence_refs + h.contradicting_evidence_refs
+        if (not id_ok(h.hypothesis_id, ("hypothesis_id",))
+                or h.hypothesis_alternative_id not in slots
+                or any(ref not in refs or not id_ok(ref, EVIDENCE_REF) for ref in evidence)):
+            return None
+        items.append({"hypothesis_id": h.hypothesis_id, "slot": h.hypothesis_alternative_id,
+                      "support_refs": list(h.supporting_evidence_refs),
+                      "refute_refs": list(h.contradicting_evidence_refs),
+                      "unknown_ids": (list(ids_by_hypothesis[h.hypothesis_id])
+                                      if ids_by_hypothesis is not None and h.hypothesis_id in ids_by_hypothesis
+                                      else [key for key, value in unknowns.items() if value in h.missing_evidence]),
+                      "text_origin": "fixed_text" if auth_context or h.hypothesis_id in filtered else "model_authored"})
+    rec_refs = outcome.recommendation.evidence_refs
+    if any(ref not in refs or not id_ok(ref, EVIDENCE_REF) for ref in rec_refs):
+        return None
+    return {"hypotheses": items, "recommendation": {
+        "evidence_refs": list(rec_refs), "text_origin": "fixed_text" if auth_context else "model_authored"}}
 
 
 def _time(value: str) -> datetime:
@@ -1257,6 +1297,16 @@ class AssistantCore:
             for h in outcome.hypotheses
         ] if (not interrupted and outcome.state is not ReasoningState.VALIDATION_REJECTED
               and (generation_budget is None or outcome.state is ReasoningState.COMPLETE)) else []
+        if generation_budget is not None and outcome.generation_receipt is not None:
+            private_unknowns = outcome.generation_receipt.frame_unknowns
+            model_ids = {value: key for key, value in private_unknowns.items() if key.startswith("um:")}
+            for hypothesis in hypotheses:
+                ids = outcome.generation_receipt.hypothesis_unknown_ids.get(hypothesis["hypothesis_id"], ())
+                fixed_values = {private_unknowns[key] for key in ids if key.startswith("ux:")}
+                hypothesis["missing_evidence"] = [value if value in fixed_values else model_ids.get(value, value)
+                    for value in hypothesis.get("missing_evidence", [])]
+                hypothesis["missing_evidence"].extend(key for key in ids if key.startswith("um:")
+                    and private_unknowns[key] in fixed_values)
         # Static alternatives are questions to discriminate, never observations
         # or asserted threat attribution. They remain labelled without a model.
         if not hypotheses and not interrupted:
@@ -1394,6 +1444,9 @@ class AssistantCore:
             "reasoning_trace": ([] if outcome.state is ReasoningState.VALIDATION_REJECTED
                                 else _public_reasoning_trace(outcome.trace)),
         }
+        provenance = _advice_provenance(frame, outcome, selection.playbook, auth_context)
+        if provenance is not None and payload["generation_method"] == "model":
+            payload["advice_provenance"] = provenance
         if coordinator is not None:
             payload["cycle_disposition"] = cycle_disposition or "unknown"
             if cycle_disposition != "current":
@@ -1408,7 +1461,12 @@ class AssistantCore:
                 })
                 payload.pop("knowledge_context_response_advisory", None)
                 payload.pop("fabric_knowledge_context_advisory", None)
+                payload.pop("advice_provenance", None)
         receipt = getattr(outcome, "generation_receipt", None)
+        if receipt is not None:
+            from .tactical_grounding import unknowns_with_model
+            if not receipt.frame_unknowns:
+                receipt = replace(receipt, frame_unknowns=unknowns_with_model(frame, auth_context, outcome.hypotheses))
         if receipt is not None and coordinator is not None:
             disposition = {
                 "current": "current", "backpressure": "backpressure",

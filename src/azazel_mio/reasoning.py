@@ -219,6 +219,9 @@ class BoundedReasoningLoop:
         broker_calls = 0
         audit: list[HypothesisAuditEntry] = []
         validated: list[MioHypothesis] = []
+        original_missing: dict[str, tuple[str, ...]] = {}
+        projected_unknown_ids: set[str] = set()
+        projected_by_hypothesis: dict[str, set[str]] = {}
         validation_stage = "playbook"
         task_names = ("generate_hypotheses", "identify_evidence_gaps", "recommend")
         calls_sent = {task: 0 for task in task_names}
@@ -227,6 +230,19 @@ class BoundedReasoningLoop:
         selections = {}
         budget_reason = None
         current_task = None
+
+        def unknown_ids_by_hypothesis(hypotheses, unknowns):
+            auth = is_authentication_context(frame, playbook)
+            result = {}
+            for h in hypotheses:
+                original = original_missing.get(h.hypothesis_id, ())
+                fixed = projected_by_hypothesis.get(h.hypothesis_id, set())
+                result[h.hypothesis_id] = tuple(key for key, value in unknowns.items()
+                    if (key.startswith("ux:") and value in h.missing_evidence and (auth or key in fixed))
+                    or (key.startswith("um:") and value in original)
+                    or (key.startswith("u") and not key.startswith(("um:", "ux:"))
+                        and (value in h.missing_evidence or value in original)))
+            return result
 
         def receipt(state):
             if budget_for_task is None:
@@ -238,7 +254,16 @@ class BoundedReasoningLoop:
                 results[current_task] = "failed"
             receipt_state = ("complete" if done else "failed" if reason == "send_notification_conflict"
                              else "partial" if sum(calls_sent.values()) else "failed")
-            return GenerationOutcome(receipt_state, results, dict(calls_sent), dict(usage), reason, dict(selections))
+            from .tactical_grounding import unknowns_with_model
+            private_hypotheses = tuple(replace(h, missing_evidence=tuple(dict.fromkeys(
+                h.missing_evidence + original_missing.get(h.hypothesis_id, ())))) for h in validated)
+            unknowns = unknowns_with_model(frame, is_authentication_context(frame, playbook), private_hypotheses,
+                fixed_ids=sorted(projected_unknown_ids), model_unknowns=(v for values in original_missing.values() for v in values))
+            origins = {key: ("model_authored" if key.startswith("um:") else
+                             "fixed_text" if key.startswith("ux:") else "frame") for key in unknowns}
+            return GenerationOutcome(receipt_state, results, dict(calls_sent), dict(usage), reason, dict(selections),
+                frame_unknowns=unknowns, unknown_origins=origins,
+                hypothesis_unknown_ids=unknown_ids_by_hypothesis(validated, unknowns))
 
         def finish(state, hypotheses_out, gaps_out, recommendation_out):
             result = self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated,
@@ -263,6 +288,16 @@ class BoundedReasoningLoop:
                         raise
                     except Exception:
                         raise BudgetError("count_unknown", "budget_unavailable") from None
+                    if task in ("identify_evidence_gaps", "recommend") and "hypotheses" in kwargs:
+                        kwargs["hypotheses"] = tuple(replace(h, missing_evidence=tuple(dict.fromkeys(
+                            h.missing_evidence + original_missing.get(h.hypothesis_id, ()))))
+                            for h in kwargs["hypotheses"])
+                    if task in ("identify_evidence_gaps", "recommend"):
+                        from .tactical_grounding import unknowns_with_model
+                        kwargs["unknown_mapping"] = unknowns_with_model(frame, is_authentication_context(frame, playbook),
+                            kwargs.get("hypotheses", ()), fixed_ids=sorted(projected_unknown_ids),
+                            model_unknowns=(v for values in original_missing.values() for v in values))
+                        kwargs["hypothesis_unknown_ids"] = unknown_ids_by_hypothesis(kwargs.get("hypotheses", ()), kwargs["unknown_mapping"])
                     prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, budget=budget, **kwargs)
                     if not isinstance(prompt, CompiledPrompt):
                         raise BudgetError("count_unknown", "compiler_not_budget_aware")
@@ -457,7 +492,15 @@ class BoundedReasoningLoop:
         if initial_errors:
             errors.extend(initial_errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
+        original_missing.update((h.hypothesis_id, h.missing_evidence) for h in hypotheses)
         hypotheses, scoped_claims = scope_hypotheses_to_frame(hypotheses, frame=frame, playbook=playbook)
+        for hypothesis_id, classes in scoped_claims:
+            if "source_identity_unavailable" in classes:
+                projected_unknown_ids.add("ux:identity")
+                projected_by_hypothesis.setdefault(hypothesis_id, set()).add("ux:identity")
+            if "host_impact_unavailable" in classes:
+                projected_unknown_ids.add("ux:impact")
+                projected_by_hypothesis.setdefault(hypothesis_id, set()).add("ux:impact")
         if scoped_claims:
             trace.record(state=ReasoningState.HYPOTHESES_READY.value, kind="semantic_scope_filter",
                          payload={"filtered": [{"hypothesis_id": hypothesis_id,
@@ -658,6 +701,13 @@ class BoundedReasoningLoop:
                 return finish(ReasoningState.VALIDATION_REJECTED, updated_hypotheses, gaps, None)
             updated_hypotheses, scoped_updates = scope_hypotheses_to_frame(
                 updated_hypotheses, frame=frame, playbook=playbook, prior_hypotheses=hypotheses)
+            for hypothesis_id, classes in scoped_updates:
+                if "source_identity_unavailable" in classes:
+                    projected_unknown_ids.add("ux:identity")
+                    projected_by_hypothesis.setdefault(hypothesis_id, set()).add("ux:identity")
+                if "host_impact_unavailable" in classes:
+                    projected_unknown_ids.add("ux:impact")
+                    projected_by_hypothesis.setdefault(hypothesis_id, set()).add("ux:impact")
             if scoped_updates:
                 trace.record(state=ReasoningState.HYPOTHESES_UPDATED.value, kind="semantic_scope_filter",
                              payload={"filtered": [{"hypothesis_id": hypothesis_id,
@@ -698,7 +748,14 @@ class BoundedReasoningLoop:
             return finish(interrupted, hypotheses, gaps, None)
 
         try:
-            prompt = compile_task("recommend", hypotheses=hypotheses, broker_results=broker_summaries)
+            # These validated, bounded gaps are questions, never broker results
+            # or observed facts. The compiler counts them as mandatory units.
+            questions = [{"kind": "unconfirmed_question", "gap_id": gap.gap_id,
+                          "question": gap.question,
+                          "discriminates_hypothesis_ids": list(gap.discriminates_hypothesis_ids)}
+                         for gap in gaps[:self.budget.max_gaps]]
+            prompt = compile_task("recommend", hypotheses=hypotheses,
+                                  broker_results=[*broker_summaries, *questions])
         except PromptCompileFailure:
             return finish(ReasoningState.BUDGET_EXHAUSTED if budget_reason else ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
         validation_stage = "recommend"

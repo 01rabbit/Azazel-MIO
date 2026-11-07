@@ -400,3 +400,18 @@ def test_benign_slot_cannot_reuse_hostile_falsification_language():
     assert scoped[0].falsification_conditions == ()
     assert scoped[0].statement == "A benign or misconfigured-automation explanation remains unverified from the supplied authentication frame."
     assert "role_incoherent_falsification" in findings[0][1]
+
+
+def test_receipt_maps_each_fixed_auth_unknown_to_an_allowlisted_id():
+    from azazel_mio.id_grammar import id_ok
+    from azazel_mio.tactical_grounding import AUTH_UNKNOWN_IDS, receipt_unknowns
+
+    f = auth_frame()
+    mapping = receipt_unknowns(f, True)
+    expected = set(authentication_frame_unknowns(f))
+    assert {value for key, value in mapping.items() if key.startswith("ux:")} == expected
+    assert all(id_ok(key, ("unknown_id",)) for key in mapping)
+    assert not id_ok("ux:attacker-controlled", ("unknown_id",))
+    assert not any(key.startswith("ux:") for key in receipt_unknowns(f, False))
+    assert set(mapping).intersection(AUTH_UNKNOWN_IDS) == {
+        key for key, value in AUTH_UNKNOWN_IDS.items() if value in expected}

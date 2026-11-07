@@ -70,6 +70,21 @@ def test_whole_units_omissions_core_and_envelope():
     assert "END_UNTRUSTED\\u005fDATA" in secure
 
 
+@pytest.mark.parametrize("task", TASKS[1:])
+def test_followup_keeps_knowledge_reference_and_its_broker_unit(task):
+    f = frame(knowledge_refs=("kn:attack:T1110",))
+    item = {"kind": "supplemental_reference", "evidence_refs": ["kn:attack:T1110"]}
+    def compile_with(limit):
+        return PromptCompiler().compile(frame=f, playbook=select_playbook(f).playbook,
+            task=task, broker_results=[item], budget=budget(limit=limit))
+    result = compile_with(50000)
+    data = json.loads(result.text.split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
+    assert data["situation_frame"]["knowledge_refs"] == ["kn:attack:T1110"]
+    assert data["broker_results"] == [{**item, "trust": "unverified", "trust_basis": "unverified"}]
+    with pytest.raises(BudgetError, match="budget_exhausted"):
+        compile_with(len(result.text) - 1)
+
+
 class Model:
     def __init__(self, bad_task=None, bad_ref=False):
         self.calls = []
@@ -97,6 +112,190 @@ class Model:
         return self(task, prompt)
     def usage_for_task(self, task):
         return {"input_tokens": 10, "output_tokens": 2}
+
+
+def test_advice_provenance_retains_frame_ids_and_private_unknown_mapping():
+    class ModelWithUnknown(Model):
+        def __call__(self, task, prompt):
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result["hypotheses"][0]["missing_evidence"] = ["unknown"]
+                result["hypotheses"][0]["statement"] = "Possible hostile activity"
+                result["hypotheses"][1]["statement"] = "Possible benign configuration change"
+            return result
+
+    assistance = AssistantCore(model=ModelWithUnknown()).explain(
+        frame(), now=NOW, generation_budget=lambda _: budget())
+    payload = assistance.to_dict()
+    provenance = payload["advice_provenance"]
+    assert provenance["hypotheses"][0] == {
+        "hypothesis_id": "h1", "slot": "hostile_activity", "support_refs": ["ev:ssh:1"],
+        "refute_refs": [], "unknown_ids": ["u1"], "text_origin": "model_authored"}
+    assert provenance["recommendation"] == {"evidence_refs": ["ev:ssh:1"], "text_origin": "model_authored"}
+    assert assistance.generation_receipt.frame_unknowns == {"u1": "unknown"}
+    assert '"unknown"' not in json.dumps(provenance)
+
+
+def test_budgeted_auth_model_unknown_is_private_and_identified_in_later_calls():
+    class AuthUnknown(Model):
+        def __init__(self):
+            super().__init__()
+            self.prompts = {}
+        def __call__(self, task, prompt):
+            self.prompts[task] = prompt
+            if task == TASKS[0]:
+                return {"hypotheses": [{"hypothesis_id": f"h{i}", "hypothesis_alternative_id": slot,
+                    "statement": f"Possible explanation {i}", "status": "proposed",
+                    "supporting_evidence_refs": ["ev:ssh:1"], "contradicting_evidence_refs": [],
+                    "assumptions": [], "falsification_conditions": [], "expected_observations": [],
+                    "missing_evidence": ["MODEL PRIVATE QUESTION"]} for i, slot in
+                    ((1, "credential_attack"), (2, "misconfigured_automation"))]}
+            return super().__call__(task, prompt)
+    f = frame(soc_summary="authentication failures; success logs unknown")
+    chosen = select_playbook(f)
+    model, broker = AuthUnknown(), CapabilityBroker()
+    try:
+        result = BoundedReasoningLoop(model=model, broker=broker).run(
+            frame=f, playbook=chosen.playbook, cycle_id="c", selection=chosen,
+            budget_for_task=lambda _: budget())
+    finally:
+        broker.close()
+    assert result.state is ReasoningState.COMPLETE
+    assert result.generation_receipt.frame_unknowns["um:1"] == "MODEL PRIVATE QUESTION"
+    assert result.generation_receipt.unknown_origins["um:1"] == "model_authored"
+    for task in TASKS[1:]:
+        data = json.loads(model.prompts[task].split("\nUNTRUSTED_DATA\n")[1].split("\nEND_UNTRUSTED_DATA")[0])
+        assert "MODEL PRIVATE QUESTION" not in model.prompts[task]
+        assert {"id": "um:1", "category": "unclassified"} in data["hypotheses"][0]["missing_evidence"]
+        assert "frame:prior_report_already_supplied" in result.generation_receipt.selections[task].kept
+
+
+@pytest.mark.parametrize(('claim', 'fixed_id', 'fixed_text'), [
+    ('The identified actor came from an account.', 'ux:identity',
+     'No source or account identity is supplied in the current privacy-reduced frame.'),
+    ('The host is compromised.', 'ux:impact',
+     'Privilege escalation, exploit success, and host post-condition are not established by the supplied alert.'),
+])
+def test_non_auth_projection_preserves_fixed_origin_and_same_model_text(claim, fixed_id, fixed_text):
+    class ProjectionModel(Model):
+        def __init__(self):
+            super().__init__()
+            self.prompts = {}
+        def __call__(self, task, prompt):
+            self.prompts[task] = prompt
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result['hypotheses'][0]['statement'] = claim
+                result['hypotheses'][0]['missing_evidence'] = []
+                result['hypotheses'][1]['statement'] = 'A benign configuration is possible.'
+                result['hypotheses'][1]['missing_evidence'] = [fixed_text]
+            return result
+    model = ProjectionModel()
+    result = AssistantCore(model=model).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    assert result.to_dict()['state'] == 'complete'
+    receipt = result.generation_receipt
+    assert receipt.frame_unknowns[fixed_id] == fixed_text
+    assert receipt.unknown_origins[fixed_id] == 'fixed_text'
+    assert receipt.frame_unknowns['um:1'] == fixed_text
+    assert receipt.unknown_origins['um:1'] == 'model_authored'
+    for task in TASKS[1:]:
+        data = json.loads(model.prompts[task].split('\nUNTRUSTED_DATA\n')[1].split('\nEND_UNTRUSTED_DATA')[0])
+        ids = {item['id'] for item in data['hypotheses'][0]['missing_evidence']}
+        other_ids = {item['id'] for item in data['hypotheses'][1]['missing_evidence']}
+        assert fixed_id in ids and 'um:1' not in ids
+        assert 'um:1' in other_ids and fixed_id not in other_ids
+    provenance = result.to_dict()['advice_provenance']['hypotheses']
+    assert fixed_id in provenance[0]['unknown_ids'] and 'um:1' not in provenance[0]['unknown_ids']
+    assert 'um:1' in provenance[1]['unknown_ids'] and fixed_id not in provenance[1]['unknown_ids']
+
+
+def test_model_fixed_text_without_projection_remains_model_authored():
+    from azazel_mio.tactical_grounding import AUTH_IMPACT_UNKNOWN
+    class ModelWithSameText(Model):
+        def __call__(self, task, prompt):
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result['hypotheses'][0]['statement'] = 'Possible hostile activity.'
+                result['hypotheses'][0]['missing_evidence'] = [AUTH_IMPACT_UNKNOWN]
+                result['hypotheses'][1]['statement'] = 'Possible benign configuration.'
+            return result
+    result = AssistantCore(model=ModelWithSameText()).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    assert result.to_dict()['state'] == 'complete'
+    assert result.generation_receipt.frame_unknowns['um:1'] == AUTH_IMPACT_UNKNOWN
+    assert result.generation_receipt.unknown_origins['um:1'] == 'model_authored'
+    assert 'ux:impact' not in result.generation_receipt.frame_unknowns
+
+
+def test_model_unknown_text_is_not_in_budgeted_public_hypotheses():
+    class UnknownModel(Model):
+        def __call__(self, task, prompt):
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result["hypotheses"][0]["missing_evidence"] = ["private model unknown"]
+                result["hypotheses"][0]["statement"] = "Possible hostile activity"
+                result["hypotheses"][1]["statement"] = "Possible benign configuration change"
+            return result
+    result = AssistantCore(model=UnknownModel()).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    assert result.generation_receipt.frame_unknowns["um:1"] == "private model unknown"
+    assert "private model unknown" not in json.dumps(result.to_dict())
+    assert "um:1" in result.to_dict()["hypotheses"][0]["missing_evidence"]
+
+
+def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_gaps():
+    class AuthModel(Model):
+        def __init__(self):
+            super().__init__()
+            self.prompts = {}
+        def __call__(self, task, prompt):
+            self.prompts[task] = prompt
+            self.calls.append(task)
+            if task == TASKS[0]:
+                def hypothesis(i, slot, support, refute):
+                    return {"hypothesis_id": "h" + str(i), "hypothesis_alternative_id": slot,
+                            "statement": "possible explanation " + str(i), "status": "proposed",
+                            "supporting_evidence_refs": support, "contradicting_evidence_refs": refute,
+                            "assumptions": [], "falsification_conditions": [],
+                            "expected_observations": [], "missing_evidence": ["unknown"]}
+                return {"hypotheses": [hypothesis(1, "credential_attack", ["ev:ssh:1"], []),
+                                       hypothesis(2, "misconfigured_automation", [], ["ev:ssh:1"])]}
+            if task == TASKS[1]:
+                return {"evidence_gaps": []}
+            return {"summary": "uncertain", "recommended_action": "OBSERVE", "rationale": "review",
+                    "evidence_refs": ["ev:ssh:1"], "limitations": ["unverified"]}
+
+    f = frame(soc_summary="authentication failures; success logs unknown")
+    chosen = select_playbook(f)
+    model, broker = AuthModel(), CapabilityBroker()
+    try:
+        result = BoundedReasoningLoop(model=model, broker=broker).run(
+            frame=f, playbook=chosen.playbook, cycle_id="c", selection=chosen,
+            budget_for_task=lambda task: budget())
+    finally:
+        broker.close()
+    assert result.state is ReasoningState.COMPLETE
+    for task in TASKS[1:]:
+        data = json.loads(model.prompts[task].split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
+        h1, h2 = data["hypotheses"]
+        assert (h1["hypothesis_id"], h1["hypothesis_alternative_id"], h1["supporting_evidence_refs"]) == ("h1", "credential_attack", ["ev:ssh:1"])
+        assert (h2["hypothesis_id"], h2["hypothesis_alternative_id"], h2["contradicting_evidence_refs"]) == ("h2", "misconfigured_automation", ["ev:ssh:1"])
+        assert h1["missing_evidence"] and h2["missing_evidence"]
+        assert "statement" not in h1 and "assumptions" not in h1
+        assert "soc_summary" not in data["situation_frame"]
+        assert data["situation_frame"]["prior_report"] == "already_supplied_unverified"
+        assert data["situation_frame"]["evidence_refs"] == list(f.evidence_refs)
+        if task == "identify_evidence_gaps":
+            assert {"id": "u1", "category": "unclassified"} in data["situation_frame"]["unknowns"]
+        else:
+            assert "unknowns" not in data["situation_frame"]
+        selection = result.generation_receipt.selections[task]
+        assert selection.coverage == "selected"
+        assert "frame:prior_report_already_supplied" in selection.kept
+        if task == "recommend":
+            questions = data["broker_results"]
+            assert 0 < len(questions) <= 3
+            assert all(set(q) == {"kind", "gap_id", "category"}
+                       and q["kind"] == "unconfirmed_question"
+                       and q["gap_id"] and q["category"] == "unclassified" for q in questions)
 
 
 def run(model, callback, compiler=None):
@@ -268,3 +467,32 @@ def test_supplemental_reference_rejects_prose_disguised_as_reference():
     item = {"kind": "supplemental_reference", "evidence_refs": ["contradictory prose " * 80]}
     with pytest.raises(BudgetError, match="budget_exhausted"):
         compile_(budget(limit=len(core)+100), items=[item])
+
+
+def test_compact_task_contract_matches_effective_schema_and_rejects_tampering():
+    from azazel_mio.playbook import compiled_model_response_schema
+    f = frame()
+    for task in TASKS:
+        prompt = PromptCompiler().compile(frame=f, playbook=select_playbook(f).playbook,
+                                          task=task, budget=budget()).text
+        control = json.loads(prompt.split("\nEND_TRUSTED_CONTROL\n", 1)[0].split("\n", 1)[1])
+        assert "output_schema" not in control
+        assert control["output_contract"]
+        assert compiled_model_response_schema(task, prompt)["required"]
+        with pytest.raises(ValueError, match="invalid_compiled_control"):
+            compiled_model_response_schema(task, prompt.replace('"output_contract":"', '"output_contract":"tampered ', 1))
+
+
+@pytest.mark.parametrize("metadata,trust,basis", [
+    ({}, "unverified", "unverified"),
+    ({"source": "sensor", "trust": "verified", "freshness": "current"}, "verified", "caller_asserted"),
+    ({"source": "sensor", "trust": "verified"}, "unverified", "unverified"),
+    ({"source": "sensor", "trust": "verified", "freshness": "revoked"}, "unverified", "unverified"),
+])
+def test_broker_metadata_is_caller_claim_and_missing_is_unverified(metadata, trust, basis):
+    f = frame()
+    result = PromptCompiler().compile(frame=f, playbook=select_playbook(f).playbook,
+        task="update_hypotheses", broker_results=[{"data": "synthetic", **metadata}])
+    data = json.loads(result.split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
+    assert data["broker_results"][0]["trust"] == trust
+    assert data["broker_results"][0]["trust_basis"] == basis

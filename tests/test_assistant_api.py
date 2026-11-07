@@ -1215,7 +1215,7 @@ def test_late_validation_rejection_suppresses_prior_model_output_everywhere():
 def test_compiled_response_schema_comes_only_from_trusted_control():
     from azazel_mio.playbook import (PROMPT_TEMPLATE_VERSION, PromptCompiler,
         compiled_model_response_schema, select_playbook)
-    assert PROMPT_TEMPLATE_VERSION == '1.6.0'
+    assert PROMPT_TEMPLATE_VERSION == '1.9.0'
     prompt = PromptCompiler().compile(frame=frame(), playbook=select_playbook(frame()).playbook,
                                       task='generate_hypotheses')
     schema = compiled_model_response_schema('generate_hypotheses', prompt)

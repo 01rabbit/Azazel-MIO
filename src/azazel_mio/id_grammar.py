@@ -185,6 +185,8 @@ ID_KINDS: Mapping[str, Callable[[str], bool]] = {
     "hypothesis_id": _shape(r"h[0-9]{1,3}"),
     # MioEvidenceGap ids (g<n>).
     "gap_id": _shape(r"g[0-9]{1,3}"),
+    # Deterministic position in the input frame's unknowns, not model prose.
+    "unknown_id": _shape(r"(?:u[0-9]{1,3}|um:[0-9]{1,3}|ux:(?:identity|success|baseline|impact))"),
     "trace_id": _shape(_TRACE_SHAPE),
     "frame_id": _shape(rf"(?:frame{_TRACE_TAIL}|{_TRACE_SHAPE}(?::frame)?)"),
     "cycle_request_id": _composite_id_ok,

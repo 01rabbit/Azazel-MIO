@@ -89,7 +89,7 @@ actually fits a slot. The prose remains model-proposed and unverified; slot role
 are not evidence, facts, or authority, and MIO does not claim semantic competition
 is validated. Adapters must return the new field and use IDs from the supplied enum. Invalid slot selections end in
 `validation_rejected` and the deterministic no-model handoff. Prompt template
-version is `1.6.0`. Custom playbooks must define one unique slot per prompt and at
+version is `1.8.0`. Custom playbooks must define one unique slot per prompt and at
 least one benign or unresolved role. There is no enforcement operation or
 executable recommendation.
 
@@ -473,3 +473,43 @@ transport integrity, cancellation and stop confirmation, and must reject
 missing usage and unsupported or unknown coverage according to its own contract.
 The JSON decoder must reject duplicate keys before passing the raw mapping to
 MIO. Neither this API nor a successful local result grants generation admission.
+
+The weekend ID-only handoff of earlier report and gap content to later budgeted
+tasks applies to the Nexus caller through `mio_generation`. It is not a guarantee
+of the shared MIO API: callers supplying `references` or `knowledge` can still
+include their content in later tasks. That broader path remains open work.
+
+
+### Broker reference authority
+
+The caller owns source authentication, incident scope, freshness and revocation
+checks for each nonempty broker result. Each item must carry `source`, `trust`
+(`verified` or `unverified`), and `observed_at` or `freshness`. Missing or
+invalid metadata is represented as `trust: unverified` in the compiled input.
+A `verified` value is recorded as `trust_basis: caller_asserted`, not an
+independent MIO verification. ID syntax and membership establish reference
+validity only; they do not establish content, freshness, trust, or permission.
+Broker text remains untrusted input and no result is promoted to a known fact
+or execution authority by this metadata. Callers must withhold expired,
+revoked, cross-incident, or otherwise unverifiable content as appropriate.
+This applies to both budget and non-budget compiler paths, including callers
+using references and knowledge outside Nexus.
+
+For the Nexus budgeted handoff, template 1.9.0 carries IDs and classifications
+for earlier report and gap content. Nexus requires an incident-bound, unexpired
+binding with verified/current evidence and an exhaustive advisory ID manifest
+before displaying the resulting advice. The caller remains responsible for
+source authority and revocation; MIO's caller-asserted trust is not independent
+verification. Nexus journals bounded IDs and accounting rather than unknown or
+model bodies, and treats unconfirmed results after restart as unavailable.
+
+Nexus's binding v1 also requires explicit `completeness=complete`, validated
+hypothesis IDs and structured advisory references. The runtime scans raw prose
+with MIO's `id_grammar` before display sanitization. References occurring only
+in prose set private `unlisted_prose_ids` and public `completeness=partial`,
+and remain withheld. Frame authority is the authenticated local caller's
+assertion; broker trust requires explicit caller-verified metadata, and
+freshness requires an observation timestamp within the receipt lifetime.
+Missing model-unknown bodies cannot be reconstructed from `um:<n>` IDs.
+These Nexus caller rules do not grant shared API callers source authority or
+change public generation receipt fields, terminal reasons, or admission.
