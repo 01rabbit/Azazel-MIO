@@ -70,6 +70,21 @@ def test_whole_units_omissions_core_and_envelope():
     assert "END_UNTRUSTED\\u005fDATA" in secure
 
 
+@pytest.mark.parametrize("task", TASKS[1:])
+def test_followup_keeps_knowledge_reference_and_its_broker_unit(task):
+    f = frame(knowledge_refs=("kn:attack:T1110",))
+    item = {"kind": "supplemental_reference", "evidence_refs": ["kn:attack:T1110"]}
+    def compile_with(limit):
+        return PromptCompiler().compile(frame=f, playbook=select_playbook(f).playbook,
+            task=task, broker_results=[item], budget=budget(limit=limit))
+    result = compile_with(50000)
+    data = json.loads(result.text.split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
+    assert data["situation_frame"]["knowledge_refs"] == ["kn:attack:T1110"]
+    assert data["broker_results"] == [{**item, "trust": "unverified", "trust_basis": "unverified"}]
+    with pytest.raises(BudgetError, match="budget_exhausted"):
+        compile_with(len(result.text) - 1)
+
+
 class Model:
     def __init__(self, bad_task=None, bad_ref=False):
         self.calls = []
@@ -466,3 +481,18 @@ def test_compact_task_contract_matches_effective_schema_and_rejects_tampering():
         assert compiled_model_response_schema(task, prompt)["required"]
         with pytest.raises(ValueError, match="invalid_compiled_control"):
             compiled_model_response_schema(task, prompt.replace('"output_contract":"', '"output_contract":"tampered ', 1))
+
+
+@pytest.mark.parametrize("metadata,trust,basis", [
+    ({}, "unverified", "unverified"),
+    ({"source": "sensor", "trust": "verified", "freshness": "current"}, "verified", "caller_asserted"),
+    ({"source": "sensor", "trust": "verified"}, "unverified", "unverified"),
+    ({"source": "sensor", "trust": "verified", "freshness": "revoked"}, "unverified", "unverified"),
+])
+def test_broker_metadata_is_caller_claim_and_missing_is_unverified(metadata, trust, basis):
+    f = frame()
+    result = PromptCompiler().compile(frame=f, playbook=select_playbook(f).playbook,
+        task="update_hypotheses", broker_results=[{"data": "synthetic", **metadata}])
+    data = json.loads(result.split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
+    assert data["broker_results"][0]["trust"] == trust
+    assert data["broker_results"][0]["trust_basis"] == basis

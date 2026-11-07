@@ -478,3 +478,19 @@ The weekend ID-only handoff of earlier report and gap content to later budgeted
 tasks applies to the Nexus caller through `mio_generation`. It is not a guarantee
 of the shared MIO API: callers supplying `references` or `knowledge` can still
 include their content in later tasks. That broader path remains open work.
+
+
+### Broker reference authority
+
+The caller owns source authentication, incident scope, freshness and revocation
+checks for each nonempty broker result. Each item must carry `source`, `trust`
+(`verified` or `unverified`), and `observed_at` or `freshness`. Missing or
+invalid metadata is represented as `trust: unverified` in the compiled input.
+A `verified` value is recorded as `trust_basis: caller_asserted`, not an
+independent MIO verification. ID syntax and membership establish reference
+validity only; they do not establish content, freshness, trust, or permission.
+Broker text remains untrusted input and no result is promoted to a known fact
+or execution authority by this metadata. Callers must withhold expired,
+revoked, cross-incident, or otherwise unverifiable content as appropriate.
+This applies to both budget and non-budget compiler paths, including callers
+using references and knowledge outside Nexus.
