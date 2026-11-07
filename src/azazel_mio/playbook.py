@@ -195,6 +195,9 @@ TRUSTED_RULES: tuple[str, ...] = (
     "For each hypothesis, an evidence_ref may appear in supporting_evidence_refs or contradicting_evidence_refs, never both.",
     "If an evidence_ref has an ambiguous role for a hypothesis, put it in neither evidence list and record the uncertainty in missing_evidence or assumptions.",
     "Maintain uncertainty and multiple hypotheses where the task calls for them.",
+    "For each task return exactly the required fields and types in its output_schema; obey its ID patterns, enums, array limits and supplied reference allowlist. Use empty arrays for absent information; state unknowns in missing_evidence or limitations, never invent observations.",
+    "For identify_evidence_gaps, an empty effective_read_capabilities list requires evidence_gaps: []; do not invent a capability. For recommend, use supplied hypothesis IDs, support and refutation consistently and cite only supplied references.",
+    "Items labeled unconfirmed_question are questions, not observations or authorization to execute a check.",
     "For generate_hypotheses, when the playbook lists multiple hypothesis_prompts, return at least two hypotheses with distinct hypothesis_alternative_id values from the trusted playbook slots, including at least one slot whose trusted role is benign or unresolved. This slot choice is organizational metadata, not evidence or a fact about the statement.",
     "When updating hypotheses, preserve each existing hypothesis_alternative_id; assign a trusted slot ID to any new hypothesis. Slot choices remain model-selected unverified metadata.",
     "Keep each hypothesis statement as an unverified model proposal. Never claim its selected slot role as established fact; role assignments come only from trusted playbook metadata.",
@@ -403,7 +406,7 @@ PROMPT_TEMPLATE_ID = "mio-prompt-compiler"
 # 1.1.0: explicit h<n>/g<n> id format (#386).
 # 1.3.0: model response schemas are derived from the trusted prompt control.
 # 1.5.0: generation/update schemas bind hypotheses to trusted alternative slots.
-PROMPT_TEMPLATE_VERSION = "1.6.0"
+PROMPT_TEMPLATE_VERSION = "1.7.0"
 COMPILER_TASKS = ("generate_hypotheses", "identify_evidence_gaps", "update_hypotheses", "recommend")
 _ENVELOPE = ("TRUSTED_CONTROL", "END_TRUSTED_CONTROL", "UNTRUSTED_DATA", "END_UNTRUSTED_DATA")
 

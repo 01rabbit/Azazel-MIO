@@ -698,7 +698,14 @@ class BoundedReasoningLoop:
             return finish(interrupted, hypotheses, gaps, None)
 
         try:
-            prompt = compile_task("recommend", hypotheses=hypotheses, broker_results=broker_summaries)
+            # These validated, bounded gaps are questions, never broker results
+            # or observed facts. The compiler counts them as mandatory units.
+            questions = [{"kind": "unconfirmed_question", "gap_id": gap.gap_id,
+                          "question": gap.question,
+                          "discriminates_hypothesis_ids": list(gap.discriminates_hypothesis_ids)}
+                         for gap in gaps[:self.budget.max_gaps]]
+            prompt = compile_task("recommend", hypotheses=hypotheses,
+                                  broker_results=[*broker_summaries, *questions])
         except PromptCompileFailure:
             return finish(ReasoningState.BUDGET_EXHAUSTED if budget_reason else ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
         validation_stage = "recommend"

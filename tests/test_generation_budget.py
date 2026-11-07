@@ -99,6 +99,50 @@ class Model:
         return {"input_tokens": 10, "output_tokens": 2}
 
 
+def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_gaps():
+    class AuthModel(Model):
+        def __init__(self):
+            super().__init__()
+            self.prompts = {}
+        def __call__(self, task, prompt):
+            self.prompts[task] = prompt
+            self.calls.append(task)
+            if task == TASKS[0]:
+                def hypothesis(i, slot, support, refute):
+                    return {"hypothesis_id": "h" + str(i), "hypothesis_alternative_id": slot,
+                            "statement": "possible explanation " + str(i), "status": "proposed",
+                            "supporting_evidence_refs": support, "contradicting_evidence_refs": refute,
+                            "assumptions": [], "falsification_conditions": [],
+                            "expected_observations": [], "missing_evidence": ["unknown"]}
+                return {"hypotheses": [hypothesis(1, "credential_attack", ["ev:ssh:1"], []),
+                                       hypothesis(2, "misconfigured_automation", [], ["ev:ssh:1"])]}
+            if task == TASKS[1]:
+                return {"evidence_gaps": []}
+            return {"summary": "uncertain", "recommended_action": "OBSERVE", "rationale": "review",
+                    "evidence_refs": ["ev:ssh:1"], "limitations": ["unverified"]}
+
+    f = frame(soc_summary="authentication failures; success logs unknown")
+    chosen = select_playbook(f)
+    model, broker = AuthModel(), CapabilityBroker()
+    try:
+        result = BoundedReasoningLoop(model=model, broker=broker).run(
+            frame=f, playbook=chosen.playbook, cycle_id="c", selection=chosen,
+            budget_for_task=lambda task: budget())
+    finally:
+        broker.close()
+    assert result.state is ReasoningState.COMPLETE
+    for task in TASKS[1:]:
+        data = json.loads(model.prompts[task].split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
+        h1, h2 = data["hypotheses"]
+        assert (h1["hypothesis_id"], h1["hypothesis_alternative_id"], h1["supporting_evidence_refs"]) == ("h1", "credential_attack", ["ev:ssh:1"])
+        assert (h2["hypothesis_id"], h2["hypothesis_alternative_id"], h2["contradicting_evidence_refs"]) == ("h2", "misconfigured_automation", ["ev:ssh:1"])
+        assert h1["missing_evidence"] and h2["missing_evidence"]
+        if task == "recommend":
+            questions = data["broker_results"]
+            assert 0 < len(questions) <= 3
+            assert all(q["kind"] == "unconfirmed_question" and q["question"] for q in questions)
+
+
 def run(model, callback, compiler=None):
     f = frame(); chosen = select_playbook(f); broker = CapabilityBroker()
     try:
