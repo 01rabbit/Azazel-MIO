@@ -6,9 +6,22 @@ M.I.O.は、Azazelの観測・知識・運用機能を使い、現場の担当�
 
 Edgeでは現場の検知と通信状態を読み解き、Nexusではシステム全体の運用を支えます。動く場所や利用するモデルが変わっても、M.I.O.としての役割、根拠の扱い、安全上の境界は共通です。
 
-> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。[製品別のAI inventory](docs/architecture/ai-inventory.md)は2026-11-04時点のスナップショットで、以後のmain更新を含まない場合があります。現在の統合状態を示すものとしてではなく、記録日時と対象SHAを確認して参照してください。
+> **現在の状態：基盤整備中。** このリポジトリには、ソースからインストールできる標準ライブラリのみのPython core（`azazel-mio`、Python 3.11+）があります。タグ付きの公開リリースや公開パッケージはまだありません。以下の役割分担は目標とする責任の整理で、製品への統合・移行が完了したことを意味しません。[製品別のAI inventory](docs/architecture/ai-inventory.md)は2026-11-04時点のスナップショットで、以後のmain更新を含まない場合があります。現在の統合状態を示すものとしてではなく、記録日時と対象SHAを確認して参照してください。現在のconsumer依存は[Edgeの依存宣言](https://github.com/01rabbit/Azazel-Edge/blob/main/requirements/runtime.txt)と[Nexusの任意依存宣言](https://github.com/01rabbit/Azazel-Nexus/blob/main/pyproject.toml)で確認してください。MIO mainの版とconsumerが固定した版は別管理であり、main更新だけで依存が更新されたことにはなりません。
 
 ソースからの導入と最小の試験方法は [Common Python core](#common-python-core) を参照してください。
+
+### 2026-11-07 の依存宣言と隔離受入候補
+
+次の座標は別々に管理します。候補の受入は、mainへの統合、公開リリース、本番admissionや実機HGの完了を意味しません。上記inventoryの履歴値は維持します。
+
+| 用途 | immutable MIO source / package version | 状態と確認先 |
+| --- | --- | --- |
+| Edge の現依存 | `a1807bf7abb08788b834ae038f7a8b46d09d0acc` / `0.1.0.dev20261106+gitbb6dcfd` | #47 系のpinを維持。[runtime依存宣言](https://github.com/01rabbit/Azazel-Edge/blob/15417868eb3bc3b441522e03142f79ccd9e59805/requirements/runtime.txt)を参照。 |
+| Nexus 向け runtime 候補 | `989dd959a635b5877814bd2912639676308cf999` / `0.1.0.dev20261107+gited860f2` | 再現wheelとfocused試験を確認した候補。Nexus基準main `be653a95` の旧pinとは別で、main反映・全構成・cold installは別判定。 |
+| IR 隔離候補 | #31 head `822865726c0eb8d834799f28fedce0a439cb0f45` / `0.1.0.dev20261107+git6899323.ir1` | 固定wheelをfresh venvへoffline installし、Debian ARM64 VMware guestで受入済み。runtimeとは別tuple・別venv。[PR #31](https://github.com/01rabbit/Azazel-MIO/pull/31)の候補とstandalone-vm手順を参照。MIO mainにIRが統合済みという意味ではない。 |
+
+runtime/IRとも、受入manifestで指定されたimmutable wheelを用います。package versionやsource SHAだけでwheelの同一bytesを推定せず、配布時の受入manifestと照合してください。
+
 
 ## M.I.O.が目指すこと
 
@@ -24,7 +37,7 @@ Edgeでは現場の検知と通信状態を読み解き、Nexusではシステ�
 
 ## 一つのM.I.O.、複数の現場
 
-以下は各場所での**目標とする役割**です。Edgeの現在の状態は公開文書で確認できる範囲に限り、Nexusの実装詳細はこのリポジトリの公開範囲外です。
+以下は各場所での**目標とする役割**です。現在の製品実装は各製品リポジトリのREADMEを参照してください。[Azazel-Nexus](https://github.com/01rabbit/Azazel-Nexus)も公開リポジトリです。MIOは共通の助言コアを所有し、Nexusの導入・認可・起動監視の実装はNexus側で管理します。
 
 | 利用する場所 | 目標とするM.I.O.の役割 |
 | --- | --- |
