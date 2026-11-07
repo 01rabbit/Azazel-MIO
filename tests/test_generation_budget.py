@@ -155,6 +155,62 @@ def test_budgeted_auth_model_unknown_is_private_and_identified_in_later_calls():
         assert "frame:prior_report_already_supplied" in result.generation_receipt.selections[task].kept
 
 
+@pytest.mark.parametrize(('claim', 'fixed_id', 'fixed_text'), [
+    ('The identified actor came from an account.', 'ux:identity',
+     'No source or account identity is supplied in the current privacy-reduced frame.'),
+    ('The host is compromised.', 'ux:impact',
+     'Privilege escalation, exploit success, and host post-condition are not established by the supplied alert.'),
+])
+def test_non_auth_projection_preserves_fixed_origin_and_same_model_text(claim, fixed_id, fixed_text):
+    class ProjectionModel(Model):
+        def __init__(self):
+            super().__init__()
+            self.prompts = {}
+        def __call__(self, task, prompt):
+            self.prompts[task] = prompt
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result['hypotheses'][0]['statement'] = claim
+                result['hypotheses'][0]['missing_evidence'] = []
+                result['hypotheses'][1]['statement'] = 'A benign configuration is possible.'
+                result['hypotheses'][1]['missing_evidence'] = [fixed_text]
+            return result
+    model = ProjectionModel()
+    result = AssistantCore(model=model).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    assert result.to_dict()['state'] == 'complete'
+    receipt = result.generation_receipt
+    assert receipt.frame_unknowns[fixed_id] == fixed_text
+    assert receipt.unknown_origins[fixed_id] == 'fixed_text'
+    assert receipt.frame_unknowns['um:1'] == fixed_text
+    assert receipt.unknown_origins['um:1'] == 'model_authored'
+    for task in TASKS[1:]:
+        data = json.loads(model.prompts[task].split('\nUNTRUSTED_DATA\n')[1].split('\nEND_UNTRUSTED_DATA')[0])
+        ids = {item['id'] for item in data['hypotheses'][0]['missing_evidence']}
+        other_ids = {item['id'] for item in data['hypotheses'][1]['missing_evidence']}
+        assert fixed_id in ids and 'um:1' not in ids
+        assert 'um:1' in other_ids and fixed_id not in other_ids
+    provenance = result.to_dict()['advice_provenance']['hypotheses']
+    assert fixed_id in provenance[0]['unknown_ids'] and 'um:1' not in provenance[0]['unknown_ids']
+    assert 'um:1' in provenance[1]['unknown_ids'] and fixed_id not in provenance[1]['unknown_ids']
+
+
+def test_model_fixed_text_without_projection_remains_model_authored():
+    from azazel_mio.tactical_grounding import AUTH_IMPACT_UNKNOWN
+    class ModelWithSameText(Model):
+        def __call__(self, task, prompt):
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result['hypotheses'][0]['statement'] = 'Possible hostile activity.'
+                result['hypotheses'][0]['missing_evidence'] = [AUTH_IMPACT_UNKNOWN]
+                result['hypotheses'][1]['statement'] = 'Possible benign configuration.'
+            return result
+    result = AssistantCore(model=ModelWithSameText()).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    assert result.to_dict()['state'] == 'complete'
+    assert result.generation_receipt.frame_unknowns['um:1'] == AUTH_IMPACT_UNKNOWN
+    assert result.generation_receipt.unknown_origins['um:1'] == 'model_authored'
+    assert 'ux:impact' not in result.generation_receipt.frame_unknowns
+
+
 def test_model_unknown_text_is_not_in_budgeted_public_hypotheses():
     class UnknownModel(Model):
         def __call__(self, task, prompt):

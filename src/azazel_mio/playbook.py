@@ -250,6 +250,8 @@ class PromptCompiler:
         broker_results: Sequence[Mapping[str, Any]] = (),
         task: str,
         budget: GenerationBudget | None = None,
+        unknown_mapping: Mapping[str, str] | None = None,
+        hypothesis_unknown_ids: Mapping[str, Sequence[str]] | None = None,
     ) -> str | CompiledPrompt:
         trusted = {
             "effective_read_capabilities": [],
@@ -271,7 +273,8 @@ class PromptCompiler:
                 raise BudgetError("count_unknown", "upstream_truncated")
             if task in ("identify_evidence_gaps", "recommend"):
                 from .tactical_grounding import is_authentication_context, unknowns_with_model
-                unknowns = unknowns_with_model(frame, is_authentication_context(frame, playbook), hypotheses)
+                unknowns = (unknown_mapping if unknown_mapping is not None else
+                            unknowns_with_model(frame, is_authentication_context(frame, playbook), hypotheses))
                 frame_data = untrusted["situation_frame"]
                 # The whole report was supplied to generate; it is not a new
                 # omission in subsequent calls. Do not repeat its free text.
@@ -288,7 +291,9 @@ class PromptCompiler:
                     **{k: v for k, v in h.items() if k in ("hypothesis_id", "hypothesis_alternative_id", "status",
                         "supporting_evidence_refs", "contradicting_evidence_refs")},
                     "missing_evidence": [{"id": key, "category": "unclassified"}
-                                         for key, value in unknowns.items() if value in h["missing_evidence"]],
+                                         for key, value in unknowns.items()
+                                         if (key in hypothesis_unknown_ids.get(h["hypothesis_id"], ())
+                                             if hypothesis_unknown_ids is not None else value in h["missing_evidence"])],
                 } for h in hypothesis_dicts]
                 if task == "recommend":
                     untrusted["broker_results"] = [

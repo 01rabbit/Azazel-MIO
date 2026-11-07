@@ -84,9 +84,17 @@ def receipt_unknowns(frame: MioSituationFrame, auth_context: bool) -> dict[str, 
     return result
 
 
-def unknowns_with_model(frame, auth_context, hypotheses):
+def unknowns_with_model(frame, auth_context, hypotheses, *, fixed_ids=(), model_unknowns=None):
     """Keep model assertions distinct from frame and fixed-text origins."""
     result = receipt_unknowns(frame, auth_context)
+    result.update({key: AUTH_UNKNOWN_IDS[key] for key in fixed_ids})
+    if model_unknowns is not None:
+        for value in model_unknowns:
+            # Frame unknowns remain frame-sourced; a model can independently
+            # produce the same text as a fixed safety projection.
+            if value not in frame.unknowns and value not in [v for k, v in result.items() if k.startswith("um:")]:
+                result[f"um:{sum(k.startswith('um:') for k in result) + 1}"] = value
+        return result
     for hypothesis in hypotheses:
         for value in hypothesis.missing_evidence:
             if value not in result.values():

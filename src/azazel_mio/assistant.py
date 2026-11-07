@@ -139,6 +139,7 @@ def _advice_provenance(frame, outcome, playbook, auth_context):
     from .tactical_grounding import unknowns_with_model
     unknowns = (getattr(getattr(outcome, "generation_receipt", None), "frame_unknowns", None)
                 or unknowns_with_model(frame, auth_context, outcome.hypotheses))
+    ids_by_hypothesis = getattr(getattr(outcome, "generation_receipt", None), "hypothesis_unknown_ids", None)
     refs = set(frame.evidence_refs)
     slots = {slot for slot, _ in playbook.hypothesis_alternatives}
     filtered = set()
@@ -160,7 +161,9 @@ def _advice_provenance(frame, outcome, playbook, auth_context):
         items.append({"hypothesis_id": h.hypothesis_id, "slot": h.hypothesis_alternative_id,
                       "support_refs": list(h.supporting_evidence_refs),
                       "refute_refs": list(h.contradicting_evidence_refs),
-                      "unknown_ids": [key for key, value in unknowns.items() if value in h.missing_evidence],
+                      "unknown_ids": (list(ids_by_hypothesis[h.hypothesis_id])
+                                      if ids_by_hypothesis is not None and h.hypothesis_id in ids_by_hypothesis
+                                      else [key for key, value in unknowns.items() if value in h.missing_evidence]),
                       "text_origin": "fixed_text" if auth_context or h.hypothesis_id in filtered else "model_authored"})
     rec_refs = outcome.recommendation.evidence_refs
     if any(ref not in refs or not id_ok(ref, EVIDENCE_REF) for ref in rec_refs):
@@ -1298,8 +1301,12 @@ class AssistantCore:
             private_unknowns = outcome.generation_receipt.frame_unknowns
             model_ids = {value: key for key, value in private_unknowns.items() if key.startswith("um:")}
             for hypothesis in hypotheses:
-                hypothesis["missing_evidence"] = [model_ids.get(value, value)
+                ids = outcome.generation_receipt.hypothesis_unknown_ids.get(hypothesis["hypothesis_id"], ())
+                fixed_values = {private_unknowns[key] for key in ids if key.startswith("ux:")}
+                hypothesis["missing_evidence"] = [value if value in fixed_values else model_ids.get(value, value)
                     for value in hypothesis.get("missing_evidence", [])]
+                hypothesis["missing_evidence"].extend(key for key in ids if key.startswith("um:")
+                    and private_unknowns[key] in fixed_values)
         # Static alternatives are questions to discriminate, never observations
         # or asserted threat attribution. They remain labelled without a model.
         if not hypotheses and not interrupted:
