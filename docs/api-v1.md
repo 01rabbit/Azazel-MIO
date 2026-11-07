@@ -89,7 +89,7 @@ actually fits a slot. The prose remains model-proposed and unverified; slot role
 are not evidence, facts, or authority, and MIO does not claim semantic competition
 is validated. Adapters must return the new field and use IDs from the supplied enum. Invalid slot selections end in
 `validation_rejected` and the deterministic no-model handoff. Prompt template
-version is `1.7.0`. Custom playbooks must define one unique slot per prompt and at
+version is `1.8.0`. Custom playbooks must define one unique slot per prompt and at
 least one benign or unresolved role. There is no enforcement operation or
 executable recommendation.
 

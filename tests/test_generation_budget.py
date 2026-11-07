@@ -159,6 +159,12 @@ def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_g
         assert (h1["hypothesis_id"], h1["hypothesis_alternative_id"], h1["supporting_evidence_refs"]) == ("h1", "credential_attack", ["ev:ssh:1"])
         assert (h2["hypothesis_id"], h2["hypothesis_alternative_id"], h2["contradicting_evidence_refs"]) == ("h2", "misconfigured_automation", ["ev:ssh:1"])
         assert h1["missing_evidence"] and h2["missing_evidence"]
+        assert "statement" not in h1 and "assumptions" not in h1
+        assert data["situation_frame"]["soc_summary"] == f.soc_summary
+        assert data["situation_frame"]["evidence_refs"] == list(f.evidence_refs)
+        selection = result.generation_receipt.selections[task]
+        assert selection.coverage == "selected"
+        assert ("frame:frame_id", "optional_detail") in selection.dropped
         if task == "recommend":
             questions = data["broker_results"]
             assert 0 < len(questions) <= 3
@@ -334,3 +340,17 @@ def test_supplemental_reference_rejects_prose_disguised_as_reference():
     item = {"kind": "supplemental_reference", "evidence_refs": ["contradictory prose " * 80]}
     with pytest.raises(BudgetError, match="budget_exhausted"):
         compile_(budget(limit=len(core)+100), items=[item])
+
+
+def test_compact_task_contract_matches_effective_schema_and_rejects_tampering():
+    from azazel_mio.playbook import compiled_model_response_schema
+    f = frame()
+    for task in TASKS:
+        prompt = PromptCompiler().compile(frame=f, playbook=select_playbook(f).playbook,
+                                          task=task, budget=budget()).text
+        control = json.loads(prompt.split("\nEND_TRUSTED_CONTROL\n", 1)[0].split("\n", 1)[1])
+        assert "output_schema" not in control
+        assert control["output_contract"]
+        assert compiled_model_response_schema(task, prompt)["required"]
+        with pytest.raises(ValueError, match="invalid_compiled_control"):
+            compiled_model_response_schema(task, prompt.replace('"output_contract":"', '"output_contract":"tampered ', 1))
