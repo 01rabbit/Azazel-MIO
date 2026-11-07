@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .contracts import MioHypothesis, MioSituationFrame
+from .budget import BudgetError, CompiledPrompt, GenerationBudget, PromptSelection
+from .contracts import MioHypothesis, MioSituationFrame, model_id_ok
 from .id_grammar import CAPABILITY_NAME_RE
 from .model_schema import model_response_schema
 
@@ -233,7 +234,8 @@ class PromptCompiler:
         hypotheses: Sequence[MioHypothesis] = (),
         broker_results: Sequence[Mapping[str, Any]] = (),
         task: str,
-    ) -> str:
+        budget: GenerationBudget | None = None,
+    ) -> str | CompiledPrompt:
         trusted = {
             "effective_read_capabilities": [],
             "task": str(task)[:120],
@@ -249,6 +251,8 @@ class PromptCompiler:
             "hypotheses": [h.to_dict() for h in hypotheses],
             "broker_results": list(broker_results),
         }
+        if budget is not None:
+            return self._compile_budgeted(trusted, untrusted, budget)
         untrusted_json = self._bounded_untrusted_json(
             untrusted,
             frame=frame,
@@ -262,6 +266,73 @@ class PromptCompiler:
             + untrusted_json
             + "\nEND_UNTRUSTED_DATA"
         )
+
+    def _compile_budgeted(self, trusted, untrusted, budget: GenerationBudget) -> CompiledPrompt:
+        # Frame and hypotheses are indivisible: they carry safety, provenance,
+        # freshness, privacy, unknowns and both supporting/refuting references.
+        if not isinstance(budget, GenerationBudget):
+            raise BudgetError("count_unknown", "invalid_budget")
+        numbers = (budget.input_tokens, budget.output_tokens, budget.context_limit, budget.safety_margin)
+        if any(type(n) is not int or n < 0 for n in numbers) or not callable(budget.count_tokens):
+            raise BudgetError("count_unknown", "invalid_budget")
+        if budget.output_tokens == 0 or budget.context_limit == 0:
+            raise BudgetError("budget_exhausted", "invalid_capacity")
+        frame = untrusted["situation_frame"]
+        if frame.get("truncated"):
+            raise BudgetError("count_unknown", "upstream_truncated")
+        # Broker entries are whole units. Retain any unit tied to a frame or
+        # prior-hypothesis reference; do not break their provenance closure.
+        items = list(untrusted["broker_results"])
+        if len(items) > 32:
+            raise BudgetError("budget_exhausted", "too_many_units")
+        required_refs = set(frame.get("evidence_refs", ())) | set(frame.get("knowledge_refs", ()))
+        for h in untrusted["hypotheses"]:
+            required_refs.update(h.get("supporting_evidence_refs", ()))
+            required_refs.update(h.get("contradicting_evidence_refs", ()))
+        def refs(item):
+            if not isinstance(item, Mapping):
+                return set()
+            return {ref for key in ("evidence_refs", "record_refs", "source_refs")
+                    for ref in item.get(key, ()) if type(ref) is str}
+        # A reference-free entry has no independently established provenance;
+        # conservatively retain it. Only explicitly structured reference-only
+        # units unrelated to the core can be omitted; prose and observations
+        # may contain counterevidence and are never classified as optional.
+        optional = [i for i, item in enumerate(items)
+                    if type(item) is dict and set(item) == {"kind", "evidence_refs"}
+                    and item["kind"] == "supplemental_reference"
+                    and type(item["evidence_refs"]) is list
+                    and 0 < len(item["evidence_refs"]) <= 32
+                    and all(type(ref) is str and model_id_ok(ref, "evidence_ref") for ref in item["evidence_refs"])
+                    and not (refs(item) & required_refs)]
+        kept_indices = list(range(len(items)))
+        dropped = []
+        def render():
+            data = dict(untrusted, broker_results=[items[i] for i in kept_indices])
+            if dropped:
+                data["selection_notice"] = {"omitted_units": len(dropped), "meaning": "some source material omitted; absence is not evidence"}
+            return ("TRUSTED_CONTROL\n" + json.dumps(trusted, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+                    + "\nEND_TRUSTED_CONTROL\nUNTRUSTED_DATA\n"
+                    + neutralize_envelope_markers(json.dumps(data, sort_keys=True, ensure_ascii=True, separators=(",", ":")))
+                    + "\nEND_UNTRUSTED_DATA")
+        while True:
+            text = render()
+            try:
+                count = budget.count_tokens(text)
+            except Exception:
+                raise BudgetError("count_unknown", "counter_failed") from None
+            if type(count) is not int or count < 0:
+                raise BudgetError("count_unknown", "counter_unknown")
+            if count <= budget.input_tokens and count + budget.output_tokens + budget.safety_margin <= budget.context_limit:
+                kept = ("safety", "frame", "hypotheses") + tuple("broker:%d" % i for i in kept_indices)
+                return CompiledPrompt(text, PromptSelection("selected" if dropped else "full", kept,
+                    tuple(sorted(dropped, key=lambda value: int(value[0].split(":")[1]))), count, PROMPT_TEMPLATE_VERSION))
+            remaining = [i for i in optional if i in kept_indices]
+            if not remaining:
+                raise BudgetError("budget_exhausted", "mandatory_units_do_not_fit")
+            index = remaining[-1]
+            kept_indices.remove(index)
+            dropped.append(("broker:%d" % index, "lower_priority"))
 
     def _bounded_untrusted_json(
         self,
@@ -332,7 +403,7 @@ PROMPT_TEMPLATE_ID = "mio-prompt-compiler"
 # 1.1.0: explicit h<n>/g<n> id format (#386).
 # 1.3.0: model response schemas are derived from the trusted prompt control.
 # 1.5.0: generation/update schemas bind hypotheses to trusted alternative slots.
-PROMPT_TEMPLATE_VERSION = "1.5.0"
+PROMPT_TEMPLATE_VERSION = "1.6.0"
 COMPILER_TASKS = ("generate_hypotheses", "identify_evidence_gaps", "update_hypotheses", "recommend")
 _ENVELOPE = ("TRUSTED_CONTROL", "END_TRUSTED_CONTROL", "UNTRUSTED_DATA", "END_UNTRUSTED_DATA")
 

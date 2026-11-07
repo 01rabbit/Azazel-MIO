@@ -5,9 +5,10 @@ import hmac
 import logging
 import secrets
 from functools import lru_cache
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Sequence
 
+from .budget import BudgetError, CompiledPrompt, GenerationBudget, GenerationOutcome
 from .broker import CapabilityBroker, CapabilityBrokerError
 from .claim_audit import audit_claims, unparseable_status_ids
 from .contracts import (
@@ -32,8 +33,9 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
+from .model_schema import validate_model_response
 from .observation_objectives import MioObservationObjective, ObservationProjectionReport, project_observation_report
-from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
+from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, compiled_model_response_schema, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
 from .tactical_grounding import (
     claim_scope_violations,
@@ -144,6 +146,7 @@ class ReasoningOutcome:
     observation_objectives: tuple[MioObservationObjective, ...] = ()
     # Local MIO diagnostic of the observation projection (not a shared contract).
     observation_projection: ObservationProjectionReport | None = None
+    generation_receipt: GenerationOutcome | None = None
 
 
 # Terminal states that get a deterministic no-model handoff. Cancelled and
@@ -204,6 +207,8 @@ class BoundedReasoningLoop:
         stale_check: CancelCheck | None = None,
         selection: PlaybookSelection | None = None,
         broker: CapabilityBroker | None = None,
+        strict_model_response: bool = False,
+        budget_for_task: Callable[[str], GenerationBudget] | None = None,
     ) -> ReasoningOutcome:
         # ``broker``: this cycle's own broker (ReasoningCoordinator.run_cycle
         # passes a new one per cycle); defaults to the loop's broker.
@@ -215,17 +220,62 @@ class BoundedReasoningLoop:
         audit: list[HypothesisAuditEntry] = []
         validated: list[MioHypothesis] = []
         validation_stage = "playbook"
+        task_names = ("generate_hypotheses", "identify_evidence_gaps", "recommend")
+        calls_sent = {task: 0 for task in task_names}
+        usage = {task: None for task in task_names}
+        task_results = {task: "not_started" for task in task_names}
+        selections = {}
+        budget_reason = None
+        current_task = None
+
+        def receipt(state):
+            if budget_for_task is None:
+                return None
+            done = state is ReasoningState.COMPLETE
+            reason = None if done else (budget_reason or ("malformed" if "output_invalid" in errors else state.value))
+            results = dict(task_results)
+            if not done and current_task in results and results[current_task] == "sent":
+                results[current_task] = "failed"
+            receipt_state = ("complete" if done else "failed" if reason == "send_notification_conflict"
+                             else "partial" if sum(calls_sent.values()) else "failed")
+            return GenerationOutcome(receipt_state, results, dict(calls_sent), dict(usage), reason, dict(selections))
 
         def finish(state, hypotheses_out, gaps_out, recommendation_out):
-            return self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated,
+            result = self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated,
                                 validation_stage=validation_stage)
+            return replace(result, generation_receipt=receipt(state))
 
         class PromptCompileFailure(Exception):
             pass
 
         def compile_task(task: str, **kwargs) -> str:
+            nonlocal budget_reason, current_task
+            current_task = task
+            if budget_for_task is not None:
+                task_results[task] = "not_sent"
             try:
-                prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, **kwargs)
+                if budget_for_task is None:
+                    prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, **kwargs)
+                else:
+                    try:
+                        budget = budget_for_task(task)
+                    except BudgetError:
+                        raise
+                    except Exception:
+                        raise BudgetError("count_unknown", "budget_unavailable") from None
+                    prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, budget=budget, **kwargs)
+                    if not isinstance(prompt, CompiledPrompt):
+                        raise BudgetError("count_unknown", "compiler_not_budget_aware")
+                    chosen = prompt.selection
+                    if any(previous.coverage == "selected" for previous in selections.values()):
+                        chosen = replace(chosen, coverage="selected")
+                    selections[task] = chosen
+                    prompt = prompt.text
+            except BudgetError as exc:
+                budget_reason = exc.reason if exc.reason in {"budget_exhausted", "count_unknown"} else "count_unknown"
+                errors.append(budget_reason)
+                task_results[task] = "not_sent"
+                raise PromptCompileFailure from None
             except Exception as exc:
                 error_class = type(exc).__name__
                 if not error_class.isascii() or not error_class.isidentifier():
@@ -237,8 +287,82 @@ class BoundedReasoningLoop:
             trace.record(state="compile_succeeded", kind="prompt_compile", payload={"task": task})
             return prompt
 
+        def invoke(task: str, prompt: str):
+            nonlocal budget_reason
+            if budget_for_task is None:
+                return self.model(task, prompt)
+            task_results[task] = "not_sent"
+            budgeted = getattr(self.model, "invoke_budgeted", None)
+            if not callable(budgeted):
+                budget_reason = "dispatch_tracking_unavailable"
+                raise MioModelUnavailable("dispatch_tracking_unavailable")
+            active = True
+            notification_conflict = False
+            def on_dispatch():
+                nonlocal notification_conflict
+                if not active:
+                    raise RuntimeError("invalid_dispatch_notification")
+                if calls_sent[task] != 0:
+                    notification_conflict = True
+                    raise RuntimeError("invalid_dispatch_notification")
+                calls_sent[task] = 1
+                task_results[task] = "sent"
+            try:
+                result = budgeted(task, prompt, on_dispatch)
+                if notification_conflict:
+                    raise MioModelUnavailable("send_notification_conflict")
+                if not calls_sent[task]:
+                    budget_reason = "dispatch_tracking_unavailable"
+                    raise MioModelUnavailable("dispatch_notification_missing")
+                return result
+            finally:
+                active = False
+                if notification_conflict:
+                    budget_reason = "send_notification_conflict"
+                # Only a dispatched call can have usage. This explicit
+                # per-task adapter hook is best-effort and never inferred.
+                if calls_sent[task]:
+                    try:
+                        get_usage = getattr(self.model, "usage_for_task", None)
+                        if callable(get_usage):
+                            observed = get_usage(task)
+                            if (type(observed) is dict and set(observed) == {"input_tokens", "output_tokens"}
+                                    and all(type(v) is int and v >= 0 for v in observed.values())):
+                                usage[task] = dict(observed)
+                    except Exception:
+                        pass
+
         def enter_model_adapter(task: str) -> None:
             trace.record(state="adapter_entered", kind="model_adapter", payload={"task": task})
+
+        def response_valid(task: str, prompt: str, raw: Any) -> bool:
+            if not strict_model_response and budget_for_task is None:
+                return True
+            try:
+                valid = validate_model_response(raw, compiled_model_response_schema(task, prompt))
+                if valid and budget_for_task is not None:
+                    if task in ("generate_hypotheses", "update_hypotheses"):
+                        valid = len(raw["hypotheses"]) <= self.budget.max_hypotheses and all(MioHypothesis.from_mapping(item, ordinal=i + 1).to_dict() == item
+                                    for i, item in enumerate(raw["hypotheses"]))
+                    elif task == "identify_evidence_gaps":
+                        valid = len(raw["evidence_gaps"]) <= self.budget.max_gaps
+                        for i, item in enumerate(raw["evidence_gaps"]):
+                            gap = MioEvidenceGap.from_mapping(item, ordinal=i + 1)
+                            if {"gap_id": gap.gap_id, "question": gap.question,
+                                "discriminates_hypothesis_ids": list(gap.discriminates_hypothesis_ids),
+                                "capability": gap.capability, "priority": gap.priority} != item:
+                                valid = False
+                                break
+                    else:
+                        rec = MioRecommendation.from_mapping(raw, advisory_id="budget-validation")
+                        valid = {"summary": rec.summary, "recommended_action": rec.recommended_action,
+                                 "rationale": rec.rationale, "evidence_refs": list(rec.evidence_refs),
+                                 "limitations": list(rec.limitations)} == raw
+            except (TypeError, ValueError, KeyError, RecursionError):
+                valid = False
+            if not valid:
+                errors.append("output_invalid")
+            return valid
 
         trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id, "frame_material_digest": "sha256:" + frame.canonical_digest()})
         selection = guard_selection(playbook, selection)  # invalid playbook -> generic, never compiled
@@ -271,12 +395,12 @@ class BoundedReasoningLoop:
         try:
             prompt = compile_task("generate_hypotheses")
         except PromptCompileFailure:
-            return finish(ReasoningState.ERROR_FALLBACK, (), (), None)
+            return finish(ReasoningState.BUDGET_EXHAUSTED if budget_reason else ReasoningState.ERROR_FALLBACK, (), (), None)
 
         validation_stage = "generate_hypotheses"
         enter_model_adapter("generate_hypotheses")
         try:
-            raw_h = self.model("generate_hypotheses", prompt)
+            raw_h = invoke("generate_hypotheses", prompt)
             model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
             errors.append(_exception_code("model_dependency_unavailable", exc))
@@ -289,6 +413,8 @@ class BoundedReasoningLoop:
         if interrupted is not None:
             return finish(interrupted, (), (), None)
 
+        if not response_valid("generate_hypotheses", prompt, raw_h):
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
         items = raw_h.get("hypotheses", []) if isinstance(raw_h, Mapping) else []
         if not isinstance(items, list):
             errors.append("hypotheses_not_list")
@@ -345,17 +471,19 @@ class BoundedReasoningLoop:
                          "proposed_role": trusted_alternatives[h.hypothesis_alternative_id],
                          "verification": "model_proposed_unverified"} for h in hypotheses]})
 
+        if budget_for_task is not None:
+            task_results["generate_hypotheses"] = "validated"
         if model_calls >= self.budget.max_model_calls:
             errors.append("model_budget_exhausted_before_gap_planning")
             return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, (), None)
         try:
             prompt = compile_task("identify_evidence_gaps", hypotheses=hypotheses)
         except PromptCompileFailure:
-            return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
+            return finish(ReasoningState.BUDGET_EXHAUSTED if budget_reason else ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
         validation_stage = "identify_evidence_gaps"
         enter_model_adapter("identify_evidence_gaps")
         try:
-            raw_g = self.model("identify_evidence_gaps", prompt)
+            raw_g = invoke("identify_evidence_gaps", prompt)
             model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
             errors.append(_exception_code("model_dependency_unavailable", exc))
@@ -363,6 +491,8 @@ class BoundedReasoningLoop:
         except Exception as exc:
             errors.append(_exception_code("model_gap_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
+        if not response_valid("identify_evidence_gaps", prompt, raw_g):
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
         gap_items = raw_g.get("evidence_gaps", []) if isinstance(raw_g, Mapping) else []
         if not isinstance(gap_items, list):
             gap_items = []
@@ -398,6 +528,8 @@ class BoundedReasoningLoop:
         if not gap_check.ok:
             errors.extend(gap_check.errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+        if budget_for_task is not None:
+            task_results["identify_evidence_gaps"] = "validated"
         trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gaps", payload={"ids": [g.gap_id for g in gaps]})
         if frame_gap_ids:
             trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="frame_derived_gaps",
@@ -465,6 +597,11 @@ class BoundedReasoningLoop:
         # is skipped when no capability returned a result, avoiding a pointless
         # model call on constrained hardware.
         if broker_summaries:
+            if budget_for_task is not None:
+                budget_reason = "task_plan_unsupported"
+                current_task = None
+                errors.append("task_plan_unsupported")
+                return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None)
             if model_calls >= self.budget.max_model_calls:
                 errors.append("model_budget_exhausted_before_hypothesis_update")
                 return finish(ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None)
@@ -475,11 +612,11 @@ class BoundedReasoningLoop:
                 prompt = compile_task("update_hypotheses", hypotheses=hypotheses,
                                       broker_results=broker_summaries)
             except PromptCompileFailure:
-                return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+                return finish(ReasoningState.BUDGET_EXHAUSTED if budget_reason else ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
             validation_stage = "update_hypotheses"
             enter_model_adapter("update_hypotheses")
             try:
-                raw_u = self.model("update_hypotheses", prompt)
+                raw_u = invoke("update_hypotheses", prompt)
                 model_calls += 1
             except (MioModelBlocked, MioModelUnavailable) as exc:
                 errors.append(_exception_code("model_dependency_unavailable", exc))
@@ -487,6 +624,8 @@ class BoundedReasoningLoop:
             except Exception as exc:
                 errors.append(_exception_code("model_hypothesis_update_error", exc))
                 return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+            if not response_valid("update_hypotheses", prompt, raw_u):
+                return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
             if not isinstance(raw_u, Mapping):
                 errors.append("hypothesis_update_not_mapping")
                 return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
@@ -561,11 +700,11 @@ class BoundedReasoningLoop:
         try:
             prompt = compile_task("recommend", hypotheses=hypotheses, broker_results=broker_summaries)
         except PromptCompileFailure:
-            return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
+            return finish(ReasoningState.BUDGET_EXHAUSTED if budget_reason else ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
         validation_stage = "recommend"
         enter_model_adapter("recommend")
         try:
-            raw_r = self.model("recommend", prompt)
+            raw_r = invoke("recommend", prompt)
             model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
             errors.append(_exception_code("model_dependency_unavailable", exc))
@@ -577,6 +716,8 @@ class BoundedReasoningLoop:
         interrupted = self._interrupted(cancel_check, stale_check, errors)
         if interrupted is not None:
             return finish(interrupted, hypotheses, gaps, None)
+        if not response_valid("recommend", prompt, raw_r):
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
         if not isinstance(raw_r, Mapping):
             errors.append("recommendation_not_mapping")
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
@@ -610,6 +751,8 @@ class BoundedReasoningLoop:
         if not rec_check.ok:
             errors.extend(rec_check.errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, recommendation)
+        if budget_for_task is not None:
+            task_results["recommend"] = "validated"
         trace.record(
             state=ReasoningState.RECOMMENDATION_READY.value,
             kind="recommendation",
@@ -632,7 +775,8 @@ class BoundedReasoningLoop:
             eligible_gap_ids=frozenset(s.gap_id for s in gap_scores if s.eligible),
             max_gaps=self.budget.max_gaps)
         return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events(), tuple(audit),
-                                observation_objectives=objectives, observation_projection=projection)
+                                observation_objectives=objectives, observation_projection=projection,
+                                generation_receipt=receipt(ReasoningState.COMPLETE))
 
     @staticmethod
     def _finish(

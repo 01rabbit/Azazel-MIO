@@ -16,6 +16,11 @@ class StructuredTransport(Protocol):
     last_model: str
     def __call__(self, task: str, prompt: str) -> Mapping[str, Any]: ...
 
+class BudgetedStructuredTransport(Protocol):
+    def invoke_budgeted(self, task: str, prompt: str, on_dispatch: Callable[[], None]) -> Mapping[str, Any]:
+        """Signal once, synchronously, at the actual dispatch boundary."""
+        ...
+
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
