@@ -267,22 +267,36 @@ class PromptCompiler:
             "broker_results": list(broker_results),
         }
         if budget is not None:
+            if untrusted["situation_frame"].get("truncated"):
+                raise BudgetError("count_unknown", "upstream_truncated")
             if task in ("identify_evidence_gaps", "recommend"):
-                # Keep reports and their provenance together. Empty collections
-                # carry no source material; identifiers are transport metadata.
+                from .tactical_grounding import is_authentication_context, unknowns_with_model
+                unknowns = unknowns_with_model(frame, is_authentication_context(frame, playbook), hypotheses)
                 frame_data = untrusted["situation_frame"]
-                omitted = [key for key in ("frame_id", "trace_id", "schema_version",
-                           "actions", "actors", "deception_context", "knowledge_refs")
-                           if key in frame_data and (key in ("frame_id", "trace_id", "schema_version")
-                                                     or frame_data[key] in ([], None))]
-                untrusted["situation_frame"] = {k: v for k, v in frame_data.items() if k not in omitted}
+                # The whole report was supplied to generate; it is not a new
+                # omission in subsequent calls. Do not repeat its free text.
+                untrusted["situation_frame"] = {
+                    "evidence_refs": frame_data.get("evidence_refs", []),
+                    "unknowns": [{"id": key, "category": "unclassified"}
+                                 for key in unknowns if not key.startswith("um:")],
+                    "prior_report": "already_supplied_unverified",
+                }
+                if task == "recommend":
+                    untrusted["situation_frame"].pop("unknowns")
                 hypothesis_dicts = [h.to_dict() for h in hypotheses]
-                untrusted["hypotheses"] = [
-                    {k: v for k, v in h.items() if k in (
-                        "hypothesis_id", "hypothesis_alternative_id", "status",
-                        "supporting_evidence_refs", "contradicting_evidence_refs", "missing_evidence")}
-                    for h in hypothesis_dicts]
-                untrusted["_omitted_units"] = ["frame:" + key for key in omitted] + [
+                untrusted["hypotheses"] = [{
+                    **{k: v for k, v in h.items() if k in ("hypothesis_id", "hypothesis_alternative_id", "status",
+                        "supporting_evidence_refs", "contradicting_evidence_refs")},
+                    "missing_evidence": [{"id": key, "category": "unclassified"}
+                                         for key, value in unknowns.items() if value in h["missing_evidence"]],
+                } for h in hypothesis_dicts]
+                if task == "recommend":
+                    untrusted["broker_results"] = [
+                        {"kind": "unconfirmed_question", "gap_id": item["gap_id"],
+                         "category": "unclassified"}
+                        if item.get("kind") == "unconfirmed_question" else item
+                        for item in broker_results]
+                untrusted["_omitted_units"] = [
                     "hypothesis:%d:%s" % (i, key) for i, h in enumerate(hypothesis_dicts)
                     for key in h if key not in untrusted["hypotheses"][i]]
             return self._compile_budgeted(trusted, untrusted, budget)
@@ -359,7 +373,9 @@ class PromptCompiler:
             if type(count) is not int or count < 0:
                 raise BudgetError("count_unknown", "counter_unknown")
             if count <= budget.input_tokens and count + budget.output_tokens + budget.safety_margin <= budget.context_limit:
-                kept = ("safety", "frame", "hypotheses") + tuple("broker:%d" % i for i in kept_indices)
+                kept = ("safety", "frame", "hypotheses") + (
+                    ("frame:prior_report_already_supplied",) if frame.get("prior_report") else ()
+                ) + tuple("broker:%d" % i for i in kept_indices)
                 return CompiledPrompt(text, PromptSelection("selected" if dropped else "full", kept,
                     tuple(sorted(dropped, key=lambda value: (0, value[0]) if not value[0].startswith("broker:")
                                  else (1, int(value[0].split(":")[1])))), count, PROMPT_TEMPLATE_VERSION))

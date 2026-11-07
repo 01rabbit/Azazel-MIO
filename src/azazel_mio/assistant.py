@@ -136,8 +136,9 @@ def _advice_provenance(frame, outcome, playbook, auth_context):
     """Return only bounded, frame-bound identifiers, never model prose."""
     if outcome.state is not ReasoningState.COMPLETE or getattr(outcome, "recommendation", None) is None:
         return None
-    from .tactical_grounding import receipt_unknowns
-    unknowns = receipt_unknowns(frame, auth_context)
+    from .tactical_grounding import unknowns_with_model
+    unknowns = (getattr(getattr(outcome, "generation_receipt", None), "frame_unknowns", None)
+                or unknowns_with_model(frame, auth_context, outcome.hypotheses))
     refs = set(frame.evidence_refs)
     slots = {slot for slot, _ in playbook.hypothesis_alternatives}
     filtered = set()
@@ -1293,6 +1294,12 @@ class AssistantCore:
             for h in outcome.hypotheses
         ] if (not interrupted and outcome.state is not ReasoningState.VALIDATION_REJECTED
               and (generation_budget is None or outcome.state is ReasoningState.COMPLETE)) else []
+        if generation_budget is not None and outcome.generation_receipt is not None:
+            private_unknowns = outcome.generation_receipt.frame_unknowns
+            model_ids = {value: key for key, value in private_unknowns.items() if key.startswith("um:")}
+            for hypothesis in hypotheses:
+                hypothesis["missing_evidence"] = [model_ids.get(value, value)
+                    for value in hypothesis.get("missing_evidence", [])]
         # Static alternatives are questions to discriminate, never observations
         # or asserted threat attribution. They remain labelled without a model.
         if not hypotheses and not interrupted:
@@ -1450,8 +1457,9 @@ class AssistantCore:
                 payload.pop("advice_provenance", None)
         receipt = getattr(outcome, "generation_receipt", None)
         if receipt is not None:
-            from .tactical_grounding import receipt_unknowns
-            receipt = replace(receipt, frame_unknowns=receipt_unknowns(frame, auth_context))
+            from .tactical_grounding import unknowns_with_model
+            if not receipt.frame_unknowns:
+                receipt = replace(receipt, frame_unknowns=unknowns_with_model(frame, auth_context, outcome.hypotheses))
         if receipt is not None and coordinator is not None:
             disposition = {
                 "current": "current", "backpressure": "backpressure",

@@ -83,6 +83,17 @@ def receipt_unknowns(frame: MioSituationFrame, auth_context: bool) -> dict[str, 
         result.update({key: text for key, text in AUTH_UNKNOWN_IDS.items() if text in fixed})
     return result
 
+
+def unknowns_with_model(frame, auth_context, hypotheses):
+    """Keep model assertions distinct from frame and fixed-text origins."""
+    result = receipt_unknowns(frame, auth_context)
+    for hypothesis in hypotheses:
+        for value in hypothesis.missing_evidence:
+            if value not in result.values():
+                count = sum(key.startswith("um:") for key in result) + 1
+                result[f"um:{count}"] = value
+    return result
+
 _AUTH_GAP_SPECS = (
     ("AUTH_SUCCESS_AFTER_FAILURES_NOT_ESTABLISHED", "Check the authorized read-only authentication alert window for any successful login after the observed failures; report only the result and evidence reference.", "query_recent_alerts", AUTH_SUCCESS_UNKNOWN),
     ("AUTH_AUTOMATION_BASELINE_NOT_SUPPLIED", "Compare the observed time and count with a documented, approved automation or monitoring baseline; if none is available, keep this unresolved.", "lookup_behavior_pattern", AUTH_BASELINE_UNKNOWN),

@@ -49,3 +49,4 @@ class GenerationOutcome:
     # Private receipt material. Never place these caller-supplied strings in
     # public provenance; products must keep this mapping with the local receipt.
     frame_unknowns: dict[str, str] = field(default_factory=dict)
+    unknown_origins: dict[str, str] = field(default_factory=dict)

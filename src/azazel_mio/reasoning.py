@@ -219,6 +219,7 @@ class BoundedReasoningLoop:
         broker_calls = 0
         audit: list[HypothesisAuditEntry] = []
         validated: list[MioHypothesis] = []
+        original_missing: dict[str, tuple[str, ...]] = {}
         validation_stage = "playbook"
         task_names = ("generate_hypotheses", "identify_evidence_gaps", "recommend")
         calls_sent = {task: 0 for task in task_names}
@@ -238,7 +239,14 @@ class BoundedReasoningLoop:
                 results[current_task] = "failed"
             receipt_state = ("complete" if done else "failed" if reason == "send_notification_conflict"
                              else "partial" if sum(calls_sent.values()) else "failed")
-            return GenerationOutcome(receipt_state, results, dict(calls_sent), dict(usage), reason, dict(selections))
+            from .tactical_grounding import unknowns_with_model
+            private_hypotheses = tuple(replace(h, missing_evidence=tuple(dict.fromkeys(
+                h.missing_evidence + original_missing.get(h.hypothesis_id, ())))) for h in validated)
+            unknowns = unknowns_with_model(frame, is_authentication_context(frame, playbook), private_hypotheses)
+            origins = {key: ("model_authored" if key.startswith("um:") else
+                             "fixed_text" if key.startswith("ux:") else "frame") for key in unknowns}
+            return GenerationOutcome(receipt_state, results, dict(calls_sent), dict(usage), reason, dict(selections),
+                frame_unknowns=unknowns, unknown_origins=origins)
 
         def finish(state, hypotheses_out, gaps_out, recommendation_out):
             result = self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated,
@@ -263,6 +271,10 @@ class BoundedReasoningLoop:
                         raise
                     except Exception:
                         raise BudgetError("count_unknown", "budget_unavailable") from None
+                    if task in ("identify_evidence_gaps", "recommend") and "hypotheses" in kwargs:
+                        kwargs["hypotheses"] = tuple(replace(h, missing_evidence=tuple(dict.fromkeys(
+                            h.missing_evidence + original_missing.get(h.hypothesis_id, ()))))
+                            for h in kwargs["hypotheses"])
                     prompt = self.compiler.compile(frame=frame, playbook=playbook, task=task, budget=budget, **kwargs)
                     if not isinstance(prompt, CompiledPrompt):
                         raise BudgetError("count_unknown", "compiler_not_budget_aware")
@@ -457,6 +469,7 @@ class BoundedReasoningLoop:
         if initial_errors:
             errors.extend(initial_errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
+        original_missing.update((h.hypothesis_id, h.missing_evidence) for h in hypotheses)
         hypotheses, scoped_claims = scope_hypotheses_to_frame(hypotheses, frame=frame, playbook=playbook)
         if scoped_claims:
             trace.record(state=ReasoningState.HYPOTHESES_READY.value, kind="semantic_scope_filter",

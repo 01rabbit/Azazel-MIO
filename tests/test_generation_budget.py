@@ -121,6 +121,55 @@ def test_advice_provenance_retains_frame_ids_and_private_unknown_mapping():
     assert '"unknown"' not in json.dumps(provenance)
 
 
+def test_budgeted_auth_model_unknown_is_private_and_identified_in_later_calls():
+    class AuthUnknown(Model):
+        def __init__(self):
+            super().__init__()
+            self.prompts = {}
+        def __call__(self, task, prompt):
+            self.prompts[task] = prompt
+            if task == TASKS[0]:
+                return {"hypotheses": [{"hypothesis_id": f"h{i}", "hypothesis_alternative_id": slot,
+                    "statement": f"Possible explanation {i}", "status": "proposed",
+                    "supporting_evidence_refs": ["ev:ssh:1"], "contradicting_evidence_refs": [],
+                    "assumptions": [], "falsification_conditions": [], "expected_observations": [],
+                    "missing_evidence": ["MODEL PRIVATE QUESTION"]} for i, slot in
+                    ((1, "credential_attack"), (2, "misconfigured_automation"))]}
+            return super().__call__(task, prompt)
+    f = frame(soc_summary="authentication failures; success logs unknown")
+    chosen = select_playbook(f)
+    model, broker = AuthUnknown(), CapabilityBroker()
+    try:
+        result = BoundedReasoningLoop(model=model, broker=broker).run(
+            frame=f, playbook=chosen.playbook, cycle_id="c", selection=chosen,
+            budget_for_task=lambda _: budget())
+    finally:
+        broker.close()
+    assert result.state is ReasoningState.COMPLETE
+    assert result.generation_receipt.frame_unknowns["um:1"] == "MODEL PRIVATE QUESTION"
+    assert result.generation_receipt.unknown_origins["um:1"] == "model_authored"
+    for task in TASKS[1:]:
+        data = json.loads(model.prompts[task].split("\nUNTRUSTED_DATA\n")[1].split("\nEND_UNTRUSTED_DATA")[0])
+        assert "MODEL PRIVATE QUESTION" not in model.prompts[task]
+        assert {"id": "um:1", "category": "unclassified"} in data["hypotheses"][0]["missing_evidence"]
+        assert "frame:prior_report_already_supplied" in result.generation_receipt.selections[task].kept
+
+
+def test_model_unknown_text_is_not_in_budgeted_public_hypotheses():
+    class UnknownModel(Model):
+        def __call__(self, task, prompt):
+            result = super().__call__(task, prompt)
+            if task == TASKS[0]:
+                result["hypotheses"][0]["missing_evidence"] = ["private model unknown"]
+                result["hypotheses"][0]["statement"] = "Possible hostile activity"
+                result["hypotheses"][1]["statement"] = "Possible benign configuration change"
+            return result
+    result = AssistantCore(model=UnknownModel()).explain(frame(), now=NOW, generation_budget=lambda _: budget())
+    assert result.generation_receipt.frame_unknowns["um:1"] == "private model unknown"
+    assert "private model unknown" not in json.dumps(result.to_dict())
+    assert "um:1" in result.to_dict()["hypotheses"][0]["missing_evidence"]
+
+
 def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_gaps():
     class AuthModel(Model):
         def __init__(self):
@@ -160,15 +209,22 @@ def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_g
         assert (h2["hypothesis_id"], h2["hypothesis_alternative_id"], h2["contradicting_evidence_refs"]) == ("h2", "misconfigured_automation", ["ev:ssh:1"])
         assert h1["missing_evidence"] and h2["missing_evidence"]
         assert "statement" not in h1 and "assumptions" not in h1
-        assert data["situation_frame"]["soc_summary"] == f.soc_summary
+        assert "soc_summary" not in data["situation_frame"]
+        assert data["situation_frame"]["prior_report"] == "already_supplied_unverified"
         assert data["situation_frame"]["evidence_refs"] == list(f.evidence_refs)
+        if task == "identify_evidence_gaps":
+            assert {"id": "u1", "category": "unclassified"} in data["situation_frame"]["unknowns"]
+        else:
+            assert "unknowns" not in data["situation_frame"]
         selection = result.generation_receipt.selections[task]
         assert selection.coverage == "selected"
-        assert ("frame:frame_id", "optional_detail") in selection.dropped
+        assert "frame:prior_report_already_supplied" in selection.kept
         if task == "recommend":
             questions = data["broker_results"]
             assert 0 < len(questions) <= 3
-            assert all(q["kind"] == "unconfirmed_question" and q["question"] for q in questions)
+            assert all(set(q) == {"kind", "gap_id", "category"}
+                       and q["kind"] == "unconfirmed_question"
+                       and q["gap_id"] and q["category"] == "unclassified" for q in questions)
 
 
 def run(model, callback, compiler=None):
