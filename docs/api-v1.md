@@ -473,3 +473,8 @@ transport integrity, cancellation and stop confirmation, and must reject
 missing usage and unsupported or unknown coverage according to its own contract.
 The JSON decoder must reject duplicate keys before passing the raw mapping to
 MIO. Neither this API nor a successful local result grants generation admission.
+
+The weekend ID-only handoff of earlier report and gap content to later budgeted
+tasks applies to the Nexus caller through `mio_generation`. It is not a guarantee
+of the shared MIO API: callers supplying `references` or `knowledge` can still
+include their content in later tasks. That broader path remains open work.
