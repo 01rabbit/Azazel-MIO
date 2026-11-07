@@ -136,7 +136,8 @@ def _advice_provenance(frame, outcome, playbook, auth_context):
     """Return only bounded, frame-bound identifiers, never model prose."""
     if outcome.state is not ReasoningState.COMPLETE or getattr(outcome, "recommendation", None) is None:
         return None
-    unknowns = {f"u{i}": text for i, text in enumerate(frame.unknowns, 1)}
+    from .tactical_grounding import receipt_unknowns
+    unknowns = receipt_unknowns(frame, auth_context)
     refs = set(frame.evidence_refs)
     slots = {slot for slot, _ in playbook.hypothesis_alternatives}
     filtered = set()
@@ -1448,9 +1449,9 @@ class AssistantCore:
                 payload.pop("fabric_knowledge_context_advisory", None)
                 payload.pop("advice_provenance", None)
         receipt = getattr(outcome, "generation_receipt", None)
-        if receipt is not None and provenance is not None:
-            receipt = replace(receipt, frame_unknowns={f"u{i}": item
-                for i, item in enumerate(frame.unknowns, 1)})
+        if receipt is not None:
+            from .tactical_grounding import receipt_unknowns
+            receipt = replace(receipt, frame_unknowns=receipt_unknowns(frame, auth_context))
         if receipt is not None and coordinator is not None:
             disposition = {
                 "current": "current", "backpressure": "backpressure",

@@ -66,6 +66,23 @@ AUTH_SUCCESS_UNKNOWN = "The frame does not establish whether any authentication 
 AUTH_BASELINE_UNKNOWN = "An approved automation or monitoring baseline is not included in the frame."
 AUTH_IMPACT_UNKNOWN = "Privilege escalation, exploit success, and host post-condition are not established by the supplied alert."
 
+# Each fixed safety projection has its own stable identifier.  The strings
+# remain local receipt material; IDs alone are suitable for prompt handoff.
+AUTH_UNKNOWN_IDS = {
+    "ux:identity": AUTH_SOURCE_UNKNOWN,
+    "ux:success": AUTH_SUCCESS_UNKNOWN,
+    "ux:baseline": AUTH_BASELINE_UNKNOWN,
+    "ux:impact": AUTH_IMPACT_UNKNOWN,
+}
+
+
+def receipt_unknowns(frame: MioSituationFrame, auth_context: bool) -> dict[str, str]:
+    result = {f"u{i}": text for i, text in enumerate(frame.unknowns, 1)}
+    if auth_context:
+        fixed = set(authentication_frame_unknowns(frame))
+        result.update({key: text for key, text in AUTH_UNKNOWN_IDS.items() if text in fixed})
+    return result
+
 _AUTH_GAP_SPECS = (
     ("AUTH_SUCCESS_AFTER_FAILURES_NOT_ESTABLISHED", "Check the authorized read-only authentication alert window for any successful login after the observed failures; report only the result and evidence reference.", "query_recent_alerts", AUTH_SUCCESS_UNKNOWN),
     ("AUTH_AUTOMATION_BASELINE_NOT_SUPPLIED", "Compare the observed time and count with a documented, approved automation or monitoring baseline; if none is available, keep this unresolved.", "lookup_behavior_pattern", AUTH_BASELINE_UNKNOWN),
