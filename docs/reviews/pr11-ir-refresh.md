@@ -382,7 +382,9 @@ provenance, records the wheel source details, ties the report-creation review
 to its treatment, and clarifies README environment scope. Neither reviewer ran
 tests; the test evidence below is from separate commands.
 
-Current MIO main/base is `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The
+Current pointer (2026-11-07): the retained PR #11 work is now part of the synthesized Draft PR #31 IR candidate at `822865726c0eb8d834799f28fedce0a439cb0f45`, package `0.1.0.dev20261107+git6899323.ir1`. Its immutable IR wheel passed offline installation into a fresh venv and isolated Debian ARM64 VMware guest acceptance. Follow the [current standalone guest instructions](../../deploy/standalone-vm/README.md) and the accepted artifact manifest supplied with that wheel. This candidate is separate from the Nexus runtime tuple and remains unmerged to main; guest acceptance is not production admission or hardware acceptance.
+
+Historical PR #11 review and wheel receipts follow; their source coordinates, versions and counts are retained and do not identify the current accepted IR wheel. At the time of this review, MIO main/base was `5bb09c8d28c57604dc1c63903b98fed7587b49ea`. The
 candidate changes eight files: `CHANGELOG.md`, `.gitignore`,
 `deploy/standalone-vm/README.md`, `docs/reviews/pr11-ir-refresh.md`,
 `examples/synthetic_ir_case/events.jsonl`, `pyproject.toml`,

@@ -1,6 +1,8 @@
 # IR fast-assessment adapter and CLI candidate command (offline slice)
 
-**Status:** local fast-forward candidate for Draft PR #24, preserving source PR head `1b4b3ff12ea998b260b330e070b21fddee21e888` and based on refreshed PR #11 candidate `a5b74ec256e21a8314ff378ab95f4d31dfb397a3`. Not merged to the remote PR, not admitted, and not wired to any product.
+**Current status (2026-11-07):** preserved in the synthesized Draft PR #31 candidate at immutable source `822865726c0eb8d834799f28fedce0a439cb0f45`, package version `0.1.0.dev20261107+git6899323.ir1`. Its fixed IR wheel passed isolated Debian ARM64 VMware guest acceptance after an offline install into a fresh venv. It remains separate from the Nexus runtime tuple, unmerged to main, not admitted and not wired to a product. See [standalone guest installation](../../deploy/standalone-vm/README.md) for the immutable wheel path and isolation requirements.
+
+**Historical PR #24 status (retained):** local fast-forward candidate for Draft PR #24, preserving source PR head `1b4b3ff12ea998b260b330e070b21fddee21e888` and based on refreshed PR #11 candidate `a5b74ec256e21a8314ff378ab95f4d31dfb397a3`. Not merged to the remote PR, not admitted, and not wired to any product.
 
 ## Purpose
 
@@ -143,6 +145,12 @@ Unknown signal values are not errors. Anything the kernel does not recognize rea
 - No changes to `assessment.py`, `fast_assessment.py`, packaging or configuration beyond PR #11's existing `mio-ir` entry point.
 
 ## Verification status
+
+### Current synthesized IR candidate (2026-11-07)
+
+The immutable source and package version above identify the IR candidate wheel, not the older wheels in the historical PR #11 review. Two offline builds produced identical wheel bytes. The accepted guest run used the fixed wheel in a fresh venv with user-site disabled, PYTHONPATH unset and PATH restricted to that venv's bin directory. The runner reported `ok=true` and `tamper_detected=true`. These results cover isolated IR evidence handling, not runtime product integration, production admission or hardware acceptance. Use the accepted artifact manifest supplied with the wheel to verify its identity before installation. The source-checkout test results below remain historical and do not substitute for this installed-wheel receipt.
+
+### Historical local verification (PR #24)
 
 Validation on this local candidate used the existing macOS arm64 Python 3.12.14 / pytest 9.2.0 environment; no virtual environment or dependencies were created. The full suite used the candidate source first on `PYTHONPATH` to avoid a stale editable install.
 

@@ -1,16 +1,26 @@
 # Debian ARM64 VMware Fusion PoC
 
+Current isolated IR candidate (2026-11-07): Draft PR #31 source `822865726c0eb8d834799f28fedce0a439cb0f45`, version `0.1.0.dev20261107+git6899323.ir1`. Its immutable wheel passed Debian ARM64 VMware guest acceptance; it is separate from the Nexus runtime wheel and is not merged to main or production-admitted. Verify the wheel against the supplied accepted artifact manifest before installation. Use a fresh venv, with no system site-packages; the offline wheel install below does not use an editable checkout or require a build backend. The synthetic input files still come from the matching source checkout.
+
 Requires Python 3.11+ (matching the MIO package metadata); no LLM, Docker or network service at runtime. Run the following commands in Bash from the checkout root. The block is a subshell, so its environment changes do not persist; activate `.venv` and export `MIO_IR_HOME` again before later commands.
 
 ```bash
 (
 set -euo pipefail
+# Refuse to reuse an existing environment, including a dangling symlink.
+test ! -e .venv
+test ! -L .venv
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
 python3 -m venv .venv
 . .venv/bin/activate
 # Point this at the already-provisioned offline wheelhouse in the guest.
 : "${WHEELHOUSE:?set WHEELHOUSE to the guest offline wheelhouse}"
-python -m pip install --no-index --find-links "$WHEELHOUSE" "setuptools>=77.0.3" wheel
-python -m pip install --no-index --no-build-isolation --no-deps -e .
+IR_WHEEL="$WHEELHOUSE/azazel_mio-0.1.0.dev20261107+git6899323.ir1-py3-none-any.whl"
+test -f "$IR_WHEEL"
+python -m pip install --no-index --no-deps "$IR_WHEEL"
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
 export MIO_IR_HOME="$HOME/mio-ir-data"
 CASE_ID=$(mio-ir case create --name "Synthetic IR Case" | python -c 'import json,sys; print(json.load(sys.stdin)["case_id"])')
 test -n "$CASE_ID"
@@ -50,7 +60,23 @@ format controls in summaries with spaces, and escape ASCII punctuation in
 rendered Markdown. This reduces display spoofing; it is not a general-purpose
 sanitizer for arbitrary Markdown consumers.
 
-Run the commands inside the Debian ARM64 guest and record results. macOS tests do not establish guest verification. This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
+Run the commands inside the Debian ARM64 guest and record results. The fixed candidate above has a separate installed-wheel guest receipt; repeating this example is a new run. macOS tests do not establish guest verification.
+
+For the acceptance runner, start from the matching source checkout, keep the guest venv active, and run the following separately. Its CLI and interpreter must resolve inside that venv. The runner creates a private temporary store and uses synthetic data; it does not use the example store above. `--help` lists the runner's actual interface; no extra runner arguments are required.
+
+```bash
+: "${VIRTUAL_ENV:?activate the fresh IR candidate venv}"
+IR_VENV_PYTHON="$VIRTUAL_ENV/bin/python"
+"$IR_VENV_PYTHON" scripts/ir_guest_acceptance.py --help
+(
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+export PATH="$VIRTUAL_ENV/bin"
+"$IR_VENV_PYTHON" scripts/ir_guest_acceptance.py
+)
+```
+
+This is an initial vertical slice, not forensic WORM storage. Avoid real sensitive evidence until security review.
 
 This CLI is a separate local evidence utility; it does not call the MIO reasoning
 core or take production actions. Store evidence under a dedicated private
