@@ -1253,7 +1253,6 @@ def test_single_hypothesis_is_rejected_when_playbook_has_competing_prompts():
 
 
 @pytest.mark.parametrize('alternative_ids, expected_error', [
-    (('credential_attack', 'reconnaissance'), 'missing_benign_or_unresolved_alternative_slot'),
     (('credential_attack', 'credential_attack'), 'duplicate_hypothesis_alternative_id'),
     (('not_a_trusted_slot', 'misconfigured_automation'), 'unknown_hypothesis_alternative_id'),
 ])
@@ -1286,6 +1285,43 @@ def test_competing_hypotheses_require_trusted_distinct_slots(alternative_ids, ex
     assert expected_error in out.errors
 
 
+def test_two_hostile_slots_without_a_benign_or_unresolved_slot_are_rejected():
+    """The auth playbook no longer pads a second hostile slot, so the slot-role
+    check is exercised through an explicitly requested two-hostile library entry."""
+    from dataclasses import replace as _replace
+    from azazel_mio.broker import CapabilityBroker
+    from azazel_mio.playbook import DEFAULT_PLAYBOOKS, select_playbook
+    from azazel_mio.reasoning import BoundedReasoningLoop
+
+    base = DEFAULT_PLAYBOOKS['auth-ambiguity-v1']
+    two_hostile = _replace(base, playbook_id='auth-two-hostile-test',
+                           hypothesis_prompts=('credential attack', 'misconfigured automation', 'reconnaissance/preparation'),
+                           hypothesis_alternatives=(('credential_attack', 'hostile'), ('misconfigured_automation', 'benign'), ('reconnaissance', 'hostile')))
+    ref, = frame().evidence_refs
+    statements = (
+        'Authentication activity may reflect a routine monitoring check run by a threat actor.',
+        'Account activity may be explained by a legitimate campaign to compromise accounts.',
+    )
+
+    def model(task, prompt):
+        if task == 'generate_hypotheses':
+            return {'hypotheses': [
+                {'hypothesis_id': f'h{i}', 'status': 'proposed',
+                 'hypothesis_alternative_id': alternative_id, 'statement': statement,
+                 'supporting_evidence_refs': [ref], 'contradicting_evidence_refs': [],
+                 'assumptions': [], 'falsification_conditions': ['Check authentication history.'],
+                 'expected_observations': [], 'missing_evidence': []}
+                for i, (statement, alternative_id) in enumerate(zip(statements, ('credential_attack', 'reconnaissance')), start=1)]}
+        raise AssertionError('later model task must not run after rejected hypotheses')
+
+    selection = select_playbook(frame(), requested_id='auth-two-hostile-test', playbooks={'auth-two-hostile-test': two_hostile})
+    assert selection.playbook.playbook_id == 'auth-two-hostile-test'
+    out = BoundedReasoningLoop(model=model, broker=CapabilityBroker()).run(
+        frame=frame(), playbook=selection.playbook, cycle_id='cycle-two-hostile', selection=selection)
+    assert out.state is ReasoningState.VALIDATION_REJECTED
+    assert 'missing_benign_or_unresolved_alternative_slot' in out.errors
+
+
 def test_competing_hostile_prose_stays_unverified_under_distinct_trusted_slots():
     from azazel_mio.broker import CapabilityBroker
     from azazel_mio.playbook import select_playbook
@@ -1295,9 +1331,8 @@ def test_competing_hostile_prose_stays_unverified_under_distinct_trusted_slots()
     statements = (
         'Authentication activity may reflect benign scheduled automation using password spraying.',
         'Authentication activity may reflect benign automation during an account takeover.',
-        'Authentication activity may reflect benign automation while attacking accounts.',
     )
-    alternatives = ('credential_attack', 'misconfigured_automation', 'reconnaissance')
+    alternatives = ('credential_attack', 'misconfigured_automation')
 
     def model(task, prompt):
         if task == 'generate_hypotheses':
@@ -1322,13 +1357,12 @@ def test_competing_hostile_prose_stays_unverified_under_distinct_trusted_slots()
     assert [item.statement for item in out.hypotheses] == [
         'A credential-attack explanation remains unverified from the supplied authentication frame.',
         'A benign or misconfigured-automation explanation remains unverified from the supplied authentication frame.',
-        'A reconnaissance explanation remains unverified from the supplied authentication frame.',
     ]
     assert all(item.assumptions == () and item.falsification_conditions == () for item in out.hypotheses)
     assert out.state is ReasoningState.COMPLETE
     slot_event = next(event for event in out.trace if event.kind == 'hypothesis_alternative_slots')
     assert all(slot['verification'] == 'model_proposed_unverified' for slot in slot_event.payload['slots'])
-    assert [slot['proposed_role'] for slot in slot_event.payload['slots']] == ['hostile', 'benign', 'hostile']
+    assert [slot['proposed_role'] for slot in slot_event.payload['slots']] == ['hostile', 'benign']
 
 
 def test_update_cannot_reuse_carried_forward_live_alternative_slot():

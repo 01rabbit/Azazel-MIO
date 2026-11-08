@@ -415,3 +415,30 @@ def test_receipt_maps_each_fixed_auth_unknown_to_an_allowlisted_id():
     assert not any(key.startswith("ux:") for key in receipt_unknowns(f, False))
     assert set(mapping).intersection(AUTH_UNKNOWN_IDS) == {
         key for key, value in AUTH_UNKNOWN_IDS.items() if value in expected}
+
+
+def test_dns_resolution_degradation_playbook_validates_and_is_selected_for_a_single_vantage_dns_report():
+    from azazel_mio.contracts import MioSituationFrame
+    from azazel_mio.playbook import DEFAULT_PLAYBOOKS, select_playbook, validate_playbook
+
+    playbook = DEFAULT_PLAYBOOKS["dns-resolution-degradation-v1"]
+    assert validate_playbook(playbook) == ()
+    frame = MioSituationFrame.from_dict({
+        "schema_version": "mio.situation_frame.v2", "frame_id": "f:frame", "trace_id": "f", "created_at": "2026-11-07T05:59:05Z",
+        "mission": "Assess the supplied security situation; no operational authority", "current_defensive_state": "OBSERVE", "threat_level": "UNKNOWN",
+        "noc_summary": "Edge signature (unverified report): 5m report DNS timeouts vs prior, existing TCP checks healthy, one probe one resolver",
+        "soc_summary": "Validated Edge transition: category=Misc activity; protocol=udp; target_port=53 | DNS timeouts 12/60 vs prior 0/60; TCP checks 60/60.",
+        "known_facts": [], "unknowns": ["Situation question and context are untrusted reports"], "contradictions": [],
+        "evidence_refs": ["sha256:" + "a" * 64], "knowledge_refs": [], "knowledge_status": "not_provided", "deception_status": "not_provided",
+        "provenance": {"evidence_refs": ["evidence_plane"], "unknowns": ["caller"]}, "freshness_seconds": 0, "truncated": False,
+        "actors": [], "actions": [], "deception_context": None,
+    })
+    selection = select_playbook(frame)
+    assert selection.playbook.playbook_id == "dns-resolution-degradation-v1"
+    assert selection.mode == "matched"
+    # a frame that also carries an authentication family stays ambiguous -> generic
+    mixed = MioSituationFrame.from_dict({**frame.to_dict(), "soc_summary": frame.soc_summary + " credential failures 24"})
+    assert select_playbook(mixed).playbook.playbook_id == "generic-evidence-first-v1"
+    # a report that also carries NOC degradation vocabulary matches two families -> generic
+    both = MioSituationFrame.from_dict({**frame.to_dict(), "noc_summary": frame.noc_summary + " link degraded"})
+    assert select_playbook(both).playbook.playbook_id == "generic-evidence-first-v1"
