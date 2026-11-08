@@ -61,8 +61,7 @@ _GAP_RE = re.compile(
     r"|\bno (?:\w+ ){0,2}(?:records?|confirmation|evidence|documentation|counts?)\b", re.I)
 # Hedged or hearsay statements are kept as reported-not-verified notes; they never move a topic or weight.
 _HEDGE_RE = re.compile(r"\b(mentioned|thinks?|believes?|guess(?:es)?|possibly|reportedly|hearsay|suspects?|unsure)\b", re.I)
-_WEAK_HEDGE_RE = re.compile(r"\b(may|might)\b", re.I)  # a hedge only when the clause states no counted observation
-_COUNT_RE = re.compile(r"\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|several)\b", re.I)
+_WEAK_HEDGE_RE = re.compile(r"\b(may|might)\b", re.I)  # a conjecture never counts as an observation
 _CLAUSE_RE = re.compile(r",\s+(?:and|but)\s+|\s+but\s+", re.I)
 _NO_SUBJECT_RE = re.compile(r"^(?:gives|has|have|is|are|was|were|shows|does|did|and|but)\b", re.I)
 _COMPARE_DEPENDENT = frozenset({"auth_success", "dns_other_sites", "dns_continuation"})
@@ -256,7 +255,7 @@ def build_guidance(
         for clause in clauses:
             if _COMPARE_RE.search(clause):
                 compare_sentences.add(index)
-            hedged = _HEDGE_RE.search(clause) or (_WEAK_HEDGE_RE.search(clause) and not _COUNT_RE.search(clause))
+            hedged = _HEDGE_RE.search(clause) or _WEAK_HEDGE_RE.search(clause)
             if hedged:
                 hearsay.append(_scrub(clause, withheld))
                 notes.append(clause)

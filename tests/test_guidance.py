@@ -242,9 +242,12 @@ class ReportEpistemicsRound2Tests(unittest.TestCase):
         self.assertTrue(any(t["id"] == "dns_other_sites" and t["negative"] for t in g.topics_addressed))
         self.assertTrue(any(w["explanation"] == "probe_specific_or_partial_link" for w in g.weight_notes))
 
-    def test_may_with_count_is_observation_without_count_is_hedge(self):
-        self.assertEqual(self.kind_of(noc("Up to 12 lookups may have failed."), "Up to"), "supplied_report")
-        self.assertEqual(self.kind_of(noc("The link may be shared."), "The link"), "supplied_report_note")
+    def test_may_might_are_always_conjecture(self):
+        for text, start in (("R1 may be overloaded.", "R1 may"), ("Probe 2 might be the cause.", "Probe 2"), ("The link may be shared.", "The link")):
+            g = noc(text)
+            self.assertEqual(self.kind_of(g, start), "supplied_report_note", text)
+            self.assertEqual(g.weight_notes, ())
+        self.assertEqual(self.kind_of(noc("The monitor says 31 of 60 timed out."), "The monitor"), "supplied_report")
 
     def test_compare_guard_is_topic_scoped(self):
         report = ("One analyst reports 60 failed logins with no successful login. A second note says a login succeeded at 11:42 "
@@ -263,11 +266,13 @@ class ReportEpistemicsRound2Tests(unittest.TestCase):
         self.assertFalse(any(re.search(r":\d", i) for i in derived))
 
     def test_generic_playbook_unchanged_by_epistemics(self):
-        g = noc("The web service answered slowly for about 20 minutes. A certificate renewal line and a printer queue line also appeared.", ) if False else None
-        report = "The web service answered slowly for about 20 minutes. A failed login line appeared twice."
+        report = ("The web service answered slowly for about 20 minutes. A certificate renewal line and a printer queue line also appeared. "
+                  "A failed sign-in line appeared twice without account details.")
         gen = G.build_guidance(frame(report, signature="web service slow responses"), report_texts=[report], withheld_values=WITHHELD,
                                request_id="inc-z:1", incident_id="inc-z", privacy_class="P3-restricted")
+        self.assertFalse(gen.playbook_id.startswith(("dns-", "auth-")))
         self.assertEqual(gen.weight_notes, ())
+        self.assertEqual(gen.topics_addressed, ())
         self.assertEqual(gen.recommendation["recommended_action"], "OBSERVE")
 
 
