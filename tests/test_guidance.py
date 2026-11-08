@@ -158,5 +158,150 @@ class GuidanceTests(unittest.TestCase):
         self.assertTrue(G.validate_topics(long_))
 
 
+
+
+class ReportEpistemicsTests(unittest.TestCase):
+    N2 = ("One probe timed out on 31 of 60 DNS lookups in 5 minutes, spread across three different resolvers. "
+          "A colleague mentioned that other probes looked fine, but no record was attached. TCP checks from the probe were not run.")
+    S3 = ("Login failures for account backup-sync occur every 15 minutes, 8 per burst, since 02:00. An engineer thinks this may be "
+          "the nightly backup job retrying after a credential change, but no automation record has been read yet.")
+    S4 = ("One analyst reports 60 failed logins for account ops-test with no successful login. A second note says a login succeeded at 11:42 "
+          "but gives a different time zone and no count. The two reports cover windows that may not overlap.")
+
+    def test_hearsay_is_note_and_moves_nothing(self):
+        g = noc(self.N2)
+        self.assertEqual(g.weight_notes, ())
+        self.assertFalse(any(t["id"] == "dns_other_sites" for t in g.topics_addressed))
+        self.assertTrue(all(f["kind"] != "supplied_report" or "colleague" not in f["text"] for f in g.facts))
+        self.assertTrue(any(u.startswith("Reported, not verified: A colleague mentioned") for u in g.unknowns))
+
+    def test_negated_confirmation_phrases_are_gaps(self):
+        g = noc(self.N2)
+        gaps = [f["text"] for f in g.facts if f["kind"] == "supplied_report_gap"]
+        self.assertTrue(any("no record was attached" in x for x in gaps))
+        self.assertTrue(any("were not run" in x for x in gaps))
+        self.assertTrue(any("no record was attached" in u["text"] and "report" in u["sources"] for u in g.unknown_groups))
+        for text in ("The 14:05 window has not been aggregated yet", "Whether the link is shared is not documented in the report",
+                     "There is no confirmation of the stop", "The reporter did not say which source"):
+            kinds = [f["kind"] for f in noc(text).facts if f["text"].startswith(text[:12])]
+            self.assertEqual(kinds, ["supplied_report_gap"], text)
+
+    def test_hedged_inference_is_not_a_reported_automation(self):
+        g = soc(self.S3)
+        self.assertFalse(any(t["id"] == "auth_baseline" for t in g.topics_addressed))
+        self.assertEqual([w for w in g.weight_notes if w["topic"] == "auth_baseline"], [])
+        self.assertTrue(any("no automation record has been read yet" in f["text"] and f["kind"] == "supplied_report_gap" for f in g.facts))
+
+    def test_incomparable_reports_do_not_change_priority(self):
+        g = soc(self.S4)
+        self.assertEqual(g.weight_notes, ())
+        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN and "report" in u["sources"] for u in g.unknown_groups))
+        self.assertEqual(g.recommendation["recommended_action"], "OBSERVE")
+
+    def test_negative_cases_unchanged(self):
+        base = "Probe A queries resolver R1 and 22 of 60 lookups timed out in the last 5 minutes, against 0 of 60 before. "
+        up = noc(base + "Two other probes also timed out against R1.")
+        self.assertTrue(any(w["explanation"] == "resolver_or_path_degradation" for w in up.weight_notes))
+        down = noc(base + "Two other probes report no timeouts against R1.")
+        self.assertTrue(any(w["explanation"] == "probe_specific_or_partial_link" for w in down.weight_notes))
+        plain = soc("A user reports that a successful login happened after about 40 failed web logins on account jdoe-test.")
+        self.assertTrue(any(w["explanation"] == "credential_attack" and w["direction"] == "verification_priority_up" for w in plain.weight_notes))
+        self.assertTrue(any(f["kind"] == "supplied_report" for f in plain.facts))
+
+    def test_invariants(self):
+        for g in (noc(self.N2), soc(self.S3), soc(self.S4)):
+            d = g.to_dict()
+            self.assertEqual((d["guidance_schema_version"], d["model_calls"]), ("1.0.0", 0))
+            self.assertEqual(g.recommendation["executable"], False)
+            self.assertEqual(len(req(g)), 2)
+
+
+class ReportEpistemicsRound2Tests(unittest.TestCase):
+    def kind_of(self, g, start):
+        return next(f["kind"] for f in g.facts if f["text"].startswith(start))
+
+    def test_mixed_sentence_keeps_observation_and_only_gap_clause_is_unknown(self):
+        g = noc("The 14:05 window has not been aggregated yet, and one manual lookup at 14:07 answered.")
+        self.assertEqual(self.kind_of(g, "The 14:05"), "supplied_report")
+        self.assertTrue(any(u["text"] == "The 14:05 window has not been aggregated yet" for u in g.unknown_groups))
+        g = noc("One other site reports normal answers, the second site is not readable.")
+        self.assertEqual(self.kind_of(g, "One other"), "supplied_report")
+        g = noc("One other site reports normal answers, and the second site is not readable.")
+        self.assertTrue(any(u["text"] == "the second site is not readable" for u in g.unknown_groups))
+
+    def test_subjectless_gap_clause_is_prefixed_with_the_subject(self):
+        g = soc("A second note says a login succeeded at 11:42 but gives a different time zone and no count.")
+        texts = [u["text"] for u in g.unknown_groups]
+        self.assertNotIn("gives a different time zone and no count", texts)
+        self.assertTrue(any(t.startswith("A second note ... gives a different") for t in texts))
+
+    def test_reporting_verbs_are_not_hedges(self):
+        g = noc("The monitor says 31 of 60 timed out.")
+        self.assertEqual(self.kind_of(g, "The monitor"), "supplied_report")
+        g = noc("Probe A saw 22 of 60 timeouts. Two other probes say they saw no timeouts against R1.")
+        self.assertTrue(any(t["id"] == "dns_other_sites" and t["negative"] for t in g.topics_addressed))
+        self.assertTrue(any(w["explanation"] == "probe_specific_or_partial_link" for w in g.weight_notes))
+
+    def test_may_might_are_always_conjecture(self):
+        for text, start in (("R1 may be overloaded.", "R1 may"), ("Probe 2 might be the cause.", "Probe 2"), ("The link may be shared.", "The link")):
+            g = noc(text)
+            self.assertEqual(self.kind_of(g, start), "supplied_report_note", text)
+            self.assertEqual(g.weight_notes, ())
+        self.assertEqual(self.kind_of(noc("The monitor says 31 of 60 timed out."), "The monitor"), "supplied_report")
+
+    def test_compare_guard_is_topic_scoped(self):
+        report = ("One analyst reports 60 failed logins with no successful login. A second note says a login succeeded at 11:42 "
+                  "but gives a different time zone. The two reports cover windows that may not overlap. "
+                  "Approved automation baseline matches the 02:00 schedule.")
+        g = soc(report)
+        self.assertEqual([w for w in g.weight_notes if w["topic"] == "auth_success"], [])
+        self.assertTrue(any(w["topic"] == "auth_baseline" for w in g.weight_notes))
+        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN for u in g.unknown_groups))
+
+    def test_derived_check_ids_have_no_host_port_shape(self):
+        g = soc("Login failures were seen. The mapping to a source is not documented. Host impact was not checked. The count is unknown.")
+        derived = [c["id"] for c in g.next_checks if c["id"].startswith("derived")]
+        self.assertTrue(derived)
+        import re
+        self.assertFalse(any(re.search(r":\d", i) for i in derived))
+
+    def test_generic_playbook_unchanged_by_epistemics(self):
+        report = ("The web service answered slowly for about 20 minutes. A certificate renewal line and a printer queue line also appeared. "
+                  "A failed sign-in line appeared twice without account details.")
+        gen = G.build_guidance(frame(report, signature="web service slow responses"), report_texts=[report], withheld_values=WITHHELD,
+                               request_id="inc-z:1", incident_id="inc-z", privacy_class="P3-restricted")
+        self.assertFalse(gen.playbook_id.startswith(("dns-", "auth-")))
+        self.assertEqual(gen.weight_notes, ())
+        self.assertEqual(gen.topics_addressed, ())
+        self.assertEqual(gen.recommendation["recommended_action"], "OBSERVE")
+
+
+class ReportUnknownRetentionTests(unittest.TestCase):
+    BASE = ("Synthetic 5m auth report: 24 failed logins vs prior 1; one successful login was seen. "
+            "The reporter did not say whether the successful login came from the same source as the failures. "
+            "An engineer thinks this may be the nightly backup job retrying after a credential change. "
+            "Clock trust and affected population are unknown. Read-only checks.")
+    GAP = "The reporter did not say whether the successful login came from the same source as the failures"
+
+    def groups(self, report):
+        return soc(report).to_dict()["unknown_groups"]
+
+    def test_gap_kept_and_stale_analysis_unknown_removed(self):
+        groups = self.groups(self.BASE)
+        self.assertIn(self.GAP, [x["text"] for x in groups])
+        self.assertFalse([x for x in groups if "authentication succeeded" in x["text"]])
+
+    def test_hedge_kept_in_groups(self):
+        flat = json.dumps(self.groups(self.BASE))
+        self.assertIn("nightly backup job", flat)
+
+    def test_positive_report_changes_weight_and_old_report_text_replaced(self):
+        base = soc(SOC_REPORT).to_dict()
+        new = soc(self.BASE).to_dict()
+        self.assertEqual(base["weight_notes"], [])
+        self.assertTrue(new["weight_notes"])
+        self.assertNotIn("success logs absent", json.dumps(new["unknown_groups"]))
+
+
 if __name__ == "__main__":
     unittest.main()
