@@ -495,8 +495,9 @@ revoked, cross-incident, or otherwise unverifiable content as appropriate.
 This applies to both budget and non-budget compiler paths, including callers
 using references and knowledge outside Nexus.
 
-For the Nexus budgeted handoff, template 1.9.0 carries IDs and classifications
-for earlier report and gap content. Nexus requires an incident-bound, unexpired
+For the Nexus budgeted handoff, template 1.10.0 carries IDs and classifications
+for earlier report and gap content (the no-capability gaps call is sent with a minimal
+control and empty data, since its only valid output is `[]`). Nexus requires an incident-bound, unexpired
 binding with verified/current evidence and an exhaustive advisory ID manifest
 before displaying the resulting advice. The caller remains responsible for
 source authority and revocation; MIO's caller-asserted trust is not independent

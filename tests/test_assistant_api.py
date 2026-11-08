@@ -890,7 +890,8 @@ def test_unavailable_knowledge_reaches_model_with_empty_broker_results():
 
     def model(task, prompt):
         data = json.loads(prompt.split('\nUNTRUSTED_DATA\n', 1)[1].rsplit('\nEND_UNTRUSTED_DATA', 1)[0])
-        seen.append((task, data['broker_results']))
+        # gaps with no capability uses the minimal form (empty data): no broker items by construction
+        seen.append((task, data.get('broker_results', []) if task == 'identify_evidence_gaps' else data['broker_results']))
         if task == 'generate_hypotheses':
             ref, = frame().evidence_refs
             return {'hypotheses': [
@@ -1215,7 +1216,7 @@ def test_late_validation_rejection_suppresses_prior_model_output_everywhere():
 def test_compiled_response_schema_comes_only_from_trusted_control():
     from azazel_mio.playbook import (PROMPT_TEMPLATE_VERSION, PromptCompiler,
         compiled_model_response_schema, select_playbook)
-    assert PROMPT_TEMPLATE_VERSION == '1.9.0'
+    assert PROMPT_TEMPLATE_VERSION == '1.10.0'
     prompt = PromptCompiler().compile(frame=frame(), playbook=select_playbook(frame()).playbook,
                                       task='generate_hypotheses')
     schema = compiled_model_response_schema('generate_hypotheses', prompt)
