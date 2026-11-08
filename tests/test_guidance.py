@@ -161,6 +161,10 @@ class GuidanceTests(unittest.TestCase):
 
 
 class ReportEpistemicsTests(unittest.TestCase):
+    def test_compare_re_clock_sync_unknown(self):
+        for t in ("Clock sync is unknown", "clock sync unknown", "the clock is not synchronised", "clock unsynchronized"):
+            self.assertTrue(G._COMPARE_RE.search(t), t)
+
     N2 = ("One probe timed out on 31 of 60 DNS lookups in 5 minutes, spread across three different resolvers. "
           "A colleague mentioned that other probes looked fine, but no record was attached. TCP checks from the probe were not run.")
     S3 = ("Login failures for account backup-sync occur every 15 minutes, 8 per burst, since 02:00. An engineer thinks this may be "
