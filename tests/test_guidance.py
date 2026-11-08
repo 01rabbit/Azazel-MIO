@@ -172,7 +172,7 @@ class ReportEpistemicsTests(unittest.TestCase):
         g = noc(self.N2)
         self.assertEqual(g.weight_notes, ())
         self.assertFalse(any(t["id"] == "dns_other_sites" for t in g.topics_addressed))
-        self.assertTrue(any(f["kind"] == "supplied_report_note" and "colleague mentioned" in f["text"] for f in g.facts))
+        self.assertTrue(all(f["kind"] != "supplied_report" or "colleague" not in f["text"] for f in g.facts))
         self.assertTrue(any(u.startswith("Reported, not verified: A colleague mentioned") for u in g.unknowns))
 
     def test_negated_confirmation_phrases_are_gaps(self):
@@ -214,6 +214,61 @@ class ReportEpistemicsTests(unittest.TestCase):
             self.assertEqual((d["guidance_schema_version"], d["model_calls"]), ("1.0.0", 0))
             self.assertEqual(g.recommendation["executable"], False)
             self.assertEqual(len(req(g)), 2)
+
+
+class ReportEpistemicsRound2Tests(unittest.TestCase):
+    def kind_of(self, g, start):
+        return next(f["kind"] for f in g.facts if f["text"].startswith(start))
+
+    def test_mixed_sentence_keeps_observation_and_only_gap_clause_is_unknown(self):
+        g = noc("The 14:05 window has not been aggregated yet, and one manual lookup at 14:07 answered.")
+        self.assertEqual(self.kind_of(g, "The 14:05"), "supplied_report")
+        self.assertTrue(any(u["text"] == "The 14:05 window has not been aggregated yet" for u in g.unknown_groups))
+        g = noc("One other site reports normal answers, the second site is not readable.")
+        self.assertEqual(self.kind_of(g, "One other"), "supplied_report")
+        g = noc("One other site reports normal answers, and the second site is not readable.")
+        self.assertTrue(any(u["text"] == "the second site is not readable" for u in g.unknown_groups))
+
+    def test_subjectless_gap_clause_is_prefixed_with_the_subject(self):
+        g = soc("A second note says a login succeeded at 11:42 but gives a different time zone and no count.")
+        texts = [u["text"] for u in g.unknown_groups]
+        self.assertNotIn("gives a different time zone and no count", texts)
+        self.assertTrue(any(t.startswith("A second note ... gives a different") for t in texts))
+
+    def test_reporting_verbs_are_not_hedges(self):
+        g = noc("The monitor says 31 of 60 timed out.")
+        self.assertEqual(self.kind_of(g, "The monitor"), "supplied_report")
+        g = noc("Probe A saw 22 of 60 timeouts. Two other probes say they saw no timeouts against R1.")
+        self.assertTrue(any(t["id"] == "dns_other_sites" and t["negative"] for t in g.topics_addressed))
+        self.assertTrue(any(w["explanation"] == "probe_specific_or_partial_link" for w in g.weight_notes))
+
+    def test_may_with_count_is_observation_without_count_is_hedge(self):
+        self.assertEqual(self.kind_of(noc("Up to 12 lookups may have failed."), "Up to"), "supplied_report")
+        self.assertEqual(self.kind_of(noc("The link may be shared."), "The link"), "supplied_report_note")
+
+    def test_compare_guard_is_topic_scoped(self):
+        report = ("One analyst reports 60 failed logins with no successful login. A second note says a login succeeded at 11:42 "
+                  "but gives a different time zone. The two reports cover windows that may not overlap. "
+                  "Approved automation baseline matches the 02:00 schedule.")
+        g = soc(report)
+        self.assertEqual([w for w in g.weight_notes if w["topic"] == "auth_success"], [])
+        self.assertTrue(any(w["topic"] == "auth_baseline" for w in g.weight_notes))
+        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN for u in g.unknown_groups))
+
+    def test_derived_check_ids_have_no_host_port_shape(self):
+        g = soc("Login failures were seen. The mapping to a source is not documented. Host impact was not checked. The count is unknown.")
+        derived = [c["id"] for c in g.next_checks if c["id"].startswith("derived")]
+        self.assertTrue(derived)
+        import re
+        self.assertFalse(any(re.search(r":\d", i) for i in derived))
+
+    def test_generic_playbook_unchanged_by_epistemics(self):
+        g = noc("The web service answered slowly for about 20 minutes. A certificate renewal line and a printer queue line also appeared.", ) if False else None
+        report = "The web service answered slowly for about 20 minutes. A failed login line appeared twice."
+        gen = G.build_guidance(frame(report, signature="web service slow responses"), report_texts=[report], withheld_values=WITHHELD,
+                               request_id="inc-z:1", incident_id="inc-z", privacy_class="P3-restricted")
+        self.assertEqual(gen.weight_notes, ())
+        self.assertEqual(gen.recommendation["recommended_action"], "OBSERVE")
 
 
 if __name__ == "__main__":

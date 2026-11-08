@@ -58,10 +58,14 @@ _NOT_REPORTED_RE = re.compile(r"\bnot reported\b|\bunreported\b|\bno (?:other )?
 _GAP_RE = re.compile(
     r"\b(unknown|absent|unverified|unreadable|pending)\b"
     r"|\bnot (?:(?:yet|been|be|was|were|has|have|had|do|did|does)\s+)*(?:supplied|available|provided|checked|verified|confirmed|run|read|readable|aggregated|documented|recorded|attached|stated|given|say|said|specified)\b"
-    r"|\bno (?:\w+ ){0,2}(?:records?|confirmation|evidence|documentation|data|details?|counts?)\b", re.I)
+    r"|\bno (?:\w+ ){0,2}(?:records?|confirmation|evidence|documentation|counts?)\b", re.I)
 # Hedged or hearsay statements are kept as reported-not-verified notes; they never move a topic or weight.
-_HEDGE_RE = re.compile(r"\b(mentioned|thinks?|believes?|guess(?:es)?|may|might|possibly|reportedly|hearsay|says|said|suspects?|unsure)\b", re.I)
-_BUT_RE = re.compile(r",?\s+but\s+", re.I)
+_HEDGE_RE = re.compile(r"\b(mentioned|thinks?|believes?|guess(?:es)?|possibly|reportedly|hearsay|suspects?|unsure)\b", re.I)
+_WEAK_HEDGE_RE = re.compile(r"\b(may|might)\b", re.I)  # a hedge only when the clause states no counted observation
+_COUNT_RE = re.compile(r"\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|several)\b", re.I)
+_CLAUSE_RE = re.compile(r",\s+(?:and|but)\s+|\s+but\s+", re.I)
+_NO_SUBJECT_RE = re.compile(r"^(?:gives|has|have|is|are|was|were|shows|does|did|and|but)\b", re.I)
+_COMPARE_DEPENDENT = frozenset({"auth_success", "dns_other_sites", "dns_continuation"})
 # The report itself says the compared windows/clocks/aggregations are not aligned.
 _COMPARE_RE = re.compile(r"windows?\s+(?:that\s+)?may not overlap|different time ?zones?|not (?:yet |been )*aggregated|not comparable|different windows?|clock (?:skew|mismatch|differs?)|unsynchroni[sz]ed", re.I)
 COMPARE_UNKNOWN = "Comparison conditions (window, time zone, aggregation) are not aligned in the report"
@@ -241,25 +245,39 @@ def build_guidance(
     facts: list[dict[str, Any]] = []
     report_gaps: list[str] = []
     hearsay: list[str] = []
-    not_comparable = False
-    clauses: list[str] = []
-    for fragment in _fragments(report):
-        clauses += _BUT_RE.split(fragment) if _HEDGE_RE.search(fragment) else [fragment]
-    for fragment in clauses:
-        text = _scrub(fragment, withheld)
-        if _COMPARE_RE.search(fragment):
-            not_comparable = True
-        if _HEDGE_RE.search(fragment):
-            kind = "supplied_report_note"
-            hearsay.append(text)
-        elif _GAP_RE.search(fragment):
-            kind = "supplied_report_gap"
-            report_gaps.append(text)
-        elif _OBSERVATION_RE.search(fragment):
+    obs_parts: list[tuple[int, str]] = []  # (sentence index, observed clauses) - what topics may read
+    compare_sentences: set[int] = set()
+    for index, sentence in enumerate(_fragments(report)):
+        pieces = re.split(r",\s+", sentence) if _GAP_RE.search(sentence) else [sentence]
+        clauses = [re.sub(r"^(?:and|but)\s+", "", c.strip(), flags=re.I) for p in pieces for c in _CLAUSE_RE.split(p) if c.strip()]
+        observed: list[str] = []
+        gaps: list[str] = []
+        notes: list[str] = []
+        for clause in clauses:
+            if _COMPARE_RE.search(clause):
+                compare_sentences.add(index)
+            hedged = _HEDGE_RE.search(clause) or (_WEAK_HEDGE_RE.search(clause) and not _COUNT_RE.search(clause))
+            if hedged:
+                hearsay.append(_scrub(clause, withheld))
+                notes.append(clause)
+            elif _GAP_RE.search(clause):
+                # a clause without its own subject is prefixed with the sentence's opening words
+                gaps.append(" ".join(sentence.split()[:3]) + " ... " + clause if _NO_SUBJECT_RE.match(clause) else clause)
+            elif _OBSERVATION_RE.search(clause):
+                observed.append(clause)
+            else:
+                notes.append(clause)
+        if observed:
             kind = "supplied_report"
+            obs_parts.append((index, _scrub(" ".join(observed), withheld)))
+        elif gaps:
+            kind = "supplied_report_gap"
         else:
             kind = "supplied_report_note"
-        facts.append({"kind": kind, "trust": "untrusted_report", "text": text})
+        for g_text in gaps:
+            report_gaps.append(_scrub(g_text, withheld))
+        facts.append({"kind": kind, "trust": "untrusted_report", "text": _scrub(sentence, withheld)})
+    not_comparable = bool(compare_sentences)
     if edge_decision:
         facts.append({"kind": "edge_decision", "trust": "deterministic", "text": "Edge selected_action={}, result={}, executed_count={}".format(
             edge_decision.get("selected_action"), edge_decision.get("result"), edge_decision.get("executed_count"))})
@@ -291,8 +309,12 @@ def build_guidance(
     unknowns = [_scrub(u, withheld) for u in origin]
     origin = {_scrub(k, withheld): v for k, v in origin.items()}
 
-    observations = [f["text"] for f in facts if f["kind"] == "supplied_report"]
+    observations = [t for _, t in obs_parts]
     addressed = _addressed_topics(pb.playbook_id, observations)
+    for ad in addressed:
+        where = next((i for i, t in obs_parts if t == ad["fragment"] or ad["fragment"] in t), None)
+        ad["compare_blocked"] = bool(compare_sentences) and ad["id"] in _COMPARE_DEPENDENT and (
+            where is None or any(abs(where - c) <= 1 for c in compare_sentences))
     for ad in addressed:
         pattern = re.compile(ad["topic"]["unknown_match"], re.I)
         unknowns = [u for u in unknowns if not pattern.search(u)]
@@ -341,13 +363,15 @@ def build_guidance(
         checks.sort(key=lambda c: 0 if pattern.search(c["text"]) else 1)
     next_checks = []
     for index, check in enumerate(checks):
-        check_id = f"{pb.playbook_id}:q{check['pb_index'] + 1}" if check["source"] == "playbook" else f"derived:{index + 1}"
+        check_id = f"{pb.playbook_id}:q{check['pb_index'] + 1}" if check["source"] == "playbook" else f"derived:q{index + 1}"
         next_checks.append({"id": check_id, "tier": "required" if index < _REQUIRED_CHECKS else "optional_when_needed",
                             "mode": "read_only_existing_authority", "text": check["text"]})
 
     # 5. weight notes: verification priority only; never a statement about cause or actor.
     weights: list[dict[str, Any]] = []
-    for ad in ([] if not_comparable else addressed):
+    for ad in addressed:
+        if ad["compare_blocked"]:
+            continue
         up = ad["topic"]["weight_up"]
         if up and up in slots:
             weights.append({"explanation": up, "direction": "verification_priority_down" if ad["negative"] else "verification_priority_up",
