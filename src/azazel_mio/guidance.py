@@ -304,7 +304,9 @@ def build_guidance(
     for text in hearsay:
         origin.setdefault(f"Reported, not verified: {text} (verification still required)", "report")
     if not_comparable:
-        origin.setdefault(COMPARE_UNKNOWN, "report")
+        # the comparability judgement is derived by the analysis from the report's own words, so its
+        # source is frame_analysis, not a statement the reporter made
+        origin.setdefault(COMPARE_UNKNOWN, "frame_analysis")
     unknowns = [_scrub(u, withheld) for u in origin]
     origin = {_scrub(k, withheld): v for k, v in origin.items()}
 

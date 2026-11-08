@@ -199,7 +199,7 @@ class ReportEpistemicsTests(unittest.TestCase):
     def test_incomparable_reports_do_not_change_priority(self):
         g = soc(self.S4)
         self.assertEqual(g.weight_notes, ())
-        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN and "report" in u["sources"] for u in g.unknown_groups))
+        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN and "frame_analysis" in u["sources"] and "report" not in u["sources"] for u in g.unknown_groups))
         self.assertEqual(g.recommendation["recommended_action"], "OBSERVE")
 
     def test_negative_cases_unchanged(self):
