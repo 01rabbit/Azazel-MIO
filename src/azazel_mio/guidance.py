@@ -55,7 +55,16 @@ _DNS_OTHER_SITES_NEGATIVE = "probe_specific_or_partial_link"
 _DNS_OTHER_SITES_POSITIVE = "resolver_or_path_degradation"
 
 _NOT_REPORTED_RE = re.compile(r"\bnot reported\b|\bunreported\b|\bno (?:other )?(?:sites|probes|resolvers|records?) (?:were |are )?reported\b|\bnot available\b", re.I)
-_GAP_RE = re.compile(r"\b(unknown|absent|not (?:supplied|available|provided)|unverified)\b", re.I)
+_GAP_RE = re.compile(
+    r"\b(unknown|absent|unverified|unreadable|pending)\b"
+    r"|\bnot (?:(?:yet|been|be|was|were|has|have|had|do|did|does)\s+)*(?:supplied|available|provided|checked|verified|confirmed|run|read|readable|aggregated|documented|recorded|attached|stated|given|say|said|specified)\b"
+    r"|\bno (?:\w+ ){0,2}(?:records?|confirmation|evidence|documentation|data|details?|counts?)\b", re.I)
+# Hedged or hearsay statements are kept as reported-not-verified notes; they never move a topic or weight.
+_HEDGE_RE = re.compile(r"\b(mentioned|thinks?|believes?|guess(?:es)?|may|might|possibly|reportedly|hearsay|says|said|suspects?|unsure)\b", re.I)
+_BUT_RE = re.compile(r",?\s+but\s+", re.I)
+# The report itself says the compared windows/clocks/aggregations are not aligned.
+_COMPARE_RE = re.compile(r"windows?\s+(?:that\s+)?may not overlap|different time ?zones?|not (?:yet |been )*aggregated|not comparable|different windows?|clock (?:skew|mismatch|differs?)|unsynchroni[sz]ed", re.I)
+COMPARE_UNKNOWN = "Comparison conditions (window, time zone, aggregation) are not aligned in the report"
 _OBSERVATION_RE = re.compile(r"\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|several|no)\b", re.I)
 _STOPWORDS = frozenset("the a an and or of to in on for with is are not no any from that this if by as be does whether after observed supplied current frame vs prior".split())
 _SOURCES = ("report", "frame", "frame_analysis", "knowledge")
@@ -231,9 +240,19 @@ def build_guidance(
     report = " ".join(str(t) for t in report_texts if t)
     facts: list[dict[str, Any]] = []
     report_gaps: list[str] = []
+    hearsay: list[str] = []
+    not_comparable = False
+    clauses: list[str] = []
     for fragment in _fragments(report):
+        clauses += _BUT_RE.split(fragment) if _HEDGE_RE.search(fragment) else [fragment]
+    for fragment in clauses:
         text = _scrub(fragment, withheld)
-        if _GAP_RE.search(fragment):
+        if _COMPARE_RE.search(fragment):
+            not_comparable = True
+        if _HEDGE_RE.search(fragment):
+            kind = "supplied_report_note"
+            hearsay.append(text)
+        elif _GAP_RE.search(fragment):
             kind = "supplied_report_gap"
             report_gaps.append(text)
         elif _OBSERVATION_RE.search(fragment):
@@ -265,6 +284,10 @@ def build_guidance(
     for text, source in ([(u, "frame") for u in frame_unknowns] + [(u, "report") for u in report_gaps]
                          + [(u, "knowledge") for u in kn_unknowns] + [(u, "frame_analysis") for u in analysis]):
         origin.setdefault(text, source)
+    for text in hearsay:
+        origin.setdefault(f"Reported, not verified: {text} (verification still required)", "report")
+    if not_comparable:
+        origin.setdefault(COMPARE_UNKNOWN, "report")
     unknowns = [_scrub(u, withheld) for u in origin]
     origin = {_scrub(k, withheld): v for k, v in origin.items()}
 
@@ -324,7 +347,7 @@ def build_guidance(
 
     # 5. weight notes: verification priority only; never a statement about cause or actor.
     weights: list[dict[str, Any]] = []
-    for ad in addressed:
+    for ad in ([] if not_comparable else addressed):
         up = ad["topic"]["weight_up"]
         if up and up in slots:
             weights.append({"explanation": up, "direction": "verification_priority_down" if ad["negative"] else "verification_priority_up",

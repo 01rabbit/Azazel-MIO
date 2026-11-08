@@ -158,5 +158,63 @@ class GuidanceTests(unittest.TestCase):
         self.assertTrue(G.validate_topics(long_))
 
 
+
+
+class ReportEpistemicsTests(unittest.TestCase):
+    N2 = ("One probe timed out on 31 of 60 DNS lookups in 5 minutes, spread across three different resolvers. "
+          "A colleague mentioned that other probes looked fine, but no record was attached. TCP checks from the probe were not run.")
+    S3 = ("Login failures for account backup-sync occur every 15 minutes, 8 per burst, since 02:00. An engineer thinks this may be "
+          "the nightly backup job retrying after a credential change, but no automation record has been read yet.")
+    S4 = ("One analyst reports 60 failed logins for account ops-test with no successful login. A second note says a login succeeded at 11:42 "
+          "but gives a different time zone and no count. The two reports cover windows that may not overlap.")
+
+    def test_hearsay_is_note_and_moves_nothing(self):
+        g = noc(self.N2)
+        self.assertEqual(g.weight_notes, ())
+        self.assertFalse(any(t["id"] == "dns_other_sites" for t in g.topics_addressed))
+        self.assertTrue(any(f["kind"] == "supplied_report_note" and "colleague mentioned" in f["text"] for f in g.facts))
+        self.assertTrue(any(u.startswith("Reported, not verified: A colleague mentioned") for u in g.unknowns))
+
+    def test_negated_confirmation_phrases_are_gaps(self):
+        g = noc(self.N2)
+        gaps = [f["text"] for f in g.facts if f["kind"] == "supplied_report_gap"]
+        self.assertTrue(any("no record was attached" in x for x in gaps))
+        self.assertTrue(any("were not run" in x for x in gaps))
+        self.assertTrue(any("no record was attached" in u["text"] and "report" in u["sources"] for u in g.unknown_groups))
+        for text in ("The 14:05 window has not been aggregated yet", "Whether the link is shared is not documented in the report",
+                     "There is no confirmation of the stop", "The reporter did not say which source"):
+            kinds = [f["kind"] for f in noc(text).facts if f["text"].startswith(text[:12])]
+            self.assertEqual(kinds, ["supplied_report_gap"], text)
+
+    def test_hedged_inference_is_not_a_reported_automation(self):
+        g = soc(self.S3)
+        self.assertFalse(any(t["id"] == "auth_baseline" for t in g.topics_addressed))
+        self.assertEqual([w for w in g.weight_notes if w["topic"] == "auth_baseline"], [])
+        self.assertTrue(any("no automation record has been read yet" in f["text"] and f["kind"] == "supplied_report_gap" for f in g.facts))
+
+    def test_incomparable_reports_do_not_change_priority(self):
+        g = soc(self.S4)
+        self.assertEqual(g.weight_notes, ())
+        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN and "report" in u["sources"] for u in g.unknown_groups))
+        self.assertEqual(g.recommendation["recommended_action"], "OBSERVE")
+
+    def test_negative_cases_unchanged(self):
+        base = "Probe A queries resolver R1 and 22 of 60 lookups timed out in the last 5 minutes, against 0 of 60 before. "
+        up = noc(base + "Two other probes also timed out against R1.")
+        self.assertTrue(any(w["explanation"] == "resolver_or_path_degradation" for w in up.weight_notes))
+        down = noc(base + "Two other probes report no timeouts against R1.")
+        self.assertTrue(any(w["explanation"] == "probe_specific_or_partial_link" for w in down.weight_notes))
+        plain = soc("A user reports that a successful login happened after about 40 failed web logins on account jdoe-test.")
+        self.assertTrue(any(w["explanation"] == "credential_attack" and w["direction"] == "verification_priority_up" for w in plain.weight_notes))
+        self.assertTrue(any(f["kind"] == "supplied_report" for f in plain.facts))
+
+    def test_invariants(self):
+        for g in (noc(self.N2), soc(self.S3), soc(self.S4)):
+            d = g.to_dict()
+            self.assertEqual((d["guidance_schema_version"], d["model_calls"]), ("1.0.0", 0))
+            self.assertEqual(g.recommendation["executable"], False)
+            self.assertEqual(len(req(g)), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
