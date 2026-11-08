@@ -513,3 +513,18 @@ freshness requires an observation timestamp within the receipt lifetime.
 Missing model-unknown bodies cannot be reconstructed from `um:<n>` IDs.
 These Nexus caller rules do not grant shared API callers source authority or
 change public generation receipt fields, terminal reasons, or admission.
+
+## Playbook versions and compatibility (unit 9/10)
+
+`auth-ambiguity-v1` moved to version 1.2.0: the padded `reconnaissance` slot is removed and the
+two remaining competing explanations (`credential_attack`, `misconfigured_automation`) keep the
+same ids. `dns-resolution-degradation-v1` (1.0.0) is new. Consequences that callers can observe:
+
+- `reasoning_provenance` records `playbook_version` and `playbook_digest` per run, so new runs carry
+  the new values while stored receipts keep the values they were produced with; readers do not
+  re-validate a stored playbook digest, and the prompt template version (`PROMPT_TEMPLATE_VERSION`)
+  is unchanged by this change.
+- `selection_rules_digest()` changes because a keyword family was added; it is informational and is
+  not an acceptance key for stored receipts.
+- A stored hypothesis that used the removed `reconnaissance` slot is still readable; a new model
+  output using that slot against the auth playbook is rejected as `unknown_hypothesis_alternative_id`.
