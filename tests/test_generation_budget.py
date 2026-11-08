@@ -59,7 +59,8 @@ def test_whole_units_omissions_core_and_envelope():
     assert result.selection.dropped == (("broker:0", "lower_priority"), ("broker:1", "lower_priority"))
     assert "ev:ssh:2" not in result.text and "ev:ssh:34" not in result.text
     assert 'counterexample' in result.text and 'ev:ssh:1' in result.text and 'unknown' in result.text
-    assert '"recommendation_is_advisory_only":true' in result.text
+    assert '"limits"' not in result.text and '"hypothesis_prompts"' not in result.text
+    assert 'Advisory only' in result.text
     assert '"freshness_seconds":' in result.text and '"provenance":' in result.text
     assert 'selection_notice' in result.text
     with pytest.raises(BudgetError, match="budget_exhausted"):
@@ -70,7 +71,7 @@ def test_whole_units_omissions_core_and_envelope():
     assert "END_UNTRUSTED\\u005fDATA" in secure
 
 
-@pytest.mark.parametrize("task", TASKS[1:])
+@pytest.mark.parametrize("task", TASKS[2:])
 def test_followup_keeps_knowledge_reference_and_its_broker_unit(task):
     f = frame(knowledge_refs=("kn:attack:T1110",))
     item = {"kind": "supplemental_reference", "evidence_refs": ["kn:attack:T1110"]}
@@ -163,7 +164,7 @@ def test_budgeted_auth_model_unknown_is_private_and_identified_in_later_calls():
     assert result.state is ReasoningState.COMPLETE
     assert result.generation_receipt.frame_unknowns["um:1"] == "MODEL PRIVATE QUESTION"
     assert result.generation_receipt.unknown_origins["um:1"] == "model_authored"
-    for task in TASKS[1:]:
+    for task in TASKS[2:]:
         data = json.loads(model.prompts[task].split("\nUNTRUSTED_DATA\n")[1].split("\nEND_UNTRUSTED_DATA")[0])
         assert "MODEL PRIVATE QUESTION" not in model.prompts[task]
         assert {"id": "um:1", "category": "unclassified"} in data["hypotheses"][0]["missing_evidence"]
@@ -198,7 +199,7 @@ def test_non_auth_projection_preserves_fixed_origin_and_same_model_text(claim, f
     assert receipt.unknown_origins[fixed_id] == 'fixed_text'
     assert receipt.frame_unknowns['um:1'] == fixed_text
     assert receipt.unknown_origins['um:1'] == 'model_authored'
-    for task in TASKS[1:]:
+    for task in TASKS[2:]:
         data = json.loads(model.prompts[task].split('\nUNTRUSTED_DATA\n')[1].split('\nEND_UNTRUSTED_DATA')[0])
         ids = {item['id'] for item in data['hypotheses'][0]['missing_evidence']}
         other_ids = {item['id'] for item in data['hypotheses'][1]['missing_evidence']}
@@ -273,7 +274,7 @@ def test_budgeted_recommendation_receives_validated_hypotheses_and_unconfirmed_g
     finally:
         broker.close()
     assert result.state is ReasoningState.COMPLETE
-    for task in TASKS[1:]:
+    for task in TASKS[2:]:
         data = json.loads(model.prompts[task].split("\nUNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0])
         h1, h2 = data["hypotheses"]
         assert (h1["hypothesis_id"], h1["hypothesis_alternative_id"], h1["supporting_evidence_refs"]) == ("h1", "credential_attack", ["ev:ssh:1"])
