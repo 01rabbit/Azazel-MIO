@@ -306,6 +306,12 @@ class PromptCompiler:
             # frame, hypotheses, playbook and the other rules add nothing.
             trusted = {key: trusted[key] for key in _GAPS_MINIMAL_KEYS}
             trusted["rules"] = list(TRUSTED_RULES[:1])
+            if budget is not None:
+                # Same refusals as _compile_budgeted, which this form bypasses.
+                if frame.to_dict().get("truncated"):
+                    raise BudgetError("count_unknown", "upstream_truncated")
+                if len(list(broker_results)) > 32:
+                    raise BudgetError("budget_exhausted", "too_many_units")
             return self._compile_gaps_minimal(trusted, budget)
         def broker_item(item):
             result = dict(item)
@@ -581,7 +587,13 @@ def template_digest() -> str:
             "template_version": PROMPT_TEMPLATE_VERSION,
             "rules": list(TRUSTED_RULES),
             "limits": _trusted_limits(),
-            "model_view": ["no_limits_block", "no_hypothesis_prompts", "frame_without_ids", "gaps_minimal_without_capabilities"],
+            "model_view": {
+                "frame_omitted_keys": list(_MODEL_FRAME_OMITTED),
+                "full_control_keys": sorted(_FULL_CONTROL_KEYS),
+                "gaps_minimal": {"keys": sorted(_GAPS_MINIMAL_KEYS), "rules": list(TRUSTED_RULES[:1]), "data": "{}"},
+                "playbooks": {pid: _model_playbook_section(pb)
+                              for pid, pb in sorted({**DEFAULT_PLAYBOOKS, GENERIC_PLAYBOOK_ID: GENERIC_PLAYBOOK}.items())},
+            },
             "output_schemas": {task: _task_schema(task) for task in COMPILER_TASKS},
             "output_contracts": {task: _task_contract(task, _task_schema(task)) for task in COMPILER_TASKS},
             "envelope": list(_ENVELOPE),

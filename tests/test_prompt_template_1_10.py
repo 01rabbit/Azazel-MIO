@@ -223,3 +223,32 @@ def test_contract_text_tamper_is_refused():
     control["output_contract"] = control["output_contract"].replace(" Output minified JSON on one line with no spaces or line breaks.", "")
     with pytest.raises(ValueError):
         compiled_model_response_schema(GEN, rebuild(control, json.dumps(data, sort_keys=True, separators=(",", ":"))))
+
+
+def test_gaps_minimal_keeps_truncated_frame_and_unit_count_refusals():
+    from azazel_mio import BudgetError
+    f = MioSituationFrame.build(frame_id="f-id", trace_id="t-id", created_at=NOW, mission="m",
+        current_defensive_state="OBSERVE", threat_level="UNKNOWN", known_facts=("e",), unknowns=("u",),
+        contradictions=(), evidence_refs=("ev:ssh:1",), input_truncated=True)
+    pb = select_playbook(f).playbook
+    for task in (GEN, GAPS, REC):
+        with pytest.raises(BudgetError) as exc:
+            PromptCompiler().compile(frame=f, playbook=pb, task=task, budget=budget())
+        assert exc.value.reason == "count_unknown"  # same result for every task, gaps minimal form included
+    many = [{"kind": "supplemental_reference", "evidence_refs": ["ev:ssh:%d" % i]} for i in range(33)]
+    with pytest.raises(BudgetError, match="budget_exhausted"):
+        compile_(GAPS, budget=budget(), broker_results=many)
+    with pytest.raises(BudgetError, match="budget_exhausted"):
+        compile_(GEN, budget=budget(), broker_results=many)
+
+
+def test_template_digest_reflects_model_view_structure():
+    import azazel_mio.playbook as pbm
+    before = template_digest()
+    original = pbm._MODEL_FRAME_OMITTED
+    try:
+        pbm._MODEL_FRAME_OMITTED = original[:-1]
+        assert template_digest() != before
+    finally:
+        pbm._MODEL_FRAME_OMITTED = original
+    assert template_digest() == before

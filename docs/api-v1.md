@@ -497,7 +497,9 @@ using references and knowledge outside Nexus.
 
 For the Nexus budgeted handoff, template 1.10.0 carries IDs and classifications
 for earlier report and gap content (the no-capability gaps call is sent with a minimal
-control and empty data, since its only valid output is `[]`). Nexus requires an incident-bound, unexpired
+control and empty data, since its only valid output is `[]`). An
+`identify_evidence_gaps` call whose `effective_read_capabilities` is empty returns an empty array
+regardless of its input; it is still sent and validated, and the frame-truncation and unit-count refusals still apply to it. Nexus requires an incident-bound, unexpired
 binding with verified/current evidence and an exhaustive advisory ID manifest
 before displaying the resulting advice. The caller remains responsible for
 source authority and revocation; MIO's caller-asserted trust is not independent
