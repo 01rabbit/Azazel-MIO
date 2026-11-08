@@ -276,5 +276,32 @@ class ReportEpistemicsRound2Tests(unittest.TestCase):
         self.assertEqual(gen.recommendation["recommended_action"], "OBSERVE")
 
 
+class ReportUnknownRetentionTests(unittest.TestCase):
+    BASE = ("Synthetic 5m auth report: 24 failed logins vs prior 1; one successful login was seen. "
+            "The reporter did not say whether the successful login came from the same source as the failures. "
+            "An engineer thinks this may be the nightly backup job retrying after a credential change. "
+            "Clock trust and affected population are unknown. Read-only checks.")
+    GAP = "The reporter did not say whether the successful login came from the same source as the failures"
+
+    def groups(self, report):
+        return soc(report).to_dict()["unknown_groups"]
+
+    def test_gap_kept_and_stale_analysis_unknown_removed(self):
+        groups = self.groups(self.BASE)
+        self.assertIn(self.GAP, [x["text"] for x in groups])
+        self.assertFalse([x for x in groups if "authentication succeeded" in x["text"]])
+
+    def test_hedge_kept_in_groups(self):
+        flat = json.dumps(self.groups(self.BASE))
+        self.assertIn("nightly backup job", flat)
+
+    def test_positive_report_changes_weight_and_old_report_text_replaced(self):
+        base = soc(SOC_REPORT).to_dict()
+        new = soc(self.BASE).to_dict()
+        self.assertEqual(base["weight_notes"], [])
+        self.assertTrue(new["weight_notes"])
+        self.assertNotIn("success logs absent", json.dumps(new["unknown_groups"]))
+
+
 if __name__ == "__main__":
     unittest.main()

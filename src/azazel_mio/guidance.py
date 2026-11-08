@@ -316,10 +316,11 @@ def build_guidance(
             where is None or any(abs(where - c) <= 1 for c in compare_sentences))
     for ad in addressed:
         pattern = re.compile(ad["topic"]["unknown_match"], re.I)
-        unknowns = [u for u in unknowns if not pattern.search(u)]
+        unknowns = [u for u in unknowns if origin.get(u) == "report" or not pattern.search(u)]
     for ad in addressed:
         text = f"Reported, not verified: {ad['fragment']} (verification still required)"
-        unknowns.append(text)
+        if text not in unknowns:
+            unknowns.append(text)
         origin[text] = "report"
 
     def topic_of(text: str) -> str | None:
