@@ -31,9 +31,9 @@ class ReasoningPlaybook:
 DEFAULT_PLAYBOOKS: dict[str, ReasoningPlaybook] = {
     "auth-ambiguity-v1": ReasoningPlaybook(
         playbook_id="auth-ambiguity-v1",
-        version="1.1.0",
+        version="1.2.0",
         purpose="Distinguish hostile authentication activity from benign or misconfigured automation.",
-        hypothesis_prompts=("credential attack", "misconfigured automation", "reconnaissance/preparation"),
+        hypothesis_prompts=("credential attack", "misconfigured automation"),
         discriminating_questions=(
             "In the authorized read-only authentication alert view, check whether any successful login followed the observed failures. If account or source identity is absent from the frame, leave it unknown.",
             "Compare the observed time and count with a documented, approved automation or monitoring baseline. If no baseline is available, record that gap and do not infer intent.",
@@ -45,7 +45,29 @@ DEFAULT_PLAYBOOKS: dict[str, ReasoningPlaybook] = {
         allowed_capabilities=("query_recent_alerts", "query_flow_summary", "lookup_behavior_pattern"),
         stop_conditions=("no discriminating evidence within budget", "frame becomes stale"),
         claim_boundaries=("do not assert identity or intent", "do not treat recommendation as executable"),
-        hypothesis_alternatives=(("credential_attack", "hostile"), ("misconfigured_automation", "benign"), ("reconnaissance", "hostile")),
+        hypothesis_alternatives=(("credential_attack", "hostile"), ("misconfigured_automation", "benign")),
+    ),
+    "dns-resolution-degradation-v1": ReasoningPlaybook(
+        playbook_id="dns-resolution-degradation-v1",
+        version="1.0.0",
+        purpose="Interpret a single-vantage name-resolution degradation report: separate resolver or resolution-path degradation from a probe-specific or partial-link view, and keep cause and scope unresolved until other vantage points are read.",
+        hypothesis_prompts=("resolver or name-resolution path degradation", "probe-specific view or partial link degradation"),
+        discriminating_questions=(
+            "In the existing read-only DNS monitoring records for the same window, compare timeouts from other probes against the same resolver and from this probe against other resolvers. One probe and one resolver cannot establish cause or scope.",
+            "Read the latest aggregation window to see whether the timeouts continue, and confirm that TCP or service reachability records for the same window stay healthy.",
+            "Read approved change records and resolver or circuit logs around the anomaly window and compare change times with the anomaly period.",
+            "Confirm the monitoring clock synchronisation and the aggregation window before comparing the current period with the prior one.",
+        ),
+        falsification_patterns=(
+            "timeouts from other probes against the same resolver, while other resolvers answer normally from those probes, point to a problem specific to that resolver",
+            "timeouts from this probe against several resolvers, while other probes see none, point to the probe side or a shared path rather than one resolver",
+            "the same timeouts from several probes against several resolvers point to a shared path or upstream condition",
+            "healthy TCP or service reachability in the same window keeps a full outage unsupported",
+        ),
+        allowed_capabilities=("query_recent_alerts", "query_flow_summary", "get_host_health"),
+        stop_conditions=("no other vantage point is readable within budget", "frame becomes stale"),
+        claim_boundaries=("do not treat a single-vantage report as an outage or as a confirmed cause", "do not propose resolver, circuit or configuration changes", "availability protection outranks curiosity"),
+        hypothesis_alternatives=(("resolver_or_path_degradation", "unresolved"), ("probe_specific_or_partial_link", "benign")),
     ),
     "scan-ambiguity-v1": ReasoningPlaybook(
         playbook_id="scan-ambiguity-v1",
@@ -629,6 +651,7 @@ SELECTION_RULES: tuple[tuple[str, frozenset[str]], ...] = (
     ("auth-ambiguity-v1", frozenset({"auth", "authentication", "login", "logon", "credential", "credentials", "bruteforce", "brute", "password"})),
     ("scan-ambiguity-v1", frozenset({"scan", "scanning", "portscan", "recon", "reconnaissance", "sweep"})),
     ("exploit-signal-ambiguity-v1", frozenset({"exploit", "exploitation", "cve", "rce", "injection", "overflow"})),
+    ("dns-resolution-degradation-v1", frozenset({"dns", "resolver", "resolvers", "nxdomain", "servfail"})),
     ("noc-soc-ambiguity-v1", frozenset({"degraded", "degradation", "outage", "unreachable", "packet_loss", "latency"})),
     ("friction-reaction-v1", frozenset({"friction", "throttled", "delayed", "tarpit"})),
 )

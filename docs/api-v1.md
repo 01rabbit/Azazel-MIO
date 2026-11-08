@@ -513,3 +513,48 @@ freshness requires an observation timestamp within the receipt lifetime.
 Missing model-unknown bodies cannot be reconstructed from `um:<n>` IDs.
 These Nexus caller rules do not grant shared API callers source authority or
 change public generation receipt fields, terminal reasons, or admission.
+
+## Playbook versions and compatibility (unit 9/10)
+
+`auth-ambiguity-v1` moved to version 1.2.0: the padded `reconnaissance` slot is removed and the
+two remaining competing explanations (`credential_attack`, `misconfigured_automation`) keep the
+same ids. `dns-resolution-degradation-v1` (1.0.0) is new. Consequences that callers can observe:
+
+- `reasoning_provenance` records `playbook_version` and `playbook_digest` per run, so new runs carry
+  the new values while stored receipts keep the values they were produced with; readers do not
+  re-validate a stored playbook digest, and the prompt template version (`PROMPT_TEMPLATE_VERSION`)
+  is unchanged by this change.
+- `selection_rules_digest()` changes because a keyword family was added; it is informational and is
+  not an acceptance key for stored receipts.
+- A stored hypothesis that used the removed `reconnaissance` slot is still readable; a new model
+  output using that slot against the auth playbook is rejected as `unknown_hypothesis_alternative_id`.
+
+## Deterministic guidance (`azazel_mio.guidance`)
+
+`build_guidance(frame, report_texts=..., edge_decision=..., knowledge_facts=..., knowledge_unknowns=...,
+withheld_values=..., effective_read_capabilities=...)` returns a model-free advisory answer.
+It is the canonical content; consumers only render it.
+
+- Identity: `content_kind="deterministic_guidance"`, `guidance_schema_version="1.0.0"`,
+  `generation_method="deterministic_guidance"`, `model_calls=0`. `guidance_digest()` covers the topic
+  table and schema version and is reported next to `playbook_id`, `playbook_version` and
+  `playbook_digest`. `PROMPT_TEMPLATE_VERSION` is unchanged because no prompt is compiled.
+- Content: `facts` (kind `supplied_report`, `supplied_report_gap`, `supplied_report_note`,
+  `edge_decision`, `knowledge`, each with `trust`; supplied reports are quoted as untrusted claims, never
+  promoted to facts), `competing_explanations` (playbook slot, role, prompt; `evidence_refs` are the
+  report refs and `support="unverified_candidate"` states that content support is not verified),
+  `discriminating_material`, `claim_boundaries`, `unknown_groups` (text, topic, `sources` of
+  report/frame/frame_analysis/knowledge, `merged`), `topics_addressed`, `weight_notes` (change of
+  verification priority only, never a cause or actor), `next_checks` (ids `<playbook_id>:q<n>` or
+  `derived:<n>`, tier `required` for the first two, mode `read_only_existing_authority`, English text),
+  `recommendation` (always `OBSERVE`, `executable=false`, `current_action=null`), `evidence_gaps`
+  (empty list with a reason when no read capability is effective) and `handoff` (incident, request,
+  trace, frame, evidence refs, privacy class, sections).
+- A topic the report states about replaces the matching unknown by a "Reported, not verified" entry;
+  negations next to the topic object (for example "no successful login") and "not reported" never
+  raise a verification priority. Withheld values are replaced by `[withheld]` everywhere.
+- The topic table is statically validated (`validate_topics`) with the same forbidden-content,
+  directive-verb and length rules as playbooks.
+- Out of scope for MIO: display wording in any natural language, UI layout, persistence and handoff
+  file formats. Nexus owns them and maps IDs to its own display text; unregistered IDs fall back to the
+  English canonical text.

@@ -225,7 +225,8 @@ class ArtifactsAndRuntime(unittest.TestCase):
         self.assertIsNone(out['selected'])
         self.assertIn('feature_drift', out['abstain_reasons'])
         self.assertIn('novelty_not_maliciousness', out['limits'])
-        self.assertEqual(out['novelty'], 2/6)
+        # Denominator = number of reviewed playbook families; dns-resolution-degradation-v1 made it 7.
+        self.assertEqual(out['novelty'], 2/7)
 
     def test_no_data_never_invents_a_candidate_or_performance(self):
         report, artifact = evaluate([], {}, now=NOW, artifact_expires_at=EXPIRY)
