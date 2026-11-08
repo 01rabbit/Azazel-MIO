@@ -309,3 +309,15 @@ class ReportUnknownRetentionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_generic_questions_do_not_treat_time_match_as_relation():
+    """Unit 16: a time overlap is a candidate to examine, never proof of a relation, and a miss is not exclusion."""
+    from azazel_mio.playbook import GENERIC_PLAYBOOK, validate_playbook
+
+    q1, q2 = GENERIC_PLAYBOOK.discriminating_questions
+    assert GENERIC_PLAYBOOK.version == "1.2.0"
+    assert "related only when" not in q2 and "only if" not in q2
+    assert "does not establish a relation" in q2 and "not ruled out" in q2
+    assert "unknown, settle that first" in q1
+    assert validate_playbook(GENERIC_PLAYBOOK) == ()
