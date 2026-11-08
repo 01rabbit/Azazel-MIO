@@ -66,7 +66,7 @@ _CLAUSE_RE = re.compile(r",\s+(?:and|but)\s+|\s+but\s+", re.I)
 _NO_SUBJECT_RE = re.compile(r"^(?:gives|has|have|is|are|was|were|shows|does|did|and|but)\b", re.I)
 _COMPARE_DEPENDENT = frozenset({"auth_success", "dns_other_sites", "dns_continuation"})
 # The report itself says the compared windows/clocks/aggregations are not aligned.
-_COMPARE_RE = re.compile(r"windows?\s+(?:that\s+)?may not overlap|different time ?zones?|not (?:yet |been )*aggregated|not comparable|different windows?|clock (?:skew|mismatch|differs?)|unsynchroni[sz]ed|clock sync (?:is )?unknown|clock (?:is )?(?:not|un)synchroni[sz]ed", re.I)
+_COMPARE_RE = re.compile(r"windows?\s+(?:that\s+)?may not overlap|different time ?zones?|not (?:yet |been )*aggregated|not comparable|different windows?|clock (?:skew|mismatch|differs?)|unsynchroni[sz]ed|clock sync (?:is )?unknown|clock (?:is )?(?:not |un)synchroni[sz]ed", re.I)
 COMPARE_UNKNOWN = "Comparison conditions (window, time zone, aggregation) are not aligned in the report"
 _OBSERVATION_RE = re.compile(r"\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|several|no)\b", re.I)
 _STOPWORDS = frozenset("the a an and or of to in on for with is are not no any from that this if by as be does whether after observed supplied current frame vs prior".split())
