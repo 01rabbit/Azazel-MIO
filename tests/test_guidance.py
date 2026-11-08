@@ -161,6 +161,10 @@ class GuidanceTests(unittest.TestCase):
 
 
 class ReportEpistemicsTests(unittest.TestCase):
+    def test_compare_re_clock_sync_unknown(self):
+        for t in ("Clock sync is unknown", "clock sync unknown", "the clock is not synchronised", "clock unsynchronized"):
+            self.assertTrue(G._COMPARE_RE.search(t), t)
+
     N2 = ("One probe timed out on 31 of 60 DNS lookups in 5 minutes, spread across three different resolvers. "
           "A colleague mentioned that other probes looked fine, but no record was attached. TCP checks from the probe were not run.")
     S3 = ("Login failures for account backup-sync occur every 15 minutes, 8 per burst, since 02:00. An engineer thinks this may be "
@@ -195,7 +199,7 @@ class ReportEpistemicsTests(unittest.TestCase):
     def test_incomparable_reports_do_not_change_priority(self):
         g = soc(self.S4)
         self.assertEqual(g.weight_notes, ())
-        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN and "report" in u["sources"] for u in g.unknown_groups))
+        self.assertTrue(any(u["text"] == G.COMPARE_UNKNOWN and "frame_analysis" in u["sources"] and "report" not in u["sources"] for u in g.unknown_groups))
         self.assertEqual(g.recommendation["recommended_action"], "OBSERVE")
 
     def test_negative_cases_unchanged(self):
@@ -305,3 +309,15 @@ class ReportUnknownRetentionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_generic_questions_do_not_treat_time_match_as_relation():
+    """Unit 16: a time overlap is a candidate to examine, never proof of a relation, and a miss is not exclusion."""
+    from azazel_mio.playbook import GENERIC_PLAYBOOK, validate_playbook
+
+    q1, q2 = GENERIC_PLAYBOOK.discriminating_questions
+    assert GENERIC_PLAYBOOK.version == "1.2.0"
+    assert "related only when" not in q2 and "only if" not in q2
+    assert "does not establish a relation" in q2 and "not ruled out" in q2
+    assert "unknown, settle that first" in q1
+    assert validate_playbook(GENERIC_PLAYBOOK) == ()
