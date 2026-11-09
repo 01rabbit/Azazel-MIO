@@ -175,6 +175,7 @@ PYTHONPATH=src python3 -m pytest -q
 **参照文書**
 
 - 内部API: [internal API v1](docs/api-v1.md)
+- セッション特徴からの助言専用仮説とオフライン評価（未校正・製品未接続）: [session behavior](docs/session-behavior.md)
 - 決定論の案内（モデル無し）: `azazel_mio.guidance.build_guidance` は供給された報告と選択済み playbook から、報告の記述（未検証）・競合する説明・不明点（出典付き）・read-only の次確認・OBSERVE 固定の案内を組み立てます。`content_kind="deterministic_guidance"`、`model_calls=0`、`guidance_schema_version="1.0.0"`。版と互換性は [internal API v1](docs/api-v1.md) の guidance 節と Playbook versions 節を参照（auth-ambiguity-v1 は 1.2.0、dns-resolution-degradation-v1 は 1.0.0。保存済み receipt は再検証されず、prompt template 版は不変）。
 - IR evidence import recovery: [IR evidence import recovery](docs/ir-import-recovery.md)
 - 移行元と互換性: [source/license migration](docs/migration.md)
