@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add task-local evidence-bound session hypotheses and offline identification metrics (#57/#58); always abstain from uncalibrated actor identity, with no runtime hook or product pin change.
+
 - Add a standalone offline MIO IR utility for local case creation, bounded
   evidence import and verification, timelines, and JSON/Markdown reports.
 - Add a separate Fabric Knowledge Context v1 advisory input, preserving facts,
