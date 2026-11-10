@@ -19,3 +19,7 @@
 - Sanitize terminal and bidirectional control characters in untrusted Markdown
   summaries, and prevent case-aliased report paths from targeting storage.
 - Reject future-dated Fabric Knowledge Context responses and omit Knowledge advisories from coordinated non-current results.
+
+## Session software pilot (2026-11-10)
+
+- Freeze 24 synthetic replay cases, disjoint replay partitions, digest-bound acceptance and an offline pilot report. Actor truth remains unknown; no calibration, training, core registration, pin or admission change.

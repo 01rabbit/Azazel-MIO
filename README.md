@@ -186,3 +186,5 @@ PYTHONPATH=src python3 -m pytest -q
 - 実モデル確認: POSIX環境と、ローカルOllamaに導入済みのモデルが必要です。`PYTHONPATH=src python3 tools/real_model_smoke.py --model <local-tag>`。スクリプトの接続先はloopback（`127.0.0.1`）固定です。成功には、合成の助言フレームについて固定された3種類のモデルタスクを順番に各1回完了する必要があります。指定tagが未導入なら失敗終了します。モデル実行の後、同じコマンド内で同じフレームをモデルなしで実行し、決定論的フォールバックと`MODEL_NOT_AVAILABLE`を確認します。製品への採用、性能、真実性、本番の認可は証明しません（[real-model smoke](docs/real-model-smoke.md)）。
 - オフラインplaybook ranking: 評価マイルストーンです。モデルの有効化、自動学習、認可、実行は含みません（[offline ranking](docs/offline-playbook-ranking.md)）。
 - Assessment baseline: experimentalです（[assessment baseline](docs/assessment-baseline.md)）。
+
+- [Frozen session replay pilot v1](docs/session-pilot-v1.md): source-bound software cases, fixed zero-authority gates and unknown-label limits.

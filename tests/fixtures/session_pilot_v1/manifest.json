@@ -1,0 +1,24 @@
+{
+  "acceptance": {
+    "authorized_actions": 0,
+    "identity_verdicts": 0,
+    "maliciousness_verdicts": 0,
+    "model_calls": 0,
+    "status_mismatches": 0
+  },
+  "cases_sha256": "sha256:a4ef491ef8b7d44f4d1d77807cfd7d8d98ac7a5388cdd9462aba196db443854e",
+  "corpus_id": "session-software-pilot-v1",
+  "evidence_kind": "synthetic_replay",
+  "future_identification_gate": "independent labelled capture, frozen FPR/recall/coverage and power plan required before tuning; not supplied by this pilot",
+  "identification_thresholds": null,
+  "partition_policy": "development_and_reserved_replay_never_real_holdout",
+  "real_world_holdout_verified": false,
+  "schema_version": "session-replay-pilot/v1",
+  "source": {
+    "base_commit": "169ad47dc3813f6e0dc9c8a347806b578bec50ce",
+    "generation": "authored_normalized_replay_fixtures_no_client_or_model_execution",
+    "privacy": "no raw payloads, real addresses, tokens or personal data",
+    "repository": "01rabbit/Azazel-MIO",
+    "rights": "project-authored synthetic facts; repository MIT licence"
+  }
+}

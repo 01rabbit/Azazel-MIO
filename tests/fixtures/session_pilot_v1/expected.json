@@ -1,0 +1,230 @@
+{
+  "automatic_promotion": false,
+  "cases": [
+    {
+      "case_id": "case-development-1",
+      "partition": "development_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-development-2",
+      "partition": "development_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-development-3",
+      "partition": "development_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-development-4",
+      "partition": "development_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-development-5",
+      "partition": "development_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-development-6",
+      "partition": "development_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-development-7",
+      "partition": "development_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "shared_source_not_actor_identity"
+      ]
+    },
+    {
+      "case_id": "case-development-8",
+      "partition": "development_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "capture_incomplete"
+      ]
+    },
+    {
+      "case_id": "case-development-9",
+      "partition": "development_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "clock_uncertain"
+      ]
+    },
+    {
+      "case_id": "case-development-10",
+      "partition": "development_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "capture_incomplete",
+        "no_supported_pattern"
+      ]
+    },
+    {
+      "case_id": "case-development-11",
+      "partition": "development_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "no_supported_pattern"
+      ]
+    },
+    {
+      "case_id": "case-development-12",
+      "partition": "development_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "stale_or_noncurrent_window"
+      ]
+    },
+    {
+      "case_id": "case-reserved-1",
+      "partition": "reserved_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-reserved-2",
+      "partition": "reserved_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-reserved-3",
+      "partition": "reserved_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-reserved-4",
+      "partition": "reserved_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-reserved-5",
+      "partition": "reserved_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-reserved-6",
+      "partition": "reserved_replay",
+      "status": "hypotheses_available",
+      "withholding_reasons": []
+    },
+    {
+      "case_id": "case-reserved-7",
+      "partition": "reserved_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "shared_source_not_actor_identity"
+      ]
+    },
+    {
+      "case_id": "case-reserved-8",
+      "partition": "reserved_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "capture_incomplete"
+      ]
+    },
+    {
+      "case_id": "case-reserved-9",
+      "partition": "reserved_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "clock_uncertain"
+      ]
+    },
+    {
+      "case_id": "case-reserved-10",
+      "partition": "reserved_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "capture_incomplete",
+        "no_supported_pattern"
+      ]
+    },
+    {
+      "case_id": "case-reserved-11",
+      "partition": "reserved_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "no_supported_pattern"
+      ]
+    },
+    {
+      "case_id": "case-reserved-12",
+      "partition": "reserved_replay",
+      "status": "insufficient_evidence",
+      "withholding_reasons": [
+        "stale_or_noncurrent_window"
+      ]
+    }
+  ],
+  "cases_sha256": "sha256:a4ef491ef8b7d44f4d1d77807cfd7d8d98ac7a5388cdd9462aba196db443854e",
+  "claim_status": "mechanical_only",
+  "counts": {
+    "authorized_actions": 0,
+    "identity_verdicts": 0,
+    "maliciousness_verdicts": 0,
+    "model_calls": 0,
+    "status_mismatches": 0
+  },
+  "manifest_sha256": "sha256:ca590fa1df7618aa247e97ee174403883fbbb9436817f91c027d36bbec6bacde",
+  "mechanical_gate": "passed",
+  "metrics": {
+    "automatic_promotion": false,
+    "calibration": "not_estimated_no_probabilities",
+    "candidate_version": "session-pattern-hypotheses-v1",
+    "cohorts": {
+      "replay_eval": {
+        "abstained_labeled": 0,
+        "cases": 24,
+        "coverage": null,
+        "false_positive_rate_all_labeled_negatives": null,
+        "fn_on_covered": 0,
+        "fp": 0,
+        "gate": "no_identification_claim",
+        "labeled_ai_axis": 0,
+        "missing_predictions": 0,
+        "negative_truth": 0,
+        "positive_abstained": 0,
+        "positive_truth": 0,
+        "precision": null,
+        "recall_all_labeled_positives": null,
+        "tn": 0,
+        "tp": 0,
+        "unknown_truth": 24
+      }
+    },
+    "dataset_sha256": "sha256:05b305e64d406e643cb5cef4becd1c35d1f93fcefe04e0a881bdef3be6bd1498",
+    "limitations": [
+      "AI-assistance labels and maliciousness labels are separate axes.",
+      "Unknown and mixed actors are not forced into negative truth.",
+      "Reported controlled/reviewer provenance is not authenticated here.",
+      "Synthetic and replay-only evidence cannot prove identification or defensive benefit.",
+      "Abstention is not a negative verdict; all-positive recall includes abstention cost."
+    ],
+    "max_false_positive_rate": 0.05,
+    "prediction_sha256": "sha256:cdf2ab419bb415329caf8aa93fd7fcd8ea6daf1d212828c400f65843622dfc10",
+    "real_world_holdout_verified": false,
+    "schema_version": "session-identification-evaluation/v1"
+  },
+  "partitions": {
+    "development_replay": 12,
+    "reserved_replay": 12
+  },
+  "real_world_holdout_verified": false,
+  "schema_version": "session-replay-pilot-report/v1"
+}
